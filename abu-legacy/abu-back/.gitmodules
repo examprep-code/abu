@@ -1,0 +1,3 @@
+[submodule "datian-core"]
+	path = datian-core
+	url = https://github.com/damianuhx/datian-core

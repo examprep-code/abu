@@ -1,0 +1,3 @@
+<?php
+$value = $value+$args;
+?>
