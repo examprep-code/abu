@@ -8,6 +8,10 @@ $answerConfig = [
 if ($method === 'POST') {
     $chatgpt = bewerteAntwortMitKI($data);
 
+    if (empty($data['user'])) {
+        $data['user'] = 'testnutzer';
+    }
+
     // Speichere die KI-Klassifizierung direkt mit der Antwort
     if (isset($chatgpt['classification'])) {
         $data['classification'] = $chatgpt['classification']; // numeric 0/500/1000
@@ -24,7 +28,6 @@ if ($method === 'POST') {
     $return['data']['chatgpt'] = $chatgpt;
 
     if (!empty($chatgpt['error'])) {
-        $return['status'] = 502;
         $return['warning'] = $chatgpt['error'];
     }
 

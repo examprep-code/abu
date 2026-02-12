@@ -1,0 +1,77 @@
+name: abu
+
+services:
+  db:
+    image: mariadb:11.4
+    container_name: abu-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: abu
+    volumes:
+      - abu-db-data:/var/lib/mysql
+    ports:
+      - "8876:3306"
+    networks:
+      - abu
+
+  back:
+    build:
+      context: ./abu-back
+    container_name: abu-back
+    restart: unless-stopped
+    environment:
+      DB_HOST: db
+      DB_USER: root
+      DB_PASSWORD: root
+      DB_NAME: abu
+      APP_PATH: ""
+      DEBUG: "true"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    depends_on:
+      - db
+    ports:
+      - "8870:80"
+    volumes:
+      - ./abu-back:/var/www/html
+    networks:
+      - abu
+
+  svelte:
+    build:
+      context: ./abu-svelte
+    container_name: abu-svelte
+    restart: unless-stopped
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "8872:5173"
+    volumes:
+      - ./abu-svelte:/app
+      - abu-svelte-node-modules:/app/node_modules
+    networks:
+      - abu
+
+  phpmyadmin:
+    image: phpmyadmin:5.2
+    container_name: abu-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: root
+    depends_on:
+      - db
+    ports:
+      - "8875:80"
+    networks:
+      - abu
+
+volumes:
+  abu-db-data:
+  abu-svelte-node-modules:
+
+networks:
+  abu:
+    name: abu

@@ -205,6 +205,14 @@ if ($method === 'DELETE') {
     $current = $current[0];
 
     sql_set(
+        'DELETE FROM `classroom_sheet` WHERE user = ' .
+            intval($user['id']) .
+            ' AND sheet_key = "' .
+            sql_escape($current['key']) .
+            '";'
+    );
+
+    sql_set(
         'DELETE FROM `sheet` WHERE user = ' .
             intval($user['id']) .
             ' AND `key` = "' .

@@ -1,0 +1,104 @@
+:root {
+  color-scheme: light;
+  --ci-font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --ci-font-title: 'Fraunces', 'Georgia', serif;
+  --ci-button-primary: #0f172a;
+  --ci-button-accent: #1f2937;
+  --ci-button-text: #ffffff;
+  --ci-border: #d1d5db;
+  --ci-surface: #ffffff;
+  --ci-muted: #6b7280;
+  --ci-soft: #eef2f7;
+}
+
+.ci-btn-primary,
+.ci-btn-outline,
+.ci-btn-soft,
+.ci-tab {
+  font: inherit;
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.ci-btn-primary {
+  background: var(--ci-button-primary);
+  color: var(--ci-button-text);
+  border: 1px solid var(--ci-button-primary);
+}
+
+.ci-btn-primary:hover:enabled,
+.ci-btn-primary:focus-visible {
+  background: var(--ci-button-accent);
+  border-color: var(--ci-button-accent);
+}
+
+.ci-btn-outline {
+  background: transparent;
+  color: var(--ci-button-primary);
+  border: 1px solid var(--ci-button-primary);
+}
+
+.ci-btn-outline:hover:enabled,
+.ci-btn-outline:focus-visible {
+  background: var(--ci-button-primary);
+  color: var(--ci-button-text);
+}
+
+.ci-btn-soft {
+  background: var(--ci-soft);
+  color: var(--ci-button-primary);
+  border: 1px solid transparent;
+}
+
+.ci-btn-soft:hover:enabled,
+.ci-btn-soft:focus-visible {
+  background: #e2e8f0;
+}
+
+.ci-btn-primary:disabled,
+.ci-btn-outline:disabled,
+.ci-btn-soft:disabled,
+.ci-tab:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.ci-tab {
+  background: transparent;
+  border: 1px solid var(--ci-border);
+  color: var(--ci-button-primary);
+}
+
+.ci-tab.selected,
+.ci-tab[aria-pressed='true'] {
+  background: var(--ci-button-primary);
+  color: var(--ci-button-text);
+  border-color: var(--ci-button-primary);
+}
+
+.ci-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ci-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--ci-soft);
+  border: 1px solid var(--ci-border);
+  background-size: cover;
+  background-position: center;
+}
+
+.ci-header__title {
+  display: grid;
+  gap: 4px;
+  font-family: var(--ci-font-title);
+}

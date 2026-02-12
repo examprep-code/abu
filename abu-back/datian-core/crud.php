@@ -240,14 +240,19 @@ function get($output) //first position = tablename, condition = condition
                             }
                             else //if there's an array with elements: do a subquery
                             {
-                                $where[]=$model['key'].'='.$entry[$model['table']];
-                                if (is_array($value['_where'])){ //is this if condition necessary? is it possible that $where already holds conditions?
-                                    $value['_where']=array_merge($value['_where'], $where);
+                                $fkValue = $entry[$key] ?? ($entry[$model['table']] ?? null);
+                                if ($fkValue === null || $fkValue === '') {
+                                    $entry[$key] = [];
+                                } else {
+                                    $where[]=$model['key'].'='.$fkValue;
+                                    if (isset($value['_where']) && is_array($value['_where'])){ //is this if condition necessary? is it possible that $where already holds conditions?
+                                        $value['_where']=array_merge($value['_where'], $where);
+                                    }
+                                    else{
+                                        $value['_where']=$where;
+                                    }
+                                    $entry[$model['table']]=get([$subtable=>$value])[$model['table']][0]??[];
                                 }
-                                else{
-                                    $value['_where']=$where;
-                                }
-                                $entry[$model['table']]=get([$subtable=>$value])[$model['table']][0]??[];
                             }
                         } // 
                         elseif ($model[0]=='rkey')
@@ -264,7 +269,7 @@ function get($output) //first position = tablename, condition = condition
                         snippet($snippet, $key, $entry, $args, $model['snippets']??[]);
                     }
                 }
-                if (isset($model[0]) && $model[0]!=='rkey' && $model!=='fkey' && is_array($value)){
+                if (isset($model[0]) && $model[0]!=='rkey' && $model[0]!=='fkey' && is_array($value)){
                     //call snippets from variable in array
                     foreach ($value as $snippet=>$args)
                     {
@@ -333,4 +338,3 @@ function sql_delete($table, $id)
     $sql.='` WHERE id ='.$id.';';
     sql_set($sql);
 }
-
