@@ -29,6 +29,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Agent logs / exports
+abu-back/storage/agent-logs/
+
 # Local temp
 .tmp/
 .tmp*/

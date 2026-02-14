@@ -398,7 +398,7 @@
     padding: 32px clamp(16px, 4vw, 56px) 64px;
     display: flex;
     flex-direction: column;
-    gap: 28px;
+    gap: 14px;
   }
 
   .hero {
@@ -600,6 +600,60 @@
   :global(.luecke:focus) {
     outline: none;
     border-bottom-color: #2f8f83;
+  }
+
+  .sheet :global(pre),
+  .sheet :global(input[type='text']),
+  .sheet :global(textarea),
+  .sheet :global(button),
+  .sheet :global(select),
+  .sheet :global(input[type='checkbox']),
+  .sheet :global(input[type='radio']),
+  .sheet :global(input[type='button']),
+  .sheet :global(input[type='submit']) {
+    position: relative;
+  }
+
+  .sheet :global(pre)::before,
+  .sheet :global(input[type='text'])::before,
+  .sheet :global(textarea)::before {
+    content: '|';
+    position: absolute;
+    top: -14px;
+    left: 2px;
+    font-weight: 700;
+    font-size: 16px;
+    line-height: 1;
+    color: #0f172a;
+    pointer-events: none;
+    animation: abu-caret-blink 1s steps(1, end) infinite;
+  }
+
+  .sheet :global(button)::before,
+  .sheet :global(select)::before,
+  .sheet :global(input[type='checkbox'])::before,
+  .sheet :global(input[type='radio'])::before,
+  .sheet :global(input[type='button'])::before,
+  .sheet :global(input[type='submit'])::before {
+    content: '☝';
+    position: absolute;
+    top: -16px;
+    left: 0;
+    line-height: 1;
+    font-size: 15px;
+    color: #0f172a;
+    pointer-events: none;
+  }
+
+  @keyframes abu-caret-blink {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
   }
 
   :global(luecke-gap) {

@@ -16,6 +16,7 @@ dist/
 
 # Log files
 *.log
+storage/agent-logs/
 
 # Package files
 *.jar

@@ -1,98 +1,118 @@
 <?php
 
+$agentLoggingModule = dirname(__DIR__) . '/snippets/agent/logging.php';
+if (is_readable($agentLoggingModule)) {
+    include_once $agentLoggingModule;
+}
+
+$agentLogConfig = function_exists('agent_logger_config')
+    ? agent_logger_config()
+    : ['enabled' => false];
+$agentLogStartedAt = microtime(true);
+$agentLogWritten = false;
+$agentLogRecord = [
+    'event' => 'agent_chat',
+    'route' => 'agent',
+    'request_method' => (string)$method,
+    'request_payload' => is_array($data ?? null) ? $data : [],
+    'user' => [
+        'id' => $user['id'] ?? null,
+    ],
+    'started_at_utc' => gmdate('c'),
+];
+
+$agentFinalizeLog = function ($outcome, $extra = []) use (&$agentLogWritten, &$agentLogRecord, $agentLogConfig, $agentLogStartedAt, &$return) {
+    if ($agentLogWritten) {
+        return;
+    }
+    $agentLogWritten = true;
+    $agentLogRecord['outcome'] = (string)$outcome;
+    $agentLogRecord['duration_ms'] = (int)round((microtime(true) - $agentLogStartedAt) * 1000);
+    $agentLogRecord['finished_at_utc'] = gmdate('c');
+    if (is_array($extra) && !empty($extra)) {
+        foreach ($extra as $key => $value) {
+            $agentLogRecord[$key] = $value;
+        }
+    }
+    if (function_exists('agent_log_append_record')) {
+        $logId = agent_log_append_record($agentLogRecord, $agentLogConfig);
+        if (is_string($logId) && $logId !== '') {
+            $return['log']['agent_log_id'] = $logId;
+        }
+    }
+};
+
 if (!isset($user['id'])) {
     $return['status'] = 401;
     warning('nicht eingeloggt');
+    $agentFinalizeLog('unauthorized', [
+        'http_status' => 401,
+        'warning' => 'nicht eingeloggt',
+    ]);
     return;
 }
 
 if ($method !== 'POST') {
     $return['status'] = 405;
     warning('nur POST erlaubt');
+    $agentFinalizeLog('invalid_method', [
+        'http_status' => 405,
+        'warning' => 'nur POST erlaubt',
+    ]);
     return;
 }
 
-$prompt = trim($data['prompt'] ?? '');
-if ($prompt === '') {
-    $return['status'] = 400;
-    warning('prompt fehlt');
-    return;
-}
-
-$context = is_array($data['context'] ?? null) ? $data['context'] : [];
-$html = (string)($context['html'] ?? '');
-$view = (string)($context['view'] ?? '');
-$activeBlockIndex = $context['activeBlockIndex'] ?? null;
-$activeBlockHtml = (string)($context['activeBlockHtml'] ?? '');
-$blockCount = $context['blockCount'] ?? null;
-$visualTarget = (string)($context['visualTarget'] ?? '');
+include_once 'datian-core/agent_behavior.php';
 
 $apiKey = getenv('OPENAI_API_KEY') ?: (defined('OPENAI_API_KEY') ? OPENAI_API_KEY : '');
 if (!$apiKey) {
     $return['status'] = 500;
     warning('Kein OpenAI API-Key im Backend gesetzt.');
+    $agentFinalizeLog('misconfigured', [
+        'http_status' => 500,
+        'warning' => 'Kein OpenAI API-Key im Backend gesetzt.',
+    ]);
     return;
 }
 
-$systemMessage =
-    'Du bist ein Assistent fuer Lehrpersonen und bearbeitest Arbeitsblaetter im HTML-Format. ' .
-    'Du erhaeltst eine Benutzeranfrage und den aktuellen HTML-Inhalt. ' .
-    'Antworte AUSSCHLIESSLICH als JSON mit diesen Feldern: ' .
-    '"action" (replace_html | insert_html | message), ' .
-    '"html" (string, leer falls keine Aenderung), ' .
-    '"message" (kurze Antwort auf Deutsch), ' .
-    '"block_level" (true/false, ob html ein eigener Block ist), ' .
-    '"view" (html | visual, welche Editor-Ansicht sich fuer das Snippet eignet). ' .
-    'Nutze replace_html, wenn der gesamte Inhalt korrigiert oder umgeschrieben werden soll. ' .
-    'Nutze insert_html, wenn nur ein neuer Abschnitt/ eine Liste/ ein Zusatz eingefuegt werden soll. ' .
-    'Nutze message, wenn die Anfrage nur Analyse oder Fehlersuche erfordert und keine Aenderung. ' .
-    'Gib bei insert_html nur das Snippet zur Einfuegung zurueck, kein komplettes Dokument. ' .
-    'Bei replace_html gib den vollstaendigen aktualisierten HTML-Inhalt zurueck. ' .
-    'Behalte bestehende Spezial-Tags (z.B. luecke-gap) bei und veraendere sie nur, wenn die Anfrage es erfordert. ' .
-    'Kein Markdown, kein Code-Fence, nur JSON.';
-
-$contextLines = [
-    'Anfrage: ' . $prompt,
-    'Ansicht: ' . ($view !== '' ? $view : 'unbekannt'),
-];
-if ($visualTarget !== '') {
-    $contextLines[] = 'Einfuegen: ' . $visualTarget;
-}
-if ($activeBlockIndex !== null && $activeBlockIndex !== '') {
-    $contextLines[] = 'Aktiver Block Index: ' . $activeBlockIndex;
-}
-if ($blockCount !== null && $blockCount !== '') {
-    $contextLines[] = 'Block-Anzahl: ' . $blockCount;
-}
-if ($activeBlockHtml !== '') {
-    $contextLines[] = "Aktiver Block HTML:\n" . $activeBlockHtml;
-}
-$contextLines[] = "Aktueller HTML-Inhalt:\n" . $html;
-
+$prompt = trim((string)($data['prompt'] ?? ''));
+$promptSchema = is_array($data['prompt_schema'] ?? null) ? $data['prompt_schema'] : [];
+$context = is_array($data['context'] ?? null) ? $data['context'] : [];
 $notesPath = dirname(__DIR__) . '/AGENT_README.md';
-if (is_readable($notesPath)) {
-    $notes = trim((string)file_get_contents($notesPath));
-    if ($notes !== '') {
-        $contextLines[] = "KI-Notizen:\n" . $notes;
-    }
-}
 
-$messages = [
-    [
-        'role' => 'system',
-        'content' => $systemMessage,
-    ],
-    [
-        'role' => 'user',
-        'content' => implode("\n\n", $contextLines),
-    ],
-];
+$agentLogRecord['prompt'] = $prompt;
+$agentLogRecord['prompt_schema'] = $promptSchema;
+$agentLogRecord['context'] = $context;
+
+$modelInput = agent_build_model_messages($prompt, $promptSchema, $context, $notesPath);
+$agentLogRecord['model_input'] = $modelInput;
+if (!empty($modelInput['error'])) {
+    $return['status'] = (int)($modelInput['status'] ?? 400);
+    warning((string)$modelInput['error']);
+    $agentFinalizeLog('invalid_request', [
+        'http_status' => $return['status'],
+        'warning' => (string)$modelInput['error'],
+    ]);
+    return;
+}
 
 $body = json_encode([
     'model' => 'gpt-4.1-mini',
-    'messages' => $messages,
-    'temperature' => 0.2,
+    'messages' => $modelInput['messages'],
+    'temperature' => 0.1,
+    'response_format' => [
+        'type' => 'json_object',
+    ],
 ]);
+
+$agentLogRecord['request_schema'] = $modelInput['request_schema'] ?? [];
+$agentLogRecord['normalized_prompt'] = (string)($modelInput['normalized_prompt'] ?? '');
+$agentLogRecord['openai_request'] = [
+    'model' => 'gpt-4.1-mini',
+    'temperature' => 0.1,
+    'response_format' => ['type' => 'json_object'],
+    'messages' => $modelInput['messages'],
+];
 
 $ch = curl_init('https://api.openai.com/v1/chat/completions');
 curl_setopt_array($ch, [
@@ -103,27 +123,43 @@ curl_setopt_array($ch, [
         'Authorization: Bearer ' . $apiKey,
     ],
     CURLOPT_POSTFIELDS => $body,
-    CURLOPT_TIMEOUT => 30,
+    CURLOPT_CONNECTTIMEOUT => 10,
+    CURLOPT_TIMEOUT => 90,
 ]);
 
 $result = curl_exec($ch);
 $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curlErrno = curl_errno($ch);
 $curlError = curl_error($ch);
 curl_close($ch);
 
 if ($result === false) {
-    $return['status'] = 500;
+    $return['status'] = $curlErrno === CURLE_OPERATION_TIMEDOUT ? 504 : 500;
     warning('Fehler beim Aufruf der OpenAI-API: ' . $curlError);
+    $agentFinalizeLog('openai_transport_error', [
+        'http_status' => $return['status'],
+        'curl_errno' => $curlErrno,
+        'curl_error' => $curlError,
+    ]);
     return;
 }
 
 if ($status < 200 || $status >= 300) {
     $return['status'] = $status;
+    $errorText = '';
+    $errorPayload = json_decode((string)$result, true);
+    if (is_array($errorPayload) && !empty($errorPayload['error']['message'])) {
+        $errorText = ' ' . $errorPayload['error']['message'];
+    }
     if ($status == 429) {
         warning('OpenAI-Rate-Limit erreicht (429). Bitte kurz warten und erneut probieren.');
     } else {
-        warning('Fehler bei der OpenAI-API (' . $status . ').');
+        warning('Fehler bei der OpenAI-API (' . $status . ').' . $errorText);
     }
+    $agentFinalizeLog('openai_http_error', [
+        'http_status' => $status,
+        'openai_response_raw' => $result,
+    ]);
     return;
 }
 
@@ -131,6 +167,11 @@ $decoded = json_decode($result, true);
 if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
     $return['status'] = 500;
     warning('Antwort der OpenAI-API konnte nicht gelesen werden: ' . json_last_error_msg());
+    $agentFinalizeLog('openai_invalid_json', [
+        'http_status' => 500,
+        'openai_response_raw' => $result,
+        'json_error' => json_last_error_msg(),
+    ]);
     return;
 }
 
@@ -138,6 +179,10 @@ $raw = trim($decoded['choices'][0]['message']['content'] ?? '');
 if ($raw === '') {
     $return['status'] = 500;
     warning('Leere Antwort der OpenAI-API erhalten.');
+    $agentFinalizeLog('openai_empty_answer', [
+        'http_status' => 500,
+        'openai_response' => $decoded,
+    ]);
     return;
 }
 
@@ -160,6 +205,11 @@ if ($parsed === null && json_last_error() !== JSON_ERROR_NONE) {
 if ($parsed === null || !is_array($parsed)) {
     $return['status'] = 500;
     warning('Antwort der OpenAI-API ist kein gueltiges JSON.');
+    $agentFinalizeLog('assistant_invalid_json', [
+        'http_status' => 500,
+        'assistant_raw' => $raw,
+        'openai_response' => $decoded,
+    ]);
     return;
 }
 
@@ -170,5 +220,13 @@ $return['data'] = [
     'block_level' => (bool)($parsed['block_level'] ?? false),
     'view' => ($parsed['view'] ?? '') === 'visual' ? 'visual' : 'html',
 ];
+
+$agentFinalizeLog('success', [
+    'http_status' => 200,
+    'openai_http_status' => $status,
+    'openai_response' => $decoded,
+    'assistant_raw' => $raw,
+    'assistant_parsed' => $return['data'],
+]);
 
 ?>

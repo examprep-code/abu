@@ -474,7 +474,7 @@
     padding: 32px clamp(16px, 4vw, 56px) 64px;
     display: flex;
     flex-direction: column;
-    gap: 28px;
+    gap: 14px;
   }
 
   .hero {

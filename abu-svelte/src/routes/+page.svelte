@@ -10,6 +10,11 @@
   import { createUmfrageRuntime, ensureUmfrageElements } from '$lib/custom-elements/umfrage';
   import { legacySheets } from '$lib/legacySheets';
   import { applySchoolCiCss } from '$lib/ci';
+  import {
+    describeAgentContext,
+    resolveAgentContext,
+    resolveAgentNavigationIntent
+  } from '$lib/agent/router';
   import ListTable from '$lib/components/ListTable.svelte';
 
   const showLegacyImport = false;
@@ -36,6 +41,10 @@
   let editorName = '';
   let saving = false;
   let saveState = '';
+  let lastSavedSheetId = null;
+  let lastSavedSheetName = '';
+  let lastSavedSheetContent = '';
+  let sheetAutosaveTimer = null;
   let sheetVersions = [];
   let versionsLoading = false;
   let versionsError = '';
@@ -54,7 +63,7 @@
   let showCreateSheetModal = false;
   let activeTab = 'editor';
   let showTopbarMenu = false;
-  let editorView = 'html';
+  let editorView = 'visual';
   let topbarMenuEl = null;
   let sheetHtmlTokens = [];
   let sheetHtmlInput = null;
@@ -151,9 +160,18 @@
   let agentPrompt = '';
   let agentStatus = '';
   let agentPending = false;
-  let agentResponse = '';
   let agentHistory = [];
   let agentHistoryEl = null;
+  let agentInputEl = null;
+  let agentContext = 'app';
+  const createEmptyAgentMemory = () => ({
+    sheetMatchIds: [],
+    lastExerciseTopic: '',
+    lastExerciseIntent: '',
+    lastSheetAuditIntent: ''
+  });
+  let agentMemoryByScope = {};
+  let agentSidebarOpen = true;
 
   let answersEl = null;
   let answers = [];
@@ -165,7 +183,18 @@
   let answersClassFilter = '';
   let answersClassKey = null;
   let answersClassId = null;
+  let answersLearners = [];
+  let answersLearnersLoading = false;
+  let answersLearnersError = '';
+  let answersLearnersClassKey = null;
+  let answersLearnersRequestId = 0;
+  let answersUserFilter = '';
+  let answersUserKey = '';
   let answersContent = '';
+  let answersRenderMode = 'aggregate';
+  let answersRenderKey = 0;
+  let answersLueckeRuntime = null;
+  let answersUmfrageRuntime = null;
 
   const PLAN_STATUS_OPTIONS = [
     { value: '', label: 'Nicht zugeordnet' },
@@ -184,9 +213,9 @@
     { id: 'answers', label: 'Antworten' }
   ];
   const SHEET_TABLE_COLUMNS =
-    'minmax(120px, 0.9fr) minmax(180px, 1.1fr) minmax(220px, 2fr) minmax(160px, 0.9fr) minmax(160px, 0.9fr) minmax(90px, auto)';
+    'minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(88px, auto)';
   const CLASS_TABLE_COLUMNS =
-    'minmax(160px, 1.2fr) minmax(90px, 0.6fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(220px, 1.4fr) minmax(90px, auto)';
+    'minmax(0, 1fr) minmax(0, 0.5fr) minmax(0, 0.8fr) minmax(0, 0.9fr) minmax(0, 1fr) minmax(180px, 1.4fr)';
 
   $: planAssignmentMap = new Map(
     planAssignments.map((entry) => [entry.sheet_key, entry])
@@ -199,6 +228,10 @@
       ? schools.find((school) => `${school.id}` === `${adminCiSchoolId}`)?.name ||
         `Schule #${adminCiSchoolId}`
       : 'Standard';
+  $: {
+    agentPrompt;
+    resizeAgentInput();
+  }
   $: schoolMap = new Map(schools.map((entry) => [String(entry.id), entry]));
   $: sheetFilterValue = sheetFilter.trim().toLowerCase();
   $: filteredSheets = sheetFilterValue
@@ -283,6 +316,7 @@
       sortable: true,
       onSort: () => toggleSheetSort('name'),
       sortHint: () => getSheetSortHint('name'),
+      compactVisible: true,
       className: 'sheet-cell--name',
       headerClass: 'sheet-cell--name'
     },
@@ -318,6 +352,7 @@
       sortable: true,
       onSort: () => toggleClassSort('name'),
       sortHint: () => getClassSortHint('name'),
+      compactVisible: true,
       className: 'sheet-cell--name',
       headerClass: 'sheet-cell--name',
       value: (entry) => entry?.name || `Klasse #${entry?.id ?? ''}`
@@ -366,12 +401,80 @@
     return window.confirm(`${label} wirklich wiederherstellen?`);
   };
 
+  const clearSheetAutosaveTimer = () => {
+    if (!browser || sheetAutosaveTimer === null) return;
+    window.clearTimeout(sheetAutosaveTimer);
+    sheetAutosaveTimer = null;
+  };
+
+  const rememberSavedSheetState = () => {
+    lastSavedSheetId = selectedId;
+    lastSavedSheetName = editorName ?? '';
+    lastSavedSheetContent = editorContent ?? '';
+  };
+
+  const resetSavedSheetState = () => {
+    lastSavedSheetId = null;
+    lastSavedSheetName = '';
+    lastSavedSheetContent = '';
+  };
+
+  const hasUnsavedSheetChanges = () => {
+    if (!selectedId) return false;
+    if (lastSavedSheetId !== selectedId) return true;
+    return (
+      (editorName ?? '') !== (lastSavedSheetName ?? '') ||
+      (editorContent ?? '') !== (lastSavedSheetContent ?? '')
+    );
+  };
+
+  const scheduleSheetAutosave = () => {
+    clearSheetAutosaveTimer();
+    if (!browser || !selectedId || saving || !hasUnsavedSheetChanges()) return;
+    sheetAutosaveTimer = window.setTimeout(() => {
+      sheetAutosaveTimer = null;
+      saveSheet({ autosave: true, refreshSheetList: false, statusLabel: 'Automatisch gespeichert' });
+    }, SHEET_AUTOSAVE_DELAY_MS);
+  };
+
+  const maybeWarnAndSaveBeforeLeavingEditor = async (targetLabel = 'anderer Bereich') => {
+    if (!hasUnsavedSheetChanges()) return true;
+    if (!browser) return true;
+    const shouldSaveAndLeave = window.confirm(
+      `Ungelespeicherte Aenderungen erkannt.\n\nZiel: ${targetLabel}\n\nOK: Jetzt speichern und wechseln.\nAbbrechen: Im Editor bleiben.`
+    );
+    if (!shouldSaveAndLeave) return false;
+    const saved = await saveSheet({
+      autosave: true,
+      refreshSheetList: false,
+      statusLabel: 'Automatisch gespeichert'
+    });
+    if (saved) return true;
+    return window.confirm(
+      'Speichern ist fehlgeschlagen. Ohne Speichern wechseln und Aenderungen verwerfen?'
+    );
+  };
+
   const buildCssTokens = (value = '') => tokenizeCss(value);
   const buildHtmlTokens = (value = '') => tokenizeHtml(value);
 
   $: schoolCssTokens = buildCssTokens(schoolCss);
   $: newSchoolCssTokens = buildCssTokens(newSchoolCss);
   $: sheetHtmlTokens = buildHtmlTokens(editorContent);
+  $: {
+    selectedId;
+    editorName;
+    editorContent;
+    saving;
+    lastSavedSheetId;
+    lastSavedSheetName;
+    lastSavedSheetContent;
+    if (selectedId && !saving && hasUnsavedSheetChanges()) {
+      scheduleSheetAutosave();
+    } else {
+      clearSheetAutosaveTimer();
+    }
+  }
 
   const syncCodeScroll = (inputEl, highlightEl) => {
     if (!inputEl || !highlightEl) return;
@@ -381,6 +484,7 @@
 
   const STORAGE_KEY = 'abu.auth';
   const ADMIN_CI_KEY = 'abu.admin.ci';
+  const SHEET_AUTOSAVE_DELAY_MS = 60 * 1000;
 
   onMount(() => {
     showTopbarMenu = false;
@@ -437,6 +541,20 @@
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
+    };
+  });
+
+  onMount(() => {
+    if (!browser) return undefined;
+    const handleBeforeUnload = (event) => {
+      if (!hasUnsavedSheetChanges()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      clearSheetAutosaveTimer();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   });
 
@@ -593,6 +711,25 @@
     return match ? formatClassLabel(match) : `Klasse ${classId}`;
   }
 
+  function formatAnswersLearnerLabel(entry) {
+    if (!entry) return 'Lernende';
+    const name = (entry?.name ?? '').toString().trim();
+    const code = (entry?.code ?? '').toString().trim();
+    if (name && code) return `${name} (${code})`;
+    if (name) return name;
+    if (code) return code;
+    if (entry?.id) return `Lernende ${entry.id}`;
+    return 'Lernende';
+  }
+
+  function getAnswersUserLabel(user) {
+    if (!user) return 'Alle Antworten';
+    const match = answersLearners.find(
+      (entry) => String(entry?.code ?? '') === String(user)
+    );
+    return match ? formatAnswersLearnerLabel(match) : user;
+  }
+
   const clearAuth = () => {
     token = '';
     userEmail = '';
@@ -650,6 +787,10 @@
   };
 
   const logout = async () => {
+    const canLeave = await maybeWarnAndSaveBeforeLeavingEditor('Logout');
+    if (!canLeave) return;
+    clearSheetAutosaveTimer();
+    resetSavedSheetState();
     try {
       await apiFetch('user/logout', { method: 'POST' });
     } catch {
@@ -676,6 +817,28 @@
     planAssignments = [];
     selectedPlanClassId = null;
     planError = '';
+    answers = [];
+    answersError = '';
+    answersMeta = '';
+    answersKey = '';
+    answersClassFilter = '';
+    answersClassKey = null;
+    answersLearners = [];
+    answersLearnersLoading = false;
+    answersLearnersError = '';
+    answersLearnersClassKey = null;
+    answersLearnersRequestId = 0;
+    answersUserFilter = '';
+    answersUserKey = '';
+    answersContent = '';
+    answersRenderMode = 'aggregate';
+    answersRenderKey = 0;
+    agentPrompt = '';
+    agentStatus = '';
+    agentPending = false;
+    agentHistory = [];
+    agentMemoryByScope = {};
+    destroyAnswersRuntime();
   };
 
   const fetchSheets = async () => {
@@ -700,12 +863,12 @@
           next = list.find((sheet) => sheet.id === selectedId);
         }
         if (next) {
-          selectSheet(next.id);
+          selectSheet(next.id, { preserveView: true });
         } else {
-          closeEditor();
+          closeEditor({ force: true });
         }
       } else {
-        closeEditor();
+        closeEditor({ force: true });
       }
     } catch (err) {
       sheetError = err?.message ?? 'Sheets konnten nicht geladen werden';
@@ -750,14 +913,18 @@
     }
   };
 
-  const selectSheet = (id) => {
+  const selectSheet = (id, options = {}) => {
+    const { preserveView = false } = options;
+    clearSheetAutosaveTimer();
     selectedId = id;
     const current = sheets.find((sheet) => sheet.id === id);
     editorContent = current?.content ?? '';
     editorName = current?.name ?? '';
     selectedKey = current?.key ?? '';
     saveState = '';
-    editorView = 'html';
+    if (!preserveView) {
+      editorView = 'visual';
+    }
     resetSheetVersions();
     answers = [];
     answersError = '';
@@ -765,25 +932,36 @@
     answersKey = '';
     answersClassFilter = '';
     answersClassKey = null;
+    answersLearners = [];
+    answersLearnersLoading = false;
+    answersLearnersError = '';
+    answersLearnersClassKey = null;
+    answersLearnersRequestId = 0;
+    answersUserFilter = '';
+    answersUserKey = '';
     answersContent = '';
-    agentPrompt = '';
-    agentStatus = '';
-    agentPending = false;
-    agentResponse = '';
-    agentHistory = [];
+    answersRenderMode = 'aggregate';
+    answersRenderKey = 0;
+    destroyAnswersRuntime();
     visualActiveBlock = 0;
+    rememberSavedSheetState();
     if (current?.key) {
       fetchSheetVersions(current.key);
     }
   };
 
-  const closeEditor = () => {
+  const closeEditor = async ({ force = false, targetLabel = 'Liste' } = {}) => {
+    if (!force) {
+      const canLeave = await maybeWarnAndSaveBeforeLeavingEditor(targetLabel);
+      if (!canLeave) return false;
+    }
+    clearSheetAutosaveTimer();
     selectedId = null;
     selectedKey = '';
     editorContent = '';
     editorName = '';
     saveState = '';
-    editorView = 'html';
+    editorView = 'visual';
     resetSheetVersions();
     previewLueckeRuntime?.destroy();
     previewUmfrageRuntime?.destroy();
@@ -796,14 +974,21 @@
     answersKey = '';
     answersClassFilter = '';
     answersClassKey = null;
+    answersLearners = [];
+    answersLearnersLoading = false;
+    answersLearnersError = '';
+    answersLearnersClassKey = null;
+    answersLearnersRequestId = 0;
+    answersUserFilter = '';
+    answersUserKey = '';
     answersContent = '';
-    agentPrompt = '';
-    agentStatus = '';
-    agentPending = false;
-    agentResponse = '';
-    agentHistory = [];
+    answersRenderMode = 'aggregate';
+    answersRenderKey = 0;
+    destroyAnswersRuntime();
     visualActiveBlock = 0;
     blockInsertIndex = null;
+    resetSavedSheetState();
+    return true;
   };
 
   const createSheet = async () => {
@@ -852,30 +1037,67 @@
     }
   };
 
-  const saveSheet = async () => {
-    if (!selectedId) return;
+  const saveSheet = async ({
+    autosave = false,
+    refreshSheetList = true,
+    statusLabel = null
+  } = {}) => {
+    if (!selectedId || saving) return false;
+    if (!hasUnsavedSheetChanges()) {
+      return true;
+    }
+    const targetId = selectedId;
+    const nextContent = editorContent;
+    const nextName = editorName;
+    clearSheetAutosaveTimer();
     saving = true;
-    saveState = '';
+    if (!autosave) {
+      saveState = '';
+    }
     try {
       const res = await apiFetch('sheet', {
         method: 'PATCH',
         body: JSON.stringify({
-          id: selectedId,
-          content: editorContent,
-          name: editorName
+          id: targetId,
+          content: nextContent,
+          name: nextName
         })
       });
       const payload = await readPayload(res);
       if (!res.ok) {
         saveState = payload?.warning || 'Speichern fehlgeschlagen';
-        return;
+        return false;
       }
-      await fetchSheets();
-      saveState = 'Gespeichert';
+      if (refreshSheetList) {
+        const keepView = editorView;
+        await fetchSheets();
+        if (selectedId) {
+          editorView = keepView;
+        }
+      } else {
+        sheets = sheets.map((entry) =>
+          entry.id === targetId
+            ? {
+                ...entry,
+                content: nextContent,
+                name: nextName
+              }
+            : entry
+        );
+      }
+      if (selectedId === targetId) {
+        rememberSavedSheetState();
+      }
+      saveState = statusLabel ?? (autosave ? 'Automatisch gespeichert' : 'Gespeichert');
+      return true;
     } catch (err) {
       saveState = err?.message ?? 'Speichern fehlgeschlagen';
+      return false;
     } finally {
       saving = false;
+      if (hasUnsavedSheetChanges()) {
+        scheduleSheetAutosave();
+      }
     }
   };
 
@@ -944,7 +1166,7 @@
       }
       sheets = sheets.filter((sheet) => sheet.id !== targetId);
       if (selectedId === targetId) {
-        closeEditor();
+        closeEditor({ force: true });
       }
     } catch (err) {
       sheetError = err?.message ?? 'Sheet konnte nicht geloescht werden';
@@ -1489,11 +1711,22 @@
     schoolCss = '';
   };
 
+  const getTabSwitchLabel = (tab) => {
+    if (tab === 'classes') return 'Klassenliste';
+    if (tab === 'schools') return 'Schulliste';
+    if (tab === 'settings') return 'Einstellungen';
+    return 'anderer Bereich';
+  };
+
   const switchTab = async (tab) => {
     if (activeTab === tab) return;
+    if (activeTab === 'editor' && selectedId && tab !== 'editor') {
+      const canLeave = await maybeWarnAndSaveBeforeLeavingEditor(getTabSwitchLabel(tab));
+      if (!canLeave) return;
+    }
     activeTab = tab;
     if (tab === 'editor') {
-      closeEditor();
+      closeEditor({ force: true });
     } else if (tab === 'classes') {
       resetClassSelection();
     } else if (tab === 'schools') {
@@ -1540,11 +1773,38 @@
     blocks.push(content);
   };
 
+  const STANDALONE_BLOCK_TAGS = new Set(['umfrage-matrix']);
+  const STANDALONE_BLOCK_SELECTOR = Array.from(STANDALONE_BLOCK_TAGS).join(',');
+
+  const isStandaloneBlockNode = (node) =>
+    node &&
+    node.nodeType === Node.ELEMENT_NODE &&
+    node.tagName &&
+    STANDALONE_BLOCK_TAGS.has(node.tagName.toLowerCase());
+
   const appendNodesAsBlock = (doc, blocks, nodes) => {
     if (!nodes.length) return;
-    const container = doc.createElement('div');
-    nodes.forEach((node) => container.appendChild(node.cloneNode(true)));
-    pushBlockHtml(blocks, container.innerHTML);
+    let buffer = [];
+    const flush = () => {
+      if (!buffer.length) return;
+      const container = doc.createElement('div');
+      buffer.forEach((node) => container.appendChild(node.cloneNode(true)));
+      pushBlockHtml(blocks, container.innerHTML);
+      buffer = [];
+    };
+
+    nodes.forEach((node) => {
+      if (isStandaloneBlockNode(node)) {
+        flush();
+        const container = doc.createElement('div');
+        container.appendChild(node.cloneNode(true));
+        pushBlockHtml(blocks, container.innerHTML);
+        return;
+      }
+      buffer.push(node);
+    });
+
+    flush();
   };
 
   const BLOCK_LEVEL_TAGS = new Set([
@@ -1584,6 +1844,8 @@
     return isBlockHtml(trimmed) ? trimmed : `<p>${block}</p>`;
   };
 
+  const isUmfrageMatrixBlock = (block) => /<\s*umfrage-matrix\b/i.test(block || '');
+
   const extractParagraphBlocks = (html) => {
     const doc = new DOMParser().parseFromString(html || '', 'text/html');
     const blocks = [];
@@ -1603,6 +1865,20 @@
         ) {
           flush();
           extractFromParagraph(node);
+          return;
+        }
+        if (isStandaloneBlockNode(node)) {
+          flush();
+          appendNodesAsBlock(doc, blocks, [node]);
+          return;
+        }
+        if (
+          node.nodeType === Node.ELEMENT_NODE &&
+          node.querySelector &&
+          node.querySelector(STANDALONE_BLOCK_SELECTOR)
+        ) {
+          flush();
+          walkNodes(Array.from(node.childNodes));
           return;
         }
         buffer.push(node);
@@ -1629,6 +1905,16 @@
         if (el.tagName.toLowerCase() === 'p') {
           flush();
           extractFromParagraph(el);
+          return;
+        }
+        if (isStandaloneBlockNode(el)) {
+          flush();
+          appendNodesAsBlock(doc, blocks, [el]);
+          return;
+        }
+        if (el.querySelector && el.querySelector(STANDALONE_BLOCK_SELECTOR)) {
+          flush();
+          walkNodes(Array.from(el.childNodes));
           return;
         }
         if (el.querySelector && el.querySelector('p')) {
@@ -1663,7 +1949,7 @@
   };
 
   const normalizeVisualBlockViews = (views, length) => {
-    const next = Array.from({ length }, (_, idx) => views[idx] || 'html');
+    const next = Array.from({ length }, (_, idx) => views[idx] || 'visual');
     return next;
   };
 
@@ -1790,13 +2076,6 @@
   };
 
   const BLOCK_TEMPLATES = [
-    {
-      id: 'text',
-      label: 'Textblock',
-      meta: 'Visuell bearbeiten',
-      view: 'visual',
-      getHtml: () => ''
-    },
     {
       id: 'html',
       label: 'HTML-Block',
@@ -2162,36 +2441,278 @@
     await insertVisualBlockAt(index, html, view);
   };
 
-  const recordAgentHistory = async ({ prompt, message, status }) => {
-    const trimmedPrompt = (prompt || '').trim();
-    const response = message || status || '';
-    if (!trimmedPrompt || !response) return;
-    agentHistory = [
-      ...agentHistory,
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        prompt: trimmedPrompt,
-        message: message || '',
-        status: status || ''
-      }
-    ];
+  const scrollAgentHistoryToBottom = async () => {
     await tick();
     if (agentHistoryEl) {
       agentHistoryEl.scrollTop = agentHistoryEl.scrollHeight;
     }
   };
 
+  const appendAgentHistoryPrompt = async (prompt) => {
+    const trimmedPrompt = (prompt || '').trim();
+    if (!trimmedPrompt) return '';
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    agentHistory = [
+      ...agentHistory,
+      {
+        id,
+        prompt: trimmedPrompt,
+        response: '',
+        pending: true,
+        error: false
+      }
+    ];
+    await scrollAgentHistoryToBottom();
+    return id;
+  };
+
+  const resolveAgentHistoryPrompt = async (id, response, error = false) => {
+    const text = (response || '').trim();
+    if (!id || !text) return;
+    let updated = false;
+    agentHistory = agentHistory.map((entry) => {
+      if (entry.id !== id) return entry;
+      updated = true;
+      return {
+        ...entry,
+        response: text,
+        pending: false,
+        error
+      };
+    });
+    if (!updated) return;
+    await scrollAgentHistoryToBottom();
+  };
+
+  const resizeAgentInput = () => {
+    if (!agentInputEl) return;
+    agentInputEl.style.height = 'auto';
+    const nextHeight = Math.min(Math.max(agentInputEl.scrollHeight, 34), 140);
+    agentInputEl.style.height = `${nextHeight}px`;
+  };
+
+  const isAgentHtmlEditableContext = (context) =>
+    activeTab === 'editor' &&
+    Boolean(selectedId) &&
+    (context === 'html' || context === 'visual' || context === 'preview' || context === 'answers');
+
+  const resolveAgentMemoryScope = () => {
+    if (activeTab === 'editor') return 'editor';
+    if (activeTab === 'classes') return 'classes';
+    if (activeTab === 'schools') return 'schools';
+    if (activeTab === 'settings') return 'settings';
+    return 'app';
+  };
+
+  const getAgentMemoryForScope = (scope) => {
+    const current = agentMemoryByScope?.[scope];
+    if (!current || typeof current !== 'object') return createEmptyAgentMemory();
+    return {
+      sheetMatchIds: Array.isArray(current.sheetMatchIds) ? current.sheetMatchIds : [],
+      lastExerciseTopic:
+        typeof current.lastExerciseTopic === 'string' ? current.lastExerciseTopic : '',
+      lastExerciseIntent:
+        typeof current.lastExerciseIntent === 'string' ? current.lastExerciseIntent : '',
+      lastSheetAuditIntent:
+        typeof current.lastSheetAuditIntent === 'string' ? current.lastSheetAuditIntent : ''
+    };
+  };
+
+  const setAgentMemoryForScope = (scope, memory) => {
+    agentMemoryByScope = {
+      ...agentMemoryByScope,
+      [scope]: {
+        sheetMatchIds: Array.isArray(memory?.sheetMatchIds) ? memory.sheetMatchIds : [],
+        lastExerciseTopic:
+          typeof memory?.lastExerciseTopic === 'string' ? memory.lastExerciseTopic : '',
+        lastExerciseIntent:
+          typeof memory?.lastExerciseIntent === 'string' ? memory.lastExerciseIntent : '',
+        lastSheetAuditIntent:
+          typeof memory?.lastSheetAuditIntent === 'string' ? memory.lastSheetAuditIntent : ''
+      }
+    };
+  };
+
+  const buildAgentVisibleItems = (context) => {
+    if (context === 'visual') {
+      return [
+        `Editor visuell (${visualBlocks.length} Bloecke)`,
+        `Aktiver Block: ${Math.min(Math.max(0, visualActiveBlock), Math.max(visualBlocks.length - 1, 0)) + 1}`,
+        editorName ? `Sheet: ${editorName}` : 'Kein Sheetname'
+      ];
+    }
+    if (context === 'html') {
+      return [
+        'Editor HTML',
+        editorName ? `Sheet: ${editorName}` : 'Kein Sheetname',
+        `Dokumentlaenge: ${(editorContent ?? '').length}`
+      ];
+    }
+    if (context === 'preview') {
+      return [
+        'Editor Preview',
+        editorName ? `Sheet: ${editorName}` : 'Kein Sheetname',
+        `Dokumentlaenge: ${(editorContent ?? '').length}`
+      ];
+    }
+    if (context === 'answers') {
+      return [
+        'Antwortansicht',
+        answersClassId ? `Klassenfilter aktiv: ${answersClassId}` : 'Kein Klassenfilter',
+        answersUserFilter ? `Lernendenfilter: ${answersUserFilter}` : 'Alle Antworten'
+      ];
+    }
+    if (context === 'sheets') {
+      return [
+        `Sheet-Liste (${visibleSheets.length}/${sheets.length})`,
+        'Sheet-Suche und Sortierung',
+        selectedId ? `Ausgewaehltes Sheet: ${selectedId}` : 'Kein Sheet geoeffnet'
+      ];
+    }
+    if (context === 'classes') {
+      return [
+        `Klassenliste (${visibleClasses.length}/${classes.length})`,
+        selectedClassId ? `Klasse geoeffnet: ${selectedClassId}` : 'Keine Klasse geoeffnet',
+        `Detailansicht: ${classDetailView}`
+      ];
+    }
+    if (context === 'schools') {
+      return [
+        `Schulenliste (${schools.length})`,
+        selectedSchoolId ? `Schule geoeffnet: ${selectedSchoolId}` : 'Keine Schule geoeffnet',
+        schoolName ? `Schulname: ${schoolName}` : 'Kein Schulname'
+      ];
+    }
+    if (context === 'settings') {
+      return [
+        'CI-Einstellungen',
+        adminCiSchoolId ? `Ausgewaehlte CI-Schule: ${adminCiSchoolId}` : 'Standard-CI aktiv'
+      ];
+    }
+    return ['App-Navigation'];
+  };
+
+  const buildAgentContextDetails = (context) => ({
+    context,
+    label: describeAgentContext(context),
+    visible: buildAgentVisibleItems(context)
+  });
+
+  const handleAgentNavigationIntent = async (prompt) => {
+    const scope = resolveAgentMemoryScope();
+    const memory = getAgentMemoryForScope(scope);
+    const result = await resolveAgentNavigationIntent({
+      prompt,
+      memory,
+      getSheets: () => sheets,
+      isLoadingSheets: () => loadingSheets,
+      getActiveTab: () => activeTab,
+      getSelectedId: () => selectedId,
+      getEditorView: () => editorView,
+      getContextDetails: () =>
+        buildAgentContextDetails(resolveAgentContext({ activeTab, selectedId, editorView })),
+      fetchSheets: async () => {
+        await fetchSheets();
+      },
+      openSheet: async (sheet) => {
+        if (!sheet?.id) return false;
+        if (activeTab !== 'editor') {
+          await switchTab('editor');
+          if (activeTab !== 'editor') return false;
+        }
+        selectSheet(sheet.id);
+        return true;
+      },
+      closeEditorToList: async () => closeEditor({ targetLabel: 'Liste' }),
+      setEditorView: (view) => {
+        if (editorView === view) return false;
+        editorView = view;
+        return true;
+      },
+      switchTab: async (tab) => {
+        const before = activeTab;
+        await switchTab(tab);
+        return activeTab === tab || before === tab;
+      }
+    });
+
+    setAgentMemoryForScope(scope, result.memory);
+    return result;
+  };
+
+  $: agentContext = resolveAgentContext({ activeTab, selectedId, editorView });
   const buildAgentContext = (context) => {
     const payload = {
-      html: editorContent ?? '',
-      view: context
+      view: context,
+      scope: 'document',
+      contextLabel: describeAgentContext(context),
+      visibleItems: buildAgentVisibleItems(context)
     };
     if (context === 'visual') {
-      payload.activeBlockIndex = visualActiveBlock;
-      payload.activeBlockHtml = visualBlocks[visualActiveBlock] ?? '';
+      const targetIndex = Math.min(
+        Math.max(0, visualActiveBlock),
+        Math.max(visualBlocks.length - 1, 0)
+      );
+      const activeBlockHtml = visualBlocks[targetIndex] ?? '';
+      payload.scope = 'block';
+      payload.html = editorContent ?? '';
+      payload.activeBlockIndex = targetIndex;
+      payload.activeBlockView = visualBlockViews[targetIndex] === 'html' ? 'html' : 'visual';
+      payload.activeBlockHtml = activeBlockHtml;
       payload.blockCount = visualBlocks.length;
+      payload.documentLength = (editorContent ?? '').length;
+      return payload;
+    }
+    if (context === 'html' || context === 'preview' || context === 'answers') {
+      payload.html = editorContent ?? '';
+      payload.documentLength = (editorContent ?? '').length;
+      payload.selectedSheetId = selectedId ?? null;
+      payload.selectedSheetKey = selectedKey ?? '';
+      payload.selectedSheetName = editorName ?? '';
+      return payload;
+    }
+    if (context === 'sheets') {
+      payload.listCount = sheets.length;
+      payload.filteredCount = visibleSheets.length;
+      payload.selectedSheetId = selectedId ?? null;
+      payload.selectedSheetKey = selectedKey ?? '';
+      return payload;
+    }
+    if (context === 'classes') {
+      payload.classCount = classes.length;
+      payload.selectedClassId = selectedClassId ?? null;
+      payload.classDetailView = classDetailView;
+      return payload;
+    }
+    if (context === 'schools') {
+      payload.schoolCount = schools.length;
+      payload.selectedSchoolId = selectedSchoolId ?? null;
+      payload.selectedSchoolName = schoolName ?? '';
+      return payload;
+    }
+    if (context === 'settings') {
+      payload.selectedCiSchoolId = adminCiSchoolId ?? '';
+      payload.selectedCiLabel = ciLabel ?? '';
+      return payload;
     }
     return payload;
+  };
+
+  const replaceVisualBlockAt = async (index, html, view = 'visual') => {
+    if (!visualBlocks.length) {
+      await appendVisualBlock(html, view === 'html' ? 'html' : 'visual');
+      return;
+    }
+    const clampedIndex = Math.max(0, Math.min(index, visualBlocks.length - 1));
+    const nextBlocks = [...visualBlocks];
+    nextBlocks[clampedIndex] = normalizeBlockContent(html);
+    visualBlocks = nextBlocks;
+    const nextViews = [...visualBlockViews];
+    nextViews[clampedIndex] = view === 'html' ? 'html' : 'visual';
+    visualBlockViews = normalizeVisualBlockViews(nextViews, nextBlocks.length);
+    commitVisualBlocks();
+    await tick();
+    visualActiveBlock = clampedIndex;
   };
 
   const applyAgentInsertion = async (context, html, blockLevel = false, view = 'html') => {
@@ -2219,10 +2740,9 @@
     return 'inline';
   };
 
-  const applyAgentPrompt = async (context) => {
+  const applyAgentPrompt = async (context = agentContext) => {
     const prompt = agentPrompt.trim();
     agentStatus = '';
-    agentResponse = '';
     if (!prompt) {
       agentStatus = 'Bitte einen Prompt eingeben.';
       return;
@@ -2239,30 +2759,46 @@
       return;
     }
 
+    const promptText = prompt;
+    const historyEntryId = await appendAgentHistoryPrompt(promptText);
+    agentPrompt = '';
+    resizeAgentInput();
     agentPending = true;
     agentStatus = 'Agent arbeitet…';
-    const promptText = prompt;
     const finalizeSuccess = async (status, message = '') => {
-      agentStatus = status;
-      if (message) {
-        agentResponse = message;
-      }
-      agentPrompt = '';
-      await recordAgentHistory({ prompt: promptText, message, status });
+      await resolveAgentHistoryPrompt(historyEntryId, message || status || '');
+      agentStatus = '';
+    };
+    const finalizeError = async (status) => {
+      const message = status || 'Agent-Aufruf fehlgeschlagen';
+      await resolveAgentHistoryPrompt(historyEntryId, message, true);
+      agentStatus = message;
     };
     try {
+      const navigation = await handleAgentNavigationIntent(promptText);
+      if (navigation?.handled) {
+        await finalizeSuccess(
+          navigation.status || 'Navigation ausgefuehrt.',
+          navigation.message || ''
+        );
+        return;
+      }
+
+      const currentContext = context || agentContext;
+      const canApplyHtml = isAgentHtmlEditableContext(currentContext);
+      const applyContext = currentContext === 'visual' ? 'visual' : 'html';
+      const agentContextPayload = buildAgentContext(currentContext);
       const res = await apiFetch('agent', {
         method: 'POST',
         body: JSON.stringify({
           prompt,
-          context: buildAgentContext(context)
+          context: agentContextPayload
         })
       });
       const payload = await readPayload(res);
       if (!res.ok) {
         const status = payload?.warning || 'Agent-Aufruf fehlgeschlagen';
-        agentStatus = status;
-        await recordAgentHistory({ prompt: promptText, status });
+        await finalizeError(status);
         return;
       }
 
@@ -2273,18 +2809,37 @@
       const blockLevel = Boolean(result.block_level ?? result.blockLevel);
       const view = result.view === 'visual' ? 'visual' : 'html';
 
-      if (message) {
-        agentResponse = message;
-      }
-
       if ((action === 'replace_html' || action === 'replace') && html) {
-        editorContent = html;
-        await finalizeSuccess('Uebung aktualisiert.', message);
+        if (canApplyHtml && applyContext === 'visual' && agentContextPayload.scope === 'block') {
+          const targetIndex = Math.min(
+            Math.max(0, Number(agentContextPayload.activeBlockIndex ?? visualActiveBlock)),
+            Math.max(visualBlocks.length - 1, 0)
+          );
+          await replaceVisualBlockAt(targetIndex, html, view);
+          await finalizeSuccess('Block aktualisiert.', message);
+          return;
+        }
+        if (canApplyHtml) {
+          editorContent = html;
+          await finalizeSuccess('Uebung aktualisiert.', message);
+          return;
+        }
+        await finalizeSuccess(
+          'Antwort erhalten (ohne direkte Aenderung).',
+          message || 'In diesem Bereich wird HTML nicht direkt angewendet.'
+        );
         return;
       }
 
       if (action === 'insert_html' && html) {
-        const applied = await applyAgentInsertion(context, html, blockLevel, view);
+        if (!canApplyHtml) {
+          await finalizeSuccess(
+            'Antwort erhalten (ohne direkte Aenderung).',
+            message || 'In diesem Bereich wird HTML nicht direkt eingefuegt.'
+          );
+          return;
+        }
+        const applied = await applyAgentInsertion(applyContext, html, blockLevel, view);
         await finalizeSuccess(
           applied === 'append'
             ? 'Inhalt als neuer Block eingefuegt.'
@@ -2295,8 +2850,24 @@
       }
 
       if (!action && html) {
-        editorContent = html;
-        await finalizeSuccess('Uebung aktualisiert.', message);
+        if (canApplyHtml && applyContext === 'visual' && agentContextPayload.scope === 'block') {
+          const targetIndex = Math.min(
+            Math.max(0, Number(agentContextPayload.activeBlockIndex ?? visualActiveBlock)),
+            Math.max(visualBlocks.length - 1, 0)
+          );
+          await replaceVisualBlockAt(targetIndex, html, view);
+          await finalizeSuccess('Block aktualisiert.', message);
+          return;
+        }
+        if (canApplyHtml) {
+          editorContent = html;
+          await finalizeSuccess('Uebung aktualisiert.', message);
+          return;
+        }
+        await finalizeSuccess(
+          'Antwort erhalten (ohne direkte Aenderung).',
+          message || 'In diesem Bereich wird HTML nicht direkt angewendet.'
+        );
         return;
       }
 
@@ -2308,8 +2879,7 @@
       await finalizeSuccess('Keine Aenderung erhalten.', message);
     } catch (err) {
       const status = err?.message ?? 'Agent-Aufruf fehlgeschlagen';
-      agentStatus = status;
-      await recordAgentHistory({ prompt: promptText, status });
+      await finalizeError(status);
     } finally {
       agentPending = false;
     }
@@ -2317,8 +2887,9 @@
 
   const handleAgentKeydown = (event, context) => {
     if (event?.key !== 'Enter' || agentPending) return;
+    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
     event.preventDefault();
-    applyAgentPrompt(context);
+    applyAgentPrompt(context || agentContext);
   };
 
   const insertHtmlSelection = async (index, snippet, options = {}) => {
@@ -2415,6 +2986,16 @@
   const handleVisualInput = async (index, event) => {
     const el = event?.currentTarget;
     if (!el) return;
+    const source = event?.target;
+    if (
+      source &&
+      source !== el &&
+      (source instanceof HTMLInputElement ||
+        source instanceof HTMLTextAreaElement ||
+        source instanceof HTMLSelectElement)
+    ) {
+      return;
+    }
     captureVisualSelection(index);
     updateVisualBlock(index, el.innerHTML);
     await tick();
@@ -2509,17 +3090,6 @@
     return insertHtmlSelection(index, { prefix: snippet, suffix: '' });
   };
 
-  const insertUmfrageBlockAt = (index) => {
-    const snippet = buildUmfrageSnippet();
-    const current = (visualBlocks[index] || '').trim();
-    if (!current) {
-      updateVisualBlock(index, snippet);
-      setVisualBlockView(index, 'visual');
-      return;
-    }
-    insertVisualBlockAt(index + 1, snippet, 'visual');
-  };
-
   $: if (activeTab === 'editor' && editorView === 'visual') {
     editorContent;
     if (editorContent !== visualSyncHtml || visualBlocks.length === 0) {
@@ -2537,7 +3107,13 @@
     editorContent;
     selectedKey;
     answersClassId;
+    answersUserFilter;
     scheduleAnswersRefresh();
+  }
+
+  $: if (answersClassId !== answersLearnersClassKey) {
+    answersUserFilter = '';
+    fetchAnswersLearners(answersClassId);
   }
 
   $: if (
@@ -2549,6 +3125,31 @@
     previewLueckeRuntime = null;
     previewUmfrageRuntime = null;
     previewUser = '';
+  }
+
+  const destroyAnswersRuntime = () => {
+    answersLueckeRuntime?.destroy();
+    answersUmfrageRuntime?.destroy();
+    answersLueckeRuntime = null;
+    answersUmfrageRuntime = null;
+  };
+
+  const ensureAnswersRenderMode = async (mode) => {
+    const contentChanged = editorContent !== answersContent;
+    const modeChanged = answersRenderMode !== mode;
+    if (!contentChanged && !modeChanged) return false;
+    answersRenderMode = mode;
+    answersContent = editorContent;
+    answersRenderKey += 1;
+    await tick();
+    return true;
+  };
+
+  $: if (
+    (activeTab !== 'editor' || editorView !== 'answers' || !answersUserFilter) &&
+    (answersLueckeRuntime || answersUmfrageRuntime)
+  ) {
+    destroyAnswersRuntime();
   }
 
   const schedulePreviewRefresh = async () => {
@@ -2732,7 +3333,49 @@
     });
   };
 
-  const fetchAnswers = async (key, classId = null) => {
+  const fetchAnswersLearners = async (classId) => {
+    const normalizedClassId = normalizeClassId(classId);
+    const requestId = ++answersLearnersRequestId;
+    answersLearnersClassKey = normalizedClassId;
+    answersLearners = [];
+    answersLearnersError = '';
+    if (!token || !normalizedClassId) {
+      if (requestId === answersLearnersRequestId) {
+        answersLearnersLoading = false;
+      }
+      return;
+    }
+    answersLearnersLoading = true;
+    try {
+      const res = await apiFetch(`learner?classroom=${normalizedClassId}`);
+      const payload = await readPayload(res);
+      if (requestId !== answersLearnersRequestId) return;
+      if (!res.ok) {
+        answersLearnersError =
+          payload?.warning || 'Schueler konnten nicht geladen werden';
+        return;
+      }
+      answersLearners = payload?.data?.learner ?? [];
+      if (
+        answersUserFilter &&
+        !answersLearners.find(
+          (entry) => String(entry?.code ?? '') === String(answersUserFilter)
+        )
+      ) {
+        answersUserFilter = '';
+      }
+    } catch (err) {
+      if (requestId !== answersLearnersRequestId) return;
+      answersLearnersError = err?.message ?? 'Schueler konnten nicht geladen werden';
+      answersLearners = [];
+    } finally {
+      if (requestId === answersLearnersRequestId) {
+        answersLearnersLoading = false;
+      }
+    }
+  };
+
+  const fetchAnswers = async (key, classId = null, userFilter = '') => {
     if (!key) {
       answersError = 'Kein Sheet-Key vorhanden.';
       answers = [];
@@ -2747,6 +3390,10 @@
       if (classId) {
         params.set('classroom', String(classId));
       }
+      const user = (userFilter || '').trim();
+      if (user) {
+        params.set('user', user);
+      }
       const res = await apiFetch(`answer?${params.toString()}`);
       const payload = await readPayload(res);
       if (!res.ok) {
@@ -2756,12 +3403,53 @@
       }
       answers = payload?.data?.answer ?? [];
       const classLabel = getAnswersClassLabel(classId);
-      answersMeta = `Sheet: ${key} · ${classLabel} · Antworten geladen (${answers.length} Eintraege)`;
+      const userLabel = getAnswersUserLabel(user);
+      answersMeta = `Sheet: ${key} · ${classLabel} · ${userLabel} · Antworten geladen (${answers.length} Eintraege)`;
       answersKey = key;
       answersClassKey = classId;
+      answersUserKey = user;
     } catch (err) {
       answersError = err?.message ?? 'Antworten konnten nicht geladen werden';
       answers = [];
+    } finally {
+      answersLoading = false;
+    }
+  };
+
+  const setupAnswersLearnerRuntime = async (key, userCode, classId = null) => {
+    if (!answersEl || !apiBaseUrl || !key || !userCode) return;
+    answersLoading = true;
+    answersError = '';
+    const classLabel = getAnswersClassLabel(classId);
+    const userLabel = getAnswersUserLabel(userCode);
+    answersMeta = `Sheet: ${key} · ${classLabel} · ${userLabel} · Lernendenansicht`;
+
+    try {
+      ensureLueckeElements();
+      ensureUmfrageElements();
+      destroyAnswersRuntime();
+      answersLueckeRuntime = createLueckeRuntime({
+        root: answersEl,
+        apiBaseUrl,
+        sheetKey: key,
+        user: userCode,
+        classroom: classId
+      });
+      answersUmfrageRuntime = createUmfrageRuntime({
+        root: answersEl,
+        apiBaseUrl,
+        sheetKey: key,
+        user: userCode,
+        classroom: classId
+      });
+      await answersLueckeRuntime.refresh();
+      await answersUmfrageRuntime.refresh();
+      answersKey = key;
+      answersClassKey = classId;
+      answersUserKey = userCode;
+    } catch (err) {
+      answersError = err?.message ?? 'Lernendenansicht konnte nicht geladen werden';
+      destroyAnswersRuntime();
     } finally {
       answersLoading = false;
     }
@@ -2772,7 +3460,13 @@
       answersError = 'Kein Sheet-Key vorhanden.';
       return;
     }
-    await fetchAnswers(selectedKey, answersClassId);
+    if (answersUserFilter) {
+      await ensureAnswersRenderMode('learner');
+      await setupAnswersLearnerRuntime(selectedKey, answersUserFilter, answersClassId);
+      return;
+    }
+    await ensureAnswersRenderMode('aggregate');
+    await fetchAnswers(selectedKey, answersClassId, answersUserFilter);
     await tick();
     if (answersEl && activeTab === 'editor' && editorView === 'answers') {
       transformGaps(answersEl);
@@ -2814,24 +3508,42 @@
 
     if (!selectedKey) {
       answersError = 'Kein Sheet-Key vorhanden.';
+      destroyAnswersRuntime();
       answers = [];
       answersMeta = '';
       answersKey = '';
       answersClassKey = null;
+      answersUserKey = '';
       answersLoading = false;
       return;
     }
 
-    const shouldFetch =
-      selectedKey && (selectedKey !== answersKey || answersClassId !== answersClassKey);
-    if (shouldFetch) {
-      await fetchAnswers(selectedKey, answersClassId);
-    } else if (!answers.length && !answersLoading && !answersError && selectedKey) {
-      await fetchAnswers(selectedKey, answersClassId);
+    if (answersUserFilter) {
+      const shouldInitLearnerRuntime =
+        selectedKey !== answersKey ||
+        answersClassId !== answersClassKey ||
+        answersUserFilter !== answersUserKey ||
+        editorContent !== answersContent ||
+        !answersLueckeRuntime ||
+        !answersUmfrageRuntime;
+      if (shouldInitLearnerRuntime) {
+        await ensureAnswersRenderMode('learner');
+        await setupAnswersLearnerRuntime(selectedKey, answersUserFilter, answersClassId);
+      }
+      return;
     }
 
-    if (editorContent !== answersContent || shouldFetch) {
-      answersContent = editorContent;
+    destroyAnswersRuntime();
+    await ensureAnswersRenderMode('aggregate');
+    const shouldFetch =
+      selectedKey &&
+      (selectedKey !== answersKey ||
+        answersClassId !== answersClassKey ||
+        answersUserFilter !== answersUserKey);
+    if (shouldFetch) {
+      await fetchAnswers(selectedKey, answersClassId, answersUserFilter);
+    } else if (!answers.length && !answersLoading && !answersError && selectedKey) {
+      await fetchAnswers(selectedKey, answersClassId, answersUserFilter);
     }
 
     await tick();
@@ -3109,7 +3821,11 @@
   <title>Abu Sheets</title>
 </svelte:head>
 
-<div class="app">
+<div
+  class="app"
+  class:app--with-agent={token}
+  class:app--agent-collapsed={token && !agentSidebarOpen}
+>
   <header class="topbar">
     <div class="brand-block">
       <p class="eyebrow">ABU TOOL</p>
@@ -3222,6 +3938,41 @@
           </svg>
         </button>
         <button class="ghost ci-btn-outline" on:click={logout}>Logout</button>
+        <button
+          class="ghost ci-btn-outline agent-topbar-toggle"
+          type="button"
+          aria-pressed={agentSidebarOpen}
+          aria-label={agentSidebarOpen ? 'KI Sidebar ausblenden' : 'KI Sidebar einblenden'}
+          title={agentSidebarOpen ? 'KI Sidebar ausblenden' : 'KI Sidebar einblenden'}
+          on:click={() => (agentSidebarOpen = !agentSidebarOpen)}
+        >
+          <svg class="agent-topbar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path
+              d="M12 4.3c-1.8-1.7-4.8-1.5-6.2.6-1 1.6-.9 3.7.4 5-.9 1.9-.2 4.1 1.7 5.2 1.4.8 3.1.8 4.1-.1"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.35"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M12 4.3c1.8-1.7 4.8-1.5 6.2.6 1 1.6.9 3.7-.4 5 .9 1.9.2 4.1-1.7 5.2-1.4.8-3.1.8-4.1-.1"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.35"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M12 7.1v8.7M9.6 9.3c1.2 1 1.2 3.7 0 4.7M14.4 9.3c-1.2 1-1.2 3.7 0 4.7"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.25"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </button>
       {:else}
         <span class="hint">Bitte einloggen, um loszulegen.</span>
       {/if}
@@ -3351,8 +4102,6 @@
         <div class="editor-header">
           <div>
             <button class="ghost ci-btn-outline" on:click={closeEditor}>&larr; Liste</button>
-            <h2>{editorName || `Sheet #${selectedId}`}</h2>
-            <p class="hint">HTML direkt bearbeiten. Speichern erzeugt eine neue Version.</p>
           </div>
           <div class="actions">
             <div class="editor-tabs">
@@ -3499,89 +4248,81 @@
                               on:dragend={handleBlockDragEnd}
                             >
                               <div class="block-format-tools">
-                                <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  type="button"
-                                  title="Fett"
-                                  aria-label="Fett"
-                                  on:mousedown|preventDefault
-                                  on:click={() => applyInlineFormat(idx, 'bold')}
-                                >
-                                  <span class="tool-icon tool-icon--bold">B</span>
-                                </button>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  type="button"
-                                  title="Kursiv"
-                                  aria-label="Kursiv"
-                                  on:mousedown|preventDefault
-                                  on:click={() => applyInlineFormat(idx, 'italic')}
-                                >
-                                  <span class="tool-icon tool-icon--italic">I</span>
-                                </button>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  type="button"
-                                  title="Unterstrichen"
-                                  aria-label="Unterstrichen"
-                                  on:mousedown|preventDefault
-                                  on:click={() => applyInlineFormat(idx, 'underline')}
-                                >
-                                  <span class="tool-icon tool-icon--underline">U</span>
-                                </button>
-                                <div class="tool-divider" aria-hidden="true"></div>
-                                <select
-                                  class="ghost ci-btn-outline tool-select"
-                                  aria-label="Textgroesse"
-                                  on:change={(event) => applyBlockFontSize(idx, event)}
-                                >
-                                  <option value="">A#</option>
-                                  <option value="0.85em">0.85em</option>
-                                  <option value="1em">1.0em</option>
-                                  <option value="1.2em">1.2em</option>
-                                  <option value="1.5em">1.5em</option>
-                                </select>
-                                <select
-                                  class="ghost ci-btn-outline tool-select"
-                                  aria-label="Schriftart"
-                                  on:change={(event) => applyBlockFontFamily(idx, event)}
-                                >
-                                  <option value="">Aa</option>
-                                  <option value="'Helvetica Neue', Arial, sans-serif">Aa Sans</option>
-                                  <option value="'Georgia', 'Times New Roman', serif">Aa Serif</option>
-                                  <option value="'Courier New', Courier, monospace">Aa Mono</option>
-                                </select>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  type="button"
-                                  title="Luecke einfuegen"
-                                  aria-label="Luecke einfuegen"
-                                  on:mousedown|preventDefault
-                                  on:click={() => insertSnippetIntoBlock(idx, 'gap')}
-                                >
-                                  <span class="tool-icon tool-icon--gap">[]</span>
-                                </button>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  type="button"
-                                  title="Luecke breit"
-                                  aria-label="Luecke breit"
-                                  on:mousedown|preventDefault
-                                  on:click={() => insertSnippetIntoBlock(idx, 'wide')}
-                                >
-                                  <span class="tool-icon tool-icon--gap-wide">[ ]</span>
-                                </button>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  type="button"
-                                  title="Umfrage-Block"
-                                  aria-label="Umfrage-Block"
-                                  on:mousedown|preventDefault
-                                  on:click={() => insertUmfrageBlockAt(idx)}
-                                >
-                                  <span class="tool-icon tool-icon--survey">1-5</span>
-                                </button>
-                                <div class="tool-divider" aria-hidden="true"></div>
+                                {#if !isUmfrageMatrixBlock(block)}
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn"
+                                    type="button"
+                                    title="Fett"
+                                    aria-label="Fett"
+                                    on:mousedown|preventDefault
+                                    on:click={() => applyInlineFormat(idx, 'bold')}
+                                  >
+                                    <span class="tool-icon tool-icon--bold">B</span>
+                                  </button>
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn"
+                                    type="button"
+                                    title="Kursiv"
+                                    aria-label="Kursiv"
+                                    on:mousedown|preventDefault
+                                    on:click={() => applyInlineFormat(idx, 'italic')}
+                                  >
+                                    <span class="tool-icon tool-icon--italic">I</span>
+                                  </button>
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn"
+                                    type="button"
+                                    title="Unterstrichen"
+                                    aria-label="Unterstrichen"
+                                    on:mousedown|preventDefault
+                                    on:click={() => applyInlineFormat(idx, 'underline')}
+                                  >
+                                    <span class="tool-icon tool-icon--underline">U</span>
+                                  </button>
+                                  <div class="tool-divider" aria-hidden="true"></div>
+                                  <select
+                                    class="ghost ci-btn-outline tool-select"
+                                    aria-label="Textgroesse"
+                                    on:change={(event) => applyBlockFontSize(idx, event)}
+                                  >
+                                    <option value="">A#</option>
+                                    <option value="0.85em">0.85em</option>
+                                    <option value="1em">1.0em</option>
+                                    <option value="1.2em">1.2em</option>
+                                    <option value="1.5em">1.5em</option>
+                                  </select>
+                                  <select
+                                    class="ghost ci-btn-outline tool-select"
+                                    aria-label="Schriftart"
+                                    on:change={(event) => applyBlockFontFamily(idx, event)}
+                                  >
+                                    <option value="">Aa</option>
+                                    <option value="'Helvetica Neue', Arial, sans-serif">Aa Sans</option>
+                                    <option value="'Georgia', 'Times New Roman', serif">Aa Serif</option>
+                                    <option value="'Courier New', Courier, monospace">Aa Mono</option>
+                                  </select>
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn"
+                                    type="button"
+                                    title="Luecke einfuegen"
+                                    aria-label="Luecke einfuegen"
+                                    on:mousedown|preventDefault
+                                    on:click={() => insertSnippetIntoBlock(idx, 'gap')}
+                                  >
+                                    <span class="tool-icon tool-icon--gap">[]</span>
+                                  </button>
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn"
+                                    type="button"
+                                    title="Luecke breit"
+                                    aria-label="Luecke breit"
+                                    on:mousedown|preventDefault
+                                    on:click={() => insertSnippetIntoBlock(idx, 'wide')}
+                                  >
+                                    <span class="tool-icon tool-icon--gap-wide">[ ]</span>
+                                  </button>
+                                  <div class="tool-divider" aria-hidden="true"></div>
+                                {/if}
                                 <button
                                   class="ghost ci-btn-outline tool-btn"
                                   class:active={visualBlockViews[idx] === 'html'}
@@ -3726,65 +4467,6 @@
                     </div>
                   {/if}
                 </div>
-                <aside class="agent-sidebar" aria-label="KI Kontext">
-                  <div class="agent-panel">
-                    <div class="agent-row">
-                      <input
-                        class="agent-input"
-                        type="text"
-                        bind:value={agentPrompt}
-                        placeholder="Agent: z.B. Ueberschrift: Thema, Liste: A, B, C"
-                        disabled={agentPending}
-                        on:input={() => {
-                          agentStatus = '';
-                          agentResponse = '';
-                        }}
-                        on:keydown={(event) => handleAgentKeydown(event, editorView)}
-                      />
-                      <button
-                        class="ghost ci-btn-outline"
-                        type="button"
-                        on:click={() => applyAgentPrompt(editorView)}
-                        disabled={agentPending}
-                      >
-                        {agentPending ? 'Arbeite…' : 'Ausfuehren'}
-                      </button>
-                    </div>
-                    <div class="agent-row agent-row--meta">
-                      <span class="hint">Beispiele: Tabelle 3x2, Button: Start, Link: https://...</span>
-                      {#if agentStatus}
-                        <span class="agent-status">{agentStatus}</span>
-                      {/if}
-                    </div>
-                    {#if agentResponse}
-                      <div class="agent-response">{agentResponse}</div>
-                    {/if}
-                    <div class="agent-history">
-                      <div class="agent-history-title">Chatverlauf</div>
-                      <div class="agent-history-list" bind:this={agentHistoryEl}>
-                        {#if agentHistory.length}
-                          {#each agentHistory as entry (entry.id)}
-                            <div class="agent-history-item">
-                              <div class="agent-history-line">
-                                <span class="agent-history-label">Du</span>
-                                <span class="agent-history-text">{entry.prompt}</span>
-                              </div>
-                              <div class="agent-history-line">
-                                <span class="agent-history-label">KI</span>
-                                <span class="agent-history-text">{entry.message || entry.status}</span>
-                              </div>
-                              {#if entry.message && entry.status}
-                                <div class="agent-history-meta">{entry.status}</div>
-                              {/if}
-                            </div>
-                          {/each}
-                        {:else}
-                          <div class="agent-history-empty hint">Noch kein Verlauf.</div>
-                        {/if}
-                      </div>
-                    </div>
-                  </div>
-                </aside>
               </div>
             </div>
           {:else if editorView === 'preview'}
@@ -3798,8 +4480,8 @@
             <div class="preview answers">
               <div class="preview-header">Antworten</div>
               <div class="answers-meta-row">
-                <p class="hint">
-                  {answersMeta || (selectedKey ? `Sheet: ${selectedKey}` : 'Kein Sheet ausgewaehlt')}
+                <p class="answers-title">
+                  {editorName || (selectedKey ? `Sheet ${selectedKey}` : 'Kein Sheet ausgewaehlt')}
                 </p>
                 <div class="answers-meta-controls">
                   <label class="answers-class-select">
@@ -3808,6 +4490,22 @@
                       <option value="">Alle Klassen</option>
                       {#each classes as classItem}
                         <option value={classItem.id}>{formatClassLabel(classItem)}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  <label class="answers-class-select">
+                    <span>Antworten</span>
+                    <select
+                      bind:value={answersUserFilter}
+                      disabled={!answersClassId || answersLearnersLoading}
+                    >
+                      <option value="">Alle Antworten</option>
+                      {#each answersLearners as learnerItem}
+                        {#if learnerItem?.code}
+                          <option value={learnerItem.code}>
+                            {formatAnswersLearnerLabel(learnerItem)}
+                          </option>
+                        {/if}
                       {/each}
                     </select>
                   </label>
@@ -3835,12 +4533,14 @@
               {#if answersError}
                 <p class="error-text answers-error">{answersError}</p>
               {/if}
-              <div class="preview-body answers-body" bind:this={answersEl} on:click={handleAnswersClick}>
-                {#if answersLoading}
-                  <p class="hint">Lade Antworten...</p>
-                {/if}
-                {@html editorContent}
-              </div>
+              {#key `${answersRenderMode}:${answersRenderKey}`}
+                <div class="preview-body answers-body" bind:this={answersEl} on:click={handleAnswersClick}>
+                  {#if answersLoading}
+                    <p class="hint">Lade Antworten...</p>
+                  {/if}
+                  {@html editorContent}
+                </div>
+              {/key}
             </div>
           {/if}
         </div>
@@ -3881,7 +4581,7 @@
     {#if activeTab === 'classes'}
     <section class="panel full">
       {#if !selectedClassId}
-        <div class="panel-header">
+        <div class="panel-header classes-overview-header">
           <div>
             <h2>Klassen</h2>
             <p class="hint">Waehle eine Klasse, um Details zu sehen.</p>
@@ -3915,57 +4615,60 @@
           {:else if classes.length === 0}
             <p class="hint">Keine Klassen vorhanden.</p>
           {:else}
-            <ListTable
-              columns={classColumns}
-              rows={visibleClasses}
-              columnsTemplate={CLASS_TABLE_COLUMNS}
-              rowKey={(entry) => entry.id}
-              onRowClick={(entry) => selectClass(entry.id)}
-              rowAriaLabel={(entry) =>
-                `Klasse ${entry.name || entry.id} oeffnen`
-              }
-              actionsLabel="Aktion"
-            >
-              <svelte:fragment slot="actions" let:row>
-                <button
-                  class="icon-btn ci-btn-outline"
-                  title="Arbeitsblaetter zuweisen"
-                  aria-label="Arbeitsblaetter zuweisen"
-                  on:click|stopPropagation={() => openClassAssignments(row.id)}
-                  type="button"
-                >
-                  Arbeitsblaetter
-                </button>
-                <button
-                  class="icon-btn ci-btn-outline"
-                  title="Studierende anzeigen"
-                  aria-label="Studierende anzeigen"
-                  on:click|stopPropagation={() => openLearnersForClass(row.id)}
-                  type="button"
-                >
-                  Studierende
-                </button>
-                <button
-                  class="icon-btn ci-btn-outline"
-                  title="Klasse loeschen"
-                  aria-label="Klasse loeschen"
-                  on:click|stopPropagation={() => deleteClass(row.id)}
-                  disabled={deletingClass}
-                  type="button"
-                >
-                  <svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path
-                      d="M4 7h16M9 7v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M10 11v6M14 11v6M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.8"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
-              </svelte:fragment>
-            </ListTable>
+            <div class="class-table-wrap">
+              <ListTable
+                columns={classColumns}
+                rows={visibleClasses}
+                columnsTemplate={CLASS_TABLE_COLUMNS}
+                tableClass="sheet-table sheet-table--classes"
+                rowKey={(entry) => entry.id}
+                onRowClick={(entry) => selectClass(entry.id)}
+                rowAriaLabel={(entry) =>
+                  `Klasse ${entry.name || entry.id} oeffnen`
+                }
+                actionsLabel="Aktion"
+              >
+                <svelte:fragment slot="actions" let:row>
+                  <button
+                    class="icon-btn ci-btn-outline"
+                    title="Arbeitsblaetter zuweisen"
+                    aria-label="Arbeitsblaetter zuweisen"
+                    on:click|stopPropagation={() => openClassAssignments(row.id)}
+                    type="button"
+                  >
+                    Arbeitsblaetter
+                  </button>
+                  <button
+                    class="icon-btn ci-btn-outline"
+                    title="Studierende anzeigen"
+                    aria-label="Studierende anzeigen"
+                    on:click|stopPropagation={() => openLearnersForClass(row.id)}
+                    type="button"
+                  >
+                    Studierende
+                  </button>
+                  <button
+                    class="icon-btn ci-btn-outline"
+                    title="Klasse loeschen"
+                    aria-label="Klasse loeschen"
+                    on:click|stopPropagation={() => deleteClass(row.id)}
+                    disabled={deletingClass}
+                    type="button"
+                  >
+                    <svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M4 7h16M9 7v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M10 11v6M14 11v6M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </svelte:fragment>
+              </ListTable>
+            </div>
           {/if}
           {#if classError}
             <p class="error-text">{classError}</p>
@@ -4437,6 +5140,87 @@
     </section>
     {/if}
 
+    <aside
+      class="agent-sidebar"
+      class:agent-sidebar--collapsed={!agentSidebarOpen}
+      aria-label="KI Kontext"
+    >
+      {#if agentSidebarOpen}
+        <div class="agent-panel">
+          <div class="agent-history">
+            <div class="agent-history-title">Chatverlauf</div>
+            <div class="agent-history-list" bind:this={agentHistoryEl}>
+              {#if agentHistory.length}
+                {#each agentHistory as entry (entry.id)}
+                  <div
+                    class="agent-history-item"
+                    class:agent-history-item--pending={entry.pending}
+                    class:agent-history-item--error={entry.error}
+                  >
+                    <div class="agent-history-line">
+                      <span class="agent-history-label">Du</span>
+                      <span class="agent-history-text">{entry.prompt}</span>
+                    </div>
+                    {#if entry.response}
+                      <div class="agent-history-line">
+                        <span class="agent-history-label">KI</span>
+                        <span class="agent-history-text">{entry.response}</span>
+                      </div>
+                    {:else if entry.pending}
+                      <div class="agent-history-line">
+                        <span class="agent-history-label">KI</span>
+                        <span class="agent-history-meta">Warte auf Antwort…</span>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              {:else}
+                <div class="agent-history-empty hint">Noch kein Verlauf.</div>
+              {/if}
+            </div>
+          </div>
+          {#if agentStatus}
+            <div class="agent-status" role="status">{agentStatus}</div>
+          {/if}
+          <div class="agent-context">{describeAgentContext(agentContext)}</div>
+          <div class="agent-row agent-row--composer">
+            <textarea
+              class="agent-input"
+              rows="1"
+              bind:this={agentInputEl}
+              bind:value={agentPrompt}
+              placeholder="Agent: z.B. Gehe zu Klassen, Oeffne Sheet Algebra. Shift+Enter fuer Zeilenumbruch."
+              disabled={agentPending}
+              on:input={() => {
+                agentStatus = '';
+                resizeAgentInput();
+              }}
+              on:keydown={handleAgentKeydown}
+            ></textarea>
+            <button
+              class="ghost ci-btn-outline agent-send-btn"
+              type="button"
+              on:click={() => applyAgentPrompt()}
+              disabled={agentPending}
+              aria-label={agentPending ? 'Wird gesendet' : 'Senden'}
+              title={agentPending ? 'Wird gesendet' : 'Senden'}
+            >
+              <svg class="agent-send-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  d="M12 18V6M7.5 10.5 12 6l4.5 4.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.9"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+      {/if}
+    </aside>
+
   {/if}
 </div>
 
@@ -4579,7 +5363,30 @@
 
   .app {
     min-height: 100vh;
-    padding: 32px clamp(20px, 4vw, 48px) 48px;
+    padding: 5px clamp(20px, 4vw, 48px) 48px;
+  }
+
+  .app.app--with-agent {
+    --agent-sidebar-expanded: min(300px, 25vw);
+    --agent-sidebar-collapsed: 0px;
+    --agent-sidebar-width: var(--agent-sidebar-expanded);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--agent-sidebar-width);
+    grid-template-rows: auto minmax(0, 1fr);
+    column-gap: 5px;
+    align-items: stretch;
+    padding-left: 5px;
+    padding-right: 5px;
+  }
+
+  .app.app--agent-collapsed {
+    --agent-sidebar-width: var(--agent-sidebar-collapsed);
+  }
+
+  .app.app--with-agent > :not(.topbar):not(.agent-sidebar) {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
   }
 
   .topbar {
@@ -4588,7 +5395,13 @@
     align-items: center;
     flex-wrap: nowrap;
     gap: 24px;
-    margin-bottom: 32px;
+    margin-bottom: 5px;
+    grid-column: 1 / -1;
+  }
+
+  .app.app--with-agent .topbar {
+    padding-left: 20px;
+    padding-right: 20px;
   }
 
   .brand-block {
@@ -4655,6 +5468,20 @@
   .settings-btn svg {
     width: 18px;
     height: 18px;
+  }
+
+  .agent-topbar-toggle {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .agent-topbar-toggle-icon {
+    width: 20px;
+    height: 20px;
   }
 
   .settings-btn[aria-pressed="true"] {
@@ -5243,6 +6070,19 @@
     flex-wrap: wrap;
   }
 
+  .classes-overview-header {
+    padding-inline: 16px;
+  }
+
+  .class-table-wrap {
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .class-table-wrap :global(.sheet-table--classes) {
+    min-width: 0;
+  }
+
   .list-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -5285,6 +6125,10 @@
     .sheet-header {
       flex-direction: column;
       align-items: flex-start;
+    }
+
+    .classes-overview-header {
+      padding-inline: 0;
     }
 
     .sheet-toolbar {
@@ -5396,6 +6240,7 @@
     gap: 10px;
     align-items: end;
     justify-self: end;
+    max-width: min(560px, 100%);
   }
 
   .editor-version label {
@@ -5404,6 +6249,14 @@
 
   .editor-version-select {
     min-width: min(240px, 100%);
+    max-width: 100%;
+  }
+
+  .editor-version-select :global(select) {
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .editor-version button {
@@ -5437,6 +6290,7 @@
     display: grid;
     gap: 16px;
     align-items: start;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .editor-main {
@@ -5446,10 +6300,16 @@
   }
 
   .agent-sidebar {
-    display: grid;
-    gap: 12px;
+    grid-column: 2;
+    grid-row: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
     min-height: 0;
-    align-self: start;
+    height: 100%;
+    align-self: stretch;
+    position: relative;
+    overflow: visible;
   }
 
   .agent-panel {
@@ -5461,6 +6321,9 @@
     border: 1px solid #e2e8f0;
     background: #f8fafc;
     min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: contain;
   }
 
   .agent-row {
@@ -5470,32 +6333,52 @@
     flex-wrap: wrap;
   }
 
-  .agent-row--meta {
-    justify-content: space-between;
-    gap: 12px;
+  .agent-row--composer {
+    align-items: flex-end;
+    flex-wrap: nowrap;
+    gap: 8px;
   }
 
   .agent-input {
-    flex: 1 1 260px;
-    min-width: 220px;
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    min-height: 34px;
+    max-height: 140px;
+    font-size: 12px;
+    line-height: 1.35;
+    resize: none;
+    overflow-y: auto;
+  }
+
+  .agent-send-btn {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 40px;
+  }
+
+  .agent-send-icon {
+    width: 17px;
+    height: 17px;
   }
 
   .agent-status {
     font-size: 12px;
     color: #1f7a6e;
     font-weight: 600;
+    min-height: 18px;
   }
 
-  .agent-response {
-    margin-top: 8px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid #e2e8f0;
-    background: #ffffff;
-    font-size: 13px;
-    line-height: 1.5;
-    color: #1f2937;
-    white-space: pre-wrap;
+  .agent-context {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #64748b;
   }
 
   .agent-history {
@@ -5514,9 +6397,15 @@
   }
 
   .agent-history-list {
-    display: grid;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    flex: 1 1 auto;
     gap: 10px;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     padding-right: 4px;
     min-height: 0;
   }
@@ -5528,6 +6417,16 @@
     padding: 10px 12px;
     display: grid;
     gap: 8px;
+  }
+
+  .agent-history-item--pending {
+    border-color: #dbeafe;
+    background: #f8fbff;
+  }
+
+  .agent-history-item--error {
+    border-color: #f3b4b4;
+    background: #fff7f7;
   }
 
   .agent-history-line {
@@ -5544,7 +6443,7 @@
   }
 
   .agent-history-text {
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.5;
     color: #1f2937;
     white-space: pre-wrap;
@@ -5567,18 +6466,9 @@
   }
 
   @media (min-width: 1100px) {
-    .editor-columns {
-      grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
-    }
-
-    .agent-sidebar {
-      position: sticky;
-      top: 16px;
-      max-height: calc(100vh - 180px);
-    }
-
     .agent-panel {
       height: 100%;
+      max-height: calc(100vh - 112px);
     }
   }
 
@@ -5640,6 +6530,21 @@
     font-weight: 500;
   }
 
+  :global(umfrage-matrix .umfrage-matrix__statement-input) {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    padding: 6px 8px;
+    font-size: 13px;
+    background: #fff;
+    color: #1f2937;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-input:focus-visible) {
+    outline: 2px solid #2f8f83;
+    outline-offset: 2px;
+  }
+
   :global(umfrage-matrix .umfrage-matrix__scale-value) {
     display: block;
     font-size: 0.95rem;
@@ -5652,10 +6557,34 @@
     margin-top: 2px;
   }
 
+  :global(umfrage-matrix .umfrage-matrix__scale) {
+    position: relative;
+    overflow: visible;
+  }
+
   :global(umfrage-matrix .umfrage-matrix__scale-editor) {
     display: grid;
     gap: 6px;
     justify-items: center;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-controls) {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 22px;
+    position: relative;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-controls .umfrage-matrix__scale-value) {
+    display: inline-flex;
+    min-width: 1.6rem;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: #364152;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-input) {
@@ -5672,11 +6601,6 @@
   :global(umfrage-matrix .umfrage-matrix__scale-input:focus-visible) {
     outline: 2px solid #2f8f83;
     outline-offset: 2px;
-  }
-
-  :global(umfrage-matrix .umfrage-matrix__scale-actions) {
-    display: inline-flex;
-    gap: 6px;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-btn) {
@@ -5697,6 +6621,24 @@
   :global(umfrage-matrix .umfrage-matrix__scale-btn:hover) {
     background: #eef9f7;
     border-color: #2f8f83;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-btn--insert) {
+    color: #2f8f83;
+    position: absolute;
+    top: 50%;
+    z-index: 2;
+    box-shadow: 0 0 0 2px #f5f7fa;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-btn--insert-left) {
+    left: 0;
+    transform: translate(-50%, -50%);
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-btn--insert-right) {
+    right: 0;
+    transform: translate(50%, -50%);
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-btn--remove) {
@@ -5795,6 +6737,81 @@
     background: #eef9f7;
   }
 
+  .block-editor__visual :global(pre),
+  .block-editor__visual :global(input[type='text']),
+  .block-editor__visual :global(textarea),
+  .preview-body :global(pre),
+  .preview-body :global(input[type='text']),
+  .preview-body :global(textarea) {
+    position: relative;
+  }
+
+  .block-editor__visual :global(pre)::before,
+  .block-editor__visual :global(input[type='text'])::before,
+  .block-editor__visual :global(textarea)::before,
+  .preview-body :global(pre)::before,
+  .preview-body :global(input[type='text'])::before,
+  .preview-body :global(textarea)::before {
+    content: '|';
+    position: absolute;
+    top: -14px;
+    left: 2px;
+    font-weight: 700;
+    font-size: 16px;
+    line-height: 1;
+    color: #0f172a;
+    pointer-events: none;
+    animation: block-caret-blink 1s steps(1, end) infinite;
+  }
+
+  .block-editor__visual :global(button)::before,
+  .block-editor__visual :global(select)::before,
+  .block-editor__visual :global(input[type='checkbox'])::before,
+  .block-editor__visual :global(input[type='radio'])::before,
+  .block-editor__visual :global(input[type='button'])::before,
+  .block-editor__visual :global(input[type='submit'])::before,
+  .preview-body :global(button:not(.gap-action-btn))::before,
+  .preview-body :global(select)::before,
+  .preview-body :global(input[type='checkbox'])::before,
+  .preview-body :global(input[type='radio'])::before,
+  .preview-body :global(input[type='button'])::before,
+  .preview-body :global(input[type='submit'])::before {
+    content: '☝';
+    position: absolute;
+    top: -16px;
+    left: 0;
+    line-height: 1;
+    font-size: 15px;
+    color: #0f172a;
+    pointer-events: none;
+  }
+
+  .block-editor__visual :global(button),
+  .block-editor__visual :global(select),
+  .block-editor__visual :global(input[type='checkbox']),
+  .block-editor__visual :global(input[type='radio']),
+  .block-editor__visual :global(input[type='button']),
+  .block-editor__visual :global(input[type='submit']),
+  .preview-body :global(button:not(.gap-action-btn)),
+  .preview-body :global(select),
+  .preview-body :global(input[type='checkbox']),
+  .preview-body :global(input[type='radio']),
+  .preview-body :global(input[type='button']),
+  .preview-body :global(input[type='submit']) {
+    position: relative;
+  }
+
+  @keyframes block-caret-blink {
+    0%,
+    45% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+
   .block-editor textarea {
     min-height: 140px;
   }
@@ -5849,12 +6866,6 @@
     font-weight: 600;
     font-size: 11px;
     letter-spacing: -0.4px;
-  }
-
-  .tool-icon--survey {
-    font-weight: 700;
-    font-size: 9px;
-    letter-spacing: -0.2px;
   }
 
   .tool-select {
@@ -6060,8 +7071,12 @@
     flex-wrap: wrap;
   }
 
-  .answers-meta-row .hint {
+  .answers-title {
     margin: 0;
+    font-size: 20px;
+    line-height: 1.2;
+    font-weight: 700;
+    color: #0f172a;
   }
 
   .answers-meta-row button {
@@ -6325,6 +7340,20 @@
 
     .workspace {
       grid-template-columns: 1fr;
+    }
+
+    .app.app--with-agent {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      column-gap: 0;
+    }
+
+    .agent-sidebar {
+      grid-column: 1;
+      grid-row: auto;
+      width: 100%;
+      height: auto;
+      margin-top: 18px;
     }
 
   }

@@ -26,6 +26,30 @@
     return value ?? '';
   };
   const resolveClassName = (...parts) => parts.filter(Boolean).join(' ');
+  const normalizeText = (value) => (value ?? '').toString().trim().toLowerCase();
+  const hasActions = () => !!(actionsLabel || hasActionsSlot);
+  const isTitleColumn = (column) => {
+    const label = normalizeText(column?.label);
+    const key = normalizeText(column?.key);
+    const className = normalizeText(column?.className);
+    const headerClass = normalizeText(column?.headerClass);
+    return (
+      key === 'name' ||
+      key === 'title' ||
+      key === 'titel' ||
+      label.includes('name') ||
+      label.includes('title') ||
+      label.includes('titel') ||
+      className.includes('sheet-cell--name') ||
+      headerClass.includes('sheet-cell--name')
+    );
+  };
+  const showOnCompact = (column) =>
+    column?.compactHidden === true
+      ? false
+      : column?.compactVisible === true || isTitleColumn(column);
+  const compactClass = (column) =>
+    showOnCompact(column) ? 'sheet-cell--compact-visible' : 'sheet-cell--compact-hidden';
   const isSortable = (column) =>
     column?.sortable && typeof column?.onSort === 'function';
 
@@ -47,19 +71,31 @@
   class={tableClass}
   style={columnsTemplate ? `--table-columns: ${columnsTemplate};` : ''}
 >
-  <div class={headRowClass}>
+  <div class={resolveClassName(headRowClass, hasActions() ? 'sheet-row--with-actions' : '')}>
     {#each columns as column}
       {#if isSortable(column)}
         <button
           type="button"
-          class={resolveClassName(cellClass, headerButtonClass, column?.headerClass)}
+          class={resolveClassName(
+            cellClass,
+            headerButtonClass,
+            column?.headerClass,
+            compactClass(column)
+          )}
           on:click={column.onSort}
           title={resolveHint(column.sortHint)}
         >
           <span class="sheet-head-label">{column.label}</span>
         </button>
       {:else}
-        <div class={resolveClassName(cellClass, headerStaticClass, column?.headerClass)}>
+        <div
+          class={resolveClassName(
+            cellClass,
+            headerStaticClass,
+            column?.headerClass,
+            compactClass(column)
+          )}
+        >
           <span class="sheet-head-label">{column.label}</span>
         </div>
       {/if}
@@ -70,7 +106,7 @@
   </div>
   {#each rows as row, index (rowKey(row, index))}
     <div
-      class={rowClass}
+      class={resolveClassName(rowClass, hasActions() ? 'sheet-row--with-actions' : '')}
       role={isClickable ? 'button' : undefined}
       tabindex={isClickable ? 0 : undefined}
       aria-label={rowAriaLabel ? rowAriaLabel(row) : undefined}
@@ -79,7 +115,7 @@
     >
       {#each columns as column}
         <div
-          class={resolveClassName(cellClass, column?.className)}
+          class={resolveClassName(cellClass, column?.className, compactClass(column))}
           data-label={column.label}
         >
           {resolveValue(column, row)}
@@ -97,7 +133,11 @@
 <style>
   .sheet-table {
     display: grid;
-    gap: 8px;
+    gap: 0;
+  }
+
+  .sheet-row:not(.sheet-row--head) + .sheet-row:not(.sheet-row--head) {
+    margin-top: 8px;
   }
 
   .sheet-row {
@@ -132,6 +172,9 @@
     color: #6f7682;
     cursor: default;
     padding: 0;
+    margin-bottom: 0;
+    padding-bottom: 0;
+    border-bottom: 0;
   }
 
   .sheet-row--head:focus-visible {
@@ -164,6 +207,15 @@
     max-width: 100%;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+
+  .sheet-table--classes .sheet-cell--actions {
+    flex-wrap: wrap;
+  }
+
+  .sheet-table--classes .sheet-cell--actions .icon-btn {
+    white-space: nowrap;
+    overflow-wrap: normal;
   }
 
   .sheet-head-btn {
@@ -199,7 +251,7 @@
     background: rgba(31, 122, 110, 0.08);
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 900px) {
     .sheet-row {
       grid-template-columns: minmax(0, 1fr);
       gap: 6px;
@@ -231,5 +283,25 @@
     .sheet-cell--actions {
       justify-content: flex-start;
     }
+
+    .sheet-cell--compact-hidden {
+      display: none;
+    }
+
+    .sheet-cell--compact-visible {
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sheet-cell--compact-visible::before {
+      display: none;
+    }
+
+    .sheet-row--with-actions .sheet-cell--actions::before {
+      display: none;
+    }
+
   }
 </style>

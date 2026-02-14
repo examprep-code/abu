@@ -118,9 +118,13 @@ const parseScaleFromTable = (table: Element | null): UmfrageScaleEntry[] => {
 const parseStatementsFromTable = (table: Element | null): string[] => {
   if (!table) return [];
   const rows = Array.from(table.querySelectorAll('tbody th.umfrage-matrix__statement'));
-  return rows
-    .map((cell) => (cell.textContent || '').trim())
-    .filter(Boolean);
+  return rows.map((cell) => {
+    const input = cell.querySelector(
+      'input.umfrage-matrix__statement-input'
+    ) as HTMLInputElement | null;
+    if (input) return input.value || '';
+    return (cell.textContent || '').trim();
+  });
 };
 
 const parseStatements = (element: HTMLElement, scaleContainer?: Element | null): string[] => {
@@ -160,27 +164,23 @@ const serializeScale = (scale: UmfrageScaleEntry[]): string => {
     .join(';');
 };
 
-const isNumericValue = (value: string) => {
-  const num = Number(value);
-  return Number.isFinite(num);
-};
+const normalizeScaleValues = (scale: UmfrageScaleEntry[]): UmfrageScaleEntry[] =>
+  scale.map((entry, index) => ({
+    value: String(index + 1),
+    label: (entry.label || entry.value || '').trim()
+  }));
 
-const buildNextEntry = (scale: UmfrageScaleEntry[]): UmfrageScaleEntry => {
-  const numericValues = scale.map((entry) => entry.value).filter(isNumericValue);
-  if (numericValues.length === scale.length && scale.length > 0) {
-    const max = Math.max(...numericValues.map((value) => Number(value)));
-    return { value: String(max + 1), label: DEFAULT_NEW_LABEL };
-  }
+const serializeStatements = (statements: string[]): string =>
+  statements.map((statement) => statement.trim()).join(';');
+
+const buildNextEntry = (): UmfrageScaleEntry => {
   return { value: DEFAULT_NEW_LABEL, label: DEFAULT_NEW_LABEL };
 };
 
-const updateScaleEntryLabel = (entry: UmfrageScaleEntry, label: string): UmfrageScaleEntry => {
-  const nextLabel = label || '';
-  if (entry.value === entry.label) {
-    return { value: nextLabel, label: nextLabel };
-  }
-  return { ...entry, label: nextLabel };
-};
+const updateScaleEntryLabel = (entry: UmfrageScaleEntry, label: string): UmfrageScaleEntry => ({
+  ...entry,
+  label: label || ''
+});
 
 const buildAriaLabel = (statement: string, entry: UmfrageScaleEntry): string => {
   const labelParts = [entry.value, entry.label].filter(Boolean).join(' ');
@@ -275,12 +275,14 @@ export function ensureUmfrageElements(): void {
     private editable = false;
 
     connectedCallback() {
-      if (this.dataset.upgraded === '1') return;
-      this.dataset.upgraded = '1';
+      const isFirstConnect = this.dataset.upgraded !== '1';
+      if (isFirstConnect) {
+        this.dataset.upgraded = '1';
+        this.setAttribute('contenteditable', 'false');
+      }
 
       const nameAttr = this.getAttribute('name') || `umfrage-${Math.random().toString(36).slice(2)}`;
       this.setAttribute('name', nameAttr);
-      this.setAttribute('contenteditable', 'false');
 
       const scaleRaw = this.getAttribute('scale') || this.getAttribute('data-scale') || '';
       const label = this.getAttribute('label') || this.getAttribute('data-label') || 'Aussage';
@@ -302,15 +304,17 @@ export function ensureUmfrageElements(): void {
         ? statementsFromTable
         : parseStatements(this, scaleContainer);
 
-      this.scaleEntries = parsedScale;
+      this.scaleEntries = normalizeScaleValues(parsedScale);
       this.statements = parsedStatements.length ? parsedStatements : DEFAULT_STATEMENTS;
-      this.editable = Boolean(this.closest('.block-editor__visual'));
+      this.editable = Boolean(this.closest('.block-editor__visual, [contenteditable="true"]'));
+      this.updateScaleAttribute();
+      this.updateStatementsAttribute();
 
       this.render(label, nameAttr);
     }
 
     private notifyEditor() {
-      const editor = this.closest('.block-editor__visual');
+      const editor = this.closest('.block-editor__visual, [contenteditable="true"]');
       if (!editor) return;
       editor.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -320,20 +324,43 @@ export function ensureUmfrageElements(): void {
       this.setAttribute('scale', serialized);
     }
 
+    private updateStatementsAttribute() {
+      this.setAttribute('statements', serializeStatements(this.statements));
+    }
+
+    private syncScaleState() {
+      this.scaleEntries = normalizeScaleValues(this.scaleEntries);
+      this.updateScaleAttribute();
+    }
+
     private handleScaleInput(index: number, input: HTMLInputElement) {
       const entry = this.scaleEntries[index];
       if (!entry) return;
       input.setAttribute('value', input.value);
       this.scaleEntries[index] = updateScaleEntryLabel(entry, input.value);
       this.updateScaleAttribute();
+    }
+
+    private handleStatementInput(index: number, input: HTMLInputElement) {
+      if (index < 0 || index >= this.statements.length) return;
+      input.setAttribute('value', input.value);
+      this.statements[index] = input.value;
+      this.updateStatementsAttribute();
+    }
+
+    private commitScaleEdit() {
+      this.notifyEditor();
+    }
+
+    private commitStatementEdit() {
       this.notifyEditor();
     }
 
     private insertScaleAt(index: number) {
-      const nextEntry = buildNextEntry(this.scaleEntries);
+      const nextEntry = buildNextEntry();
       const insertIndex = Math.max(0, Math.min(index, this.scaleEntries.length));
       this.scaleEntries.splice(insertIndex, 0, nextEntry);
-      this.updateScaleAttribute();
+      this.syncScaleState();
       this.render();
       const input = this.querySelectorAll<HTMLInputElement>('.umfrage-matrix__scale-input')[insertIndex];
       input?.focus();
@@ -344,7 +371,7 @@ export function ensureUmfrageElements(): void {
     private removeScaleAt(index: number) {
       if (index < 0 || index >= this.scaleEntries.length) return;
       this.scaleEntries.splice(index, 1);
-      this.updateScaleAttribute();
+      this.syncScaleState();
       this.render();
       this.notifyEditor();
     }
@@ -381,26 +408,22 @@ export function ensureUmfrageElements(): void {
             const editor = document.createElement('div');
             editor.className = 'umfrage-matrix__scale-editor';
 
+            const controls = document.createElement('div');
+            controls.className = 'umfrage-matrix__scale-controls';
+
+            const addBeforeBtn = document.createElement('button');
+            addBeforeBtn.type = 'button';
+            addBeforeBtn.className =
+              'umfrage-matrix__scale-btn umfrage-matrix__scale-btn--add umfrage-matrix__scale-btn--insert umfrage-matrix__scale-btn--insert-left';
+            addBeforeBtn.textContent = '+';
+            addBeforeBtn.setAttribute('aria-label', 'Kategorie links einfuegen');
+            addBeforeBtn.addEventListener('click', () => this.insertScaleAt(index));
+            controls.appendChild(addBeforeBtn);
+
             const valueEl = document.createElement('span');
             valueEl.className = 'umfrage-matrix__scale-value';
-            valueEl.textContent = entry.value;
-
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'umfrage-matrix__scale-input';
-            input.value = entry.label;
-            input.setAttribute('value', entry.label);
-            input.addEventListener('input', () => this.handleScaleInput(index, input));
-
-            const actions = document.createElement('div');
-            actions.className = 'umfrage-matrix__scale-actions';
-
-            const addBtn = document.createElement('button');
-            addBtn.type = 'button';
-            addBtn.className = 'umfrage-matrix__scale-btn umfrage-matrix__scale-btn--add';
-            addBtn.textContent = '+';
-            addBtn.setAttribute('aria-label', 'Kategorie einfuegen');
-            addBtn.addEventListener('click', () => this.insertScaleAt(index + 1));
+            valueEl.textContent = String(index + 1);
+            controls.appendChild(valueEl);
 
             const removeBtn = document.createElement('button');
             removeBtn.type = 'button';
@@ -408,17 +431,40 @@ export function ensureUmfrageElements(): void {
             removeBtn.textContent = '-';
             removeBtn.setAttribute('aria-label', 'Kategorie entfernen');
             removeBtn.addEventListener('click', () => this.removeScaleAt(index));
+            controls.appendChild(removeBtn);
 
-            actions.appendChild(addBtn);
-            actions.appendChild(removeBtn);
-            editor.appendChild(valueEl);
+            if (index === this.scaleEntries.length - 1) {
+              const addAfterBtn = document.createElement('button');
+              addAfterBtn.type = 'button';
+              addAfterBtn.className =
+                'umfrage-matrix__scale-btn umfrage-matrix__scale-btn--add umfrage-matrix__scale-btn--insert umfrage-matrix__scale-btn--insert-right';
+              addAfterBtn.textContent = '+';
+              addAfterBtn.setAttribute('aria-label', 'Kategorie rechts einfuegen');
+              addAfterBtn.addEventListener('click', () => this.insertScaleAt(index + 1));
+              controls.appendChild(addAfterBtn);
+            }
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'umfrage-matrix__scale-input';
+            input.value = entry.label;
+            input.setAttribute('value', entry.label);
+            input.addEventListener('input', (event) => {
+              event.stopPropagation();
+              this.handleScaleInput(index, input);
+            });
+            input.addEventListener('blur', (event) => {
+              event.stopPropagation();
+              this.commitScaleEdit();
+            });
+
+            editor.appendChild(controls);
             editor.appendChild(input);
-            editor.appendChild(actions);
             th.appendChild(editor);
           } else {
             const valueEl = document.createElement('span');
             valueEl.className = 'umfrage-matrix__scale-value';
-            valueEl.textContent = entry.value;
+            valueEl.textContent = String(index + 1);
 
             const labelEl = document.createElement('span');
             labelEl.className = 'umfrage-matrix__scale-label';
@@ -452,7 +498,24 @@ export function ensureUmfrageElements(): void {
         const rowHeader = document.createElement('th');
         rowHeader.className = 'umfrage-matrix__statement';
         rowHeader.scope = 'row';
-        rowHeader.textContent = statement;
+        if (this.editable) {
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.className = 'umfrage-matrix__statement-input';
+          input.value = statement;
+          input.setAttribute('value', statement);
+          input.addEventListener('input', (event) => {
+            event.stopPropagation();
+            this.handleStatementInput(rowIndex, input);
+          });
+          input.addEventListener('blur', (event) => {
+            event.stopPropagation();
+            this.commitStatementEdit();
+          });
+          rowHeader.appendChild(input);
+        } else {
+          rowHeader.textContent = statement;
+        }
         row.appendChild(rowHeader);
 
         this.scaleEntries.forEach((entry) => {
