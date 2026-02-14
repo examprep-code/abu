@@ -1,5 +1,4 @@
 <script context="module">
-  export const ssr = false;
 </script>
 
 <script>
@@ -16,9 +15,42 @@
   let sheetHtml = '';
   let answers = [];
   let metaText = '';
+  let classrooms = [];
+  let selectedClassroom = '';
+  let selectedClassroomId = null;
+  let classOptionsLoading = false;
+  let classOptionsError = '';
+  let authToken = '';
 
   let contentEl;
   let lastLoadedKey = '';
+  let lastLoadedClassroom = null;
+  let lastClassroomKey = '';
+  let lastClassroomAuth = '';
+
+  const AUTH_STORAGE_KEY = 'abu.auth';
+
+  const apiFetch = async (path, options = {}) => {
+    if (!apiBaseUrl) {
+      throw new Error('API Base URL fehlt');
+    }
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(options.headers ?? {})
+    };
+    if (authToken) {
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    return fetch(`${apiBaseUrl}${path}`, { ...options, headers });
+  };
+
+  const readPayload = async (res) => {
+    try {
+      return await res.json();
+    } catch {
+      return { warning: 'Antwort ist kein JSON', data: {} };
+    }
+  };
 
   const escapeHtml = (str = '') =>
     str
@@ -53,6 +85,48 @@
     if (upper === 'TEILWEISE') return 'TEILWEISE';
     if (upper === 'FALSCH') return 'FALSCH';
     return null;
+  };
+
+  const normalizeClassroomId = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num;
+  };
+
+  const formatClassroomLabel = (entry) => {
+    const parts = [];
+    if (entry?.name) parts.push(String(entry.name));
+    if (entry?.year) parts.push(String(entry.year));
+    if (entry?.profession) parts.push(String(entry.profession));
+    if (parts.length) return parts.join(' · ');
+    if (entry?.id) return `Klasse ${entry.id}`;
+    return 'Klasse';
+  };
+
+  const resolveClassroomLabel = (id) => {
+    if (!id) return 'Alle Klassen';
+    const match = classrooms.find((entry) => entry.id === id);
+    return match?.label ?? `Klasse ${id}`;
+  };
+
+  const mergeClassroomsFromAnswers = (list) => {
+    const ids = new Set();
+    list.forEach((entry) => {
+      const id = normalizeClassroomId(entry?.classroom);
+      if (id) ids.add(id);
+    });
+    if (!ids.size) return;
+    const existing = new Set(classrooms.map((entry) => entry.id));
+    const merged = [...classrooms];
+    ids.forEach((id) => {
+      if (!existing.has(id)) {
+        merged.push({ id, label: `Klasse ${id}`, source: 'answers' });
+      }
+    });
+    if (merged.length !== classrooms.length) {
+      merged.sort((a, b) => a.label.localeCompare(b.label, 'de'));
+      classrooms = merged;
+    }
   };
 
   const transformGaps = (container) => {
@@ -143,19 +217,27 @@
     });
   };
 
-  const loadReviewData = async (key) => {
+  const loadReviewData = async (key, classroomId = null) => {
     if (!apiBaseUrl) return;
     loading = true;
     loadError = '';
     metaText = '';
 
     try {
+      const sheetParams = new URLSearchParams({ key });
+      if (classroomId) {
+        sheetParams.set('classroom', String(classroomId));
+      }
+      const answerParams = new URLSearchParams({ sheet: key });
+      if (classroomId) {
+        answerParams.set('classroom', String(classroomId));
+      }
       const [sheetRes, answersRes] = await Promise.all([
-        fetch(`${apiBaseUrl}sheet/public?key=${encodeURIComponent(key)}`),
-        fetch(`${apiBaseUrl}answer?sheet=${encodeURIComponent(key)}`)
+        apiFetch(`sheet/public?${sheetParams.toString()}`),
+        apiFetch(`answer?${answerParams.toString()}`)
       ]);
 
-      const sheetPayload = await sheetRes.json().catch(() => ({}));
+      const sheetPayload = await readPayload(sheetRes);
       if (!sheetRes.ok) {
         loadError = sheetPayload?.warning || 'Sheet nicht gefunden';
         sheet = null;
@@ -166,9 +248,9 @@
       sheet = sheetPayload?.data ?? null;
       sheetHtml = sheet?.content ?? '';
 
-      const answersPayload = await answersRes.json().catch(() => ({}));
+      const answersPayload = await readPayload(answersRes);
       answers = answersPayload?.data?.answer ?? [];
-      metaText = `Sheet: ${key} - Antworten geladen (${answers.length} Eintraege)`;
+      mergeClassroomsFromAnswers(answers);
 
       loading = false;
       await tick();
@@ -182,15 +264,66 @@
     }
   };
 
+  const loadClassroomsForSheet = async (key) => {
+    if (!authToken || !apiBaseUrl || !key) return;
+    classOptionsLoading = true;
+    classOptionsError = '';
+    try {
+      const [classRes, planRes] = await Promise.all([
+        apiFetch('classroom'),
+        apiFetch(`plan?sheet_key=${encodeURIComponent(key)}`)
+      ]);
+
+      let allowedIds = null;
+      if (planRes.ok) {
+        const planPayload = await readPayload(planRes);
+        const planList = planPayload?.data?.classroom_sheet ?? [];
+        if (planList.length) {
+          allowedIds = new Set(
+            planList
+              .map((entry) => normalizeClassroomId(entry?.classroom))
+              .filter((id) => id)
+          );
+        }
+      }
+
+      const classPayload = await readPayload(classRes);
+      if (!classRes.ok) {
+        classOptionsError = classPayload?.warning || 'Klassen konnten nicht geladen werden';
+        return;
+      }
+      let list = classPayload?.data?.classroom ?? [];
+      if (allowedIds && allowedIds.size) {
+        list = list.filter((entry) => allowedIds.has(normalizeClassroomId(entry?.id)));
+      }
+
+      classrooms = list
+        .map((entry) => ({
+          id: normalizeClassroomId(entry?.id),
+          label: formatClassroomLabel(entry),
+          source: 'api'
+        }))
+        .filter((entry) => entry.id)
+        .sort((a, b) => a.label.localeCompare(b.label, 'de'));
+      if (answers.length) {
+        mergeClassroomsFromAnswers(answers);
+      }
+    } catch (err) {
+      classOptionsError = err?.message ?? 'Klassen konnten nicht geladen werden';
+    } finally {
+      classOptionsLoading = false;
+    }
+  };
+
   const updateClassification = async (id, score) => {
     if (!id) return;
     try {
-      await fetch(`${apiBaseUrl}answer`, {
+      await apiFetch('answer', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, classification: score })
       });
-      await loadReviewData(sheetKey);
+      await loadReviewData(sheetKey, selectedClassroomId);
     } catch (err) {
       loadError = 'Klassifizierung konnte nicht gespeichert werden';
     }
@@ -213,17 +346,72 @@
       apiBaseUrl = config.apiBaseUrl.endsWith('/')
         ? config.apiBaseUrl
         : `${config.apiBaseUrl}/`;
+      if (typeof localStorage !== 'undefined') {
+        try {
+          const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+          if (raw) {
+            const stored = JSON.parse(raw);
+            if (stored?.token) {
+              authToken = stored.token;
+            }
+          }
+        } catch {
+          authToken = '';
+        }
+      }
     } catch (err) {
       configError = err?.message ?? 'config konnte nicht geladen werden';
     }
   });
 
+  $: selectedClassroomId = normalizeClassroomId(selectedClassroom);
+
+  $: sheetKey = $page?.params?.key || '';
+
   $: {
-    const nextKey = $page?.params?.key || '';
-    sheetKey = nextKey;
-    if (nextKey && apiBaseUrl && nextKey !== lastLoadedKey) {
+    if (!loading && !loadError && sheetKey) {
+      const label = resolveClassroomLabel(selectedClassroomId);
+      metaText = `Sheet: ${sheetKey} - ${label} - Antworten geladen (${answers.length} Eintraege)`;
+    }
+  }
+
+  $: {
+    if (sheetKey && apiBaseUrl && sheetKey !== lastClassroomKey) {
+      lastClassroomKey = sheetKey;
+      classrooms = [];
+      selectedClassroom = '';
+      if (authToken) {
+        lastClassroomAuth = authToken;
+        loadClassroomsForSheet(sheetKey);
+      }
+    }
+  }
+
+  $: {
+    const hasApiClasses = classrooms.some((entry) => entry.source === 'api');
+    if (
+      authToken &&
+      sheetKey &&
+      apiBaseUrl &&
+      authToken !== lastClassroomAuth &&
+      !hasApiClasses
+    ) {
+      lastClassroomAuth = authToken;
+      loadClassroomsForSheet(sheetKey);
+    }
+  }
+
+  $: {
+    const nextKey = sheetKey;
+    const nextClassroom = selectedClassroomId;
+    if (
+      nextKey &&
+      apiBaseUrl &&
+      (nextKey !== lastLoadedKey || nextClassroom !== lastLoadedClassroom)
+    ) {
       lastLoadedKey = nextKey;
-      loadReviewData(nextKey);
+      lastLoadedClassroom = nextClassroom;
+      loadReviewData(nextKey, nextClassroom);
     }
   }
 
@@ -240,6 +428,15 @@
       <p class="meta">{metaText || `Sheet: ${sheetKey || '-'}`}</p>
     </div>
     <div class="hero-actions">
+      <label class="class-select" title={classOptionsError || ''}>
+        <span>Klasse</span>
+        <select bind:value={selectedClassroom} disabled={classOptionsLoading}>
+          <option value="">Alle Klassen</option>
+          {#each classrooms as classroom}
+            <option value={classroom.id}>{classroom.label}</option>
+          {/each}
+        </select>
+      </label>
       {#if sheetKey}
         <a class="ghost-link ci-btn-outline" href={`/sheet/${sheetKey}`} target="_blank" rel="noreferrer">
           Zum Blatt
@@ -311,6 +508,7 @@
 
   .hero-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 12px;
   }
 
@@ -328,6 +526,39 @@
   .ghost-link:hover {
     transform: translateY(-1px);
     box-shadow: 0 10px 18px rgba(15, 23, 42, 0.12);
+  }
+
+  .class-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: 1px solid #eadfd3;
+    background: #fff;
+    box-shadow: 0 8px 16px rgba(15, 23, 42, 0.08);
+    font-size: 14px;
+    color: #5e554a;
+  }
+
+  .class-select span {
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 10px;
+    color: #7a6f62;
+  }
+
+  .class-select select {
+    border: none;
+    background: transparent;
+    font-size: 14px;
+    color: #1c232f;
+    font-weight: 600;
+    padding: 4px 2px;
+  }
+
+  .class-select select:focus {
+    outline: none;
   }
 
   .state {

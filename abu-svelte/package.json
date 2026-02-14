@@ -11,7 +11,6 @@
     "check:watch": "svelte-check --tsconfig ./jsconfig.json --watch"
   },
   "devDependencies": {
-    "@rollup/rollup-darwin-arm64": "^4.57.1",
     "@sveltejs/adapter-static": "^3.0.0",
     "@sveltejs/kit": "^2.0.0",
     "@sveltejs/vite-plugin-svelte": "^3.0.0",

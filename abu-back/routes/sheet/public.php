@@ -21,6 +21,21 @@ if (!count($result)) {
     return;
 }
 
+$classroomId = intval($_GET['classroom'] ?? 0);
+if ($classroomId > 0) {
+    $assignment = sql_get(
+        'SELECT status, assignment_form
+         FROM `classroom_sheet`
+         WHERE classroom = ' . $classroomId . '
+           AND sheet_key = "' . sql_escape($key) . '"
+         LIMIT 1;'
+    );
+    if (!empty($assignment)) {
+        $result[0]['assignment_status'] = $assignment[0]['status'] ?? null;
+        $result[0]['assignment_form'] = $assignment[0]['assignment_form'] ?? null;
+    }
+}
+
 $return['data'] = $result[0];
 return;
 

@@ -9,6 +9,7 @@ export type LueckeRuntimeOptions = {
   apiBaseUrl: string;
   sheetKey: string;
   user: string;
+  classroom?: string | number | null;
   onProgress?: (progress: LueckeProgress) => void;
 };
 
@@ -369,11 +370,13 @@ async function prefillAnswers(options: LueckeRuntimeOptions): Promise<void> {
   const { apiBaseUrl, sheetKey, user, root } = options;
   if (!user) return;
 
-  const endpoint =
-    `${apiBaseUrl}answer?sheet=` +
-    encodeURIComponent(sheetKey) +
-    '&user=' +
-    encodeURIComponent(user);
+  const params = new URLSearchParams();
+  params.set('sheet', sheetKey);
+  params.set('user', user);
+  if (options.classroom) {
+    params.set('classroom', String(options.classroom));
+  }
+  const endpoint = `${apiBaseUrl}answer?${params.toString()}`;
 
   try {
     const resp = await fetch(endpoint);
@@ -457,6 +460,7 @@ async function checkGap(
     sheet: options.sheetKey,
     user: options.user,
     value: answer,
+    ...(options.classroom ? { classroom: String(options.classroom) } : {}),
     lueckentext,
     musterloesung
   });

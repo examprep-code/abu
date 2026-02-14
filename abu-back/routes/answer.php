@@ -11,6 +11,14 @@ if ($method === 'POST') {
     if (empty($data['user'])) {
         $data['user'] = 'testnutzer';
     }
+    if (array_key_exists('classroom', $data)) {
+        $classroomId = intval($data['classroom']);
+        if ($classroomId > 0) {
+            $data['classroom'] = $classroomId;
+        } else {
+            unset($data['classroom']);
+        }
+    }
 
     // Speichere die KI-Klassifizierung direkt mit der Antwort
     if (isset($chatgpt['classification'])) {
@@ -84,12 +92,16 @@ if ($method === 'GET') {
 
     $sheet = $paras[0] ?? ($_GET['sheet'] ?? null);
     $user = $paras[1] ?? ($_GET['user'] ?? null);
+    $classroom = $_GET['classroom'] ?? null;
 
     if (!empty($sheet)) {
         $where[] = '`sheet` = "' . sql_escape($sheet) . '"';
     }
     if (!empty($user)) {
         $where[] = '`user` = "' . sql_escape($user) . '"';
+    }
+    if (!empty($classroom)) {
+        $where[] = '`classroom` = ' . intval($classroom);
     }
 
     if ($where) {

@@ -6,6 +6,7 @@ $planConfig = [
         'user' => [],
         'classroom' => [],
         'sheet_key' => [],
+        'assignment_form' => [],
         'status' => [],
         'created_at' => [],
         'updated_at' => [],
@@ -13,12 +14,20 @@ $planConfig = [
 ];
 
 const PLAN_STATUSES = ['aktiv', 'freiwillig', 'archiviert'];
+const PLAN_FORMS = ['personal', 'anonym'];
 
 function normalize_plan_status($value) {
     $status = strtolower(trim((string) $value));
     if ($status === '') return '';
     if (!in_array($status, PLAN_STATUSES, true)) return '';
     return $status;
+}
+
+function normalize_plan_form($value) {
+    $form = strtolower(trim((string) $value));
+    if ($form === '') return '';
+    if (!in_array($form, PLAN_FORMS, true)) return '';
+    return $form;
 }
 
 if (!isset($user['id'])) {
@@ -52,6 +61,8 @@ if ($method === 'POST') {
     $classId = $data['classroom'] ?? null;
     $sheetKey = trim($data['sheet_key'] ?? ($data['sheet'] ?? ''));
     $status = normalize_plan_status($data['status'] ?? 'aktiv');
+    $formRaw = $data['assignment_form'] ?? ($data['form'] ?? '');
+    $assignmentForm = $formRaw !== '' ? normalize_plan_form($formRaw) : 'personal';
     if (!$classId) {
         $return['status'] = 400;
         warning('classroom fehlt');
@@ -65,6 +76,11 @@ if ($method === 'POST') {
     if ($status === '') {
         $return['status'] = 400;
         warning('status ungueltig');
+        return;
+    }
+    if ($assignmentForm === '') {
+        $return['status'] = 400;
+        warning('form ungueltig');
         return;
     }
 
@@ -106,7 +122,11 @@ if ($method === 'POST') {
     if (!empty($existing)) {
         sql_update(
             'classroom_sheet',
-            ['status' => $status, 'updated_at' => date('Y-m-d H:i:s')],
+            [
+                'status' => $status,
+                'assignment_form' => $assignmentForm,
+                'updated_at' => date('Y-m-d H:i:s')
+            ],
             intval($existing[0]['id'])
         );
         $return['data'] = ['id' => $existing[0]['id']];
@@ -118,6 +138,7 @@ if ($method === 'POST') {
         'user' => ['id' => $user['id']],
         'classroom' => ['id' => intval($classId)],
         'sheet_key' => $sheetKey,
+        'assignment_form' => $assignmentForm,
         'status' => $status,
         'created_at' => $now,
         'updated_at' => $now,
@@ -129,6 +150,7 @@ if ($method === 'POST') {
             'user' => [],
             'classroom' => [],
             'sheet_key' => [],
+            'assignment_form' => [],
             'status' => [],
             'created_at' => [],
             'updated_at' => [],
@@ -141,15 +163,34 @@ if ($method === 'POST') {
 
 if ($method === 'PUT' || $method === 'PATCH') {
     $id = $data['id'] ?? ($paras[0] ?? null);
-    $status = normalize_plan_status($data['status'] ?? '');
     if (!$id) {
         $return['status'] = 400;
         warning('id fehlt');
         return;
     }
-    if ($status === '') {
+    $status = null;
+    if (array_key_exists('status', $data)) {
+        $status = normalize_plan_status($data['status'] ?? '');
+        if ($status === '') {
+            $return['status'] = 400;
+            warning('status ungueltig');
+            return;
+        }
+    }
+
+    $assignmentForm = null;
+    if (array_key_exists('assignment_form', $data) || array_key_exists('form', $data)) {
+        $assignmentForm = normalize_plan_form($data['assignment_form'] ?? ($data['form'] ?? ''));
+        if ($assignmentForm === '') {
+            $return['status'] = 400;
+            warning('form ungueltig');
+            return;
+        }
+    }
+
+    if ($status === null && $assignmentForm === null) {
         $return['status'] = 400;
-        warning('status ungueltig');
+        warning('keine aenderung uebermittelt');
         return;
     }
 
@@ -166,11 +207,15 @@ if ($method === 'PUT' || $method === 'PATCH') {
         return;
     }
 
-    sql_update(
-        'classroom_sheet',
-        ['status' => $status, 'updated_at' => date('Y-m-d H:i:s')],
-        intval($id)
-    );
+    $update = ['updated_at' => date('Y-m-d H:i:s')];
+    if ($status !== null) {
+        $update['status'] = $status;
+    }
+    if ($assignmentForm !== null) {
+        $update['assignment_form'] = $assignmentForm;
+    }
+
+    sql_update('classroom_sheet', $update, intval($id));
     return;
 }
 

@@ -1,15 +1,16 @@
 <script context="module">
-  export const ssr = false;
 </script>
 
 <script>
   import { onDestroy, onMount, tick } from 'svelte';
   import { page } from '$app/stores';
   import { loadConfig } from '$lib/config';
-  import { createLueckeRuntime, ensureLueckeElements } from '$lib/luecke';
+  import { createLueckeRuntime, ensureLueckeElements } from '$lib/custom-elements/luecke';
+  import { createUmfrageRuntime, ensureUmfrageElements } from '$lib/custom-elements/umfrage';
   import { applySchoolCiCss } from '$lib/ci';
 
   const STORAGE_KEY = 'abu.learner';
+  const ANON_TOKEN_PREFIX = 'abu.anon';
 
   let apiBaseUrl = '';
   let configError = '';
@@ -19,13 +20,18 @@
   let sheetKey = '';
   let sheet = null;
   let sheetHtml = '';
+  let assignmentForm = '';
+  let classroomId = null;
+  let anonymousToken = '';
 
   let progress = { percent: 0, answered: 0, total: 0 };
 
   let contentEl;
-  let runtime = null;
+  let lueckeRuntime = null;
+  let umfrageRuntime = null;
   let lastLoadedKey = '';
-  let lastRuntimeUser = '';
+  let lastLoadedClassroom = null;
+  let lastRuntimeSignature = '';
 
   let learner = null;
   let loginCode = '';
@@ -43,6 +49,42 @@
     } catch {
       return { warning: 'Antwort ist kein JSON', data: {} };
     }
+  };
+
+  const createAnonymousToken = () => {
+    if (typeof crypto !== 'undefined') {
+      if (typeof crypto.randomUUID === 'function') {
+        return `anon_${crypto.randomUUID().replace(/-/g, '')}`;
+      }
+      if (typeof crypto.getRandomValues === 'function') {
+        const buffer = new Uint8Array(16);
+        crypto.getRandomValues(buffer);
+        return (
+          'anon_' +
+          Array.from(buffer)
+            .map((num) => num.toString(16).padStart(2, '0'))
+            .join('')
+        );
+      }
+    }
+    return `anon_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  };
+
+  const getAnonymousToken = (classId, key) => {
+    if (!classId || !key) return '';
+    if (typeof localStorage === 'undefined') return '';
+    const storageKey = `${ANON_TOKEN_PREFIX}.${classId}.${key}`;
+    const existing = localStorage.getItem(storageKey);
+    if (existing) return existing;
+    const token = createAnonymousToken();
+    localStorage.setItem(storageKey, token);
+    return token;
+  };
+
+  const formatAnonymousHint = (token) => {
+    if (!token) return '';
+    if (token.length <= 10) return token;
+    return `${token.slice(0, 6)}…${token.slice(-4)}`;
   };
 
   const persistLearner = (nextLearner) => {
@@ -87,7 +129,6 @@
       }
       persistLearner(validated);
       loginCode = '';
-      await setupRuntime();
     } catch (err) {
       loginError = err?.message ?? 'Login fehlgeschlagen';
     } finally {
@@ -97,31 +138,40 @@
 
   const logoutLearner = () => {
     persistLearner(null);
-    runtime?.destroy();
-    runtime = null;
-    lastRuntimeUser = '';
+    lueckeRuntime?.destroy();
+    umfrageRuntime?.destroy();
+    lueckeRuntime = null;
+    umfrageRuntime = null;
+    lastRuntimeSignature = '';
+    assignmentForm = '';
+    anonymousToken = '';
     progress = { percent: 0, answered: 0, total: 0 };
   };
 
-  async function fetchSheet(key) {
+  async function fetchSheet(key, classId = null) {
     if (!apiBaseUrl) return;
     loading = true;
     loadError = '';
 
     try {
-      const res = await fetch(
-        `${apiBaseUrl}sheet/public?key=${encodeURIComponent(key)}`
-      );
+      const url = new URL(`${apiBaseUrl}sheet/public`);
+      url.searchParams.set('key', key);
+      if (classId) {
+        url.searchParams.set('classroom', String(classId));
+      }
+      const res = await fetch(url.toString());
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         loadError = payload?.warning || 'Sheet nicht gefunden';
         sheet = null;
         sheetHtml = '';
+        assignmentForm = '';
         loading = false;
         return;
       }
       sheet = payload?.data ?? null;
       sheetHtml = sheet?.content ?? '';
+      assignmentForm = sheet?.assignment_form ?? '';
 
       loading = false;
       await tick();
@@ -139,6 +189,7 @@
         ? config.apiBaseUrl
         : `${config.apiBaseUrl}/`;
       ensureLueckeElements();
+      ensureUmfrageElements();
     } catch (err) {
       configError = err?.message ?? 'config konnte nicht geladen werden';
     }
@@ -179,35 +230,72 @@
     }
   });
 
+  $: classroomId = learner?.classroom ?? null;
+
   $: {
     const nextKey = $page?.params?.key || '';
     sheetKey = nextKey;
-    if (nextKey && apiBaseUrl && nextKey !== lastLoadedKey) {
+    const nextClassroom = classroomId;
+    if (
+      nextKey &&
+      apiBaseUrl &&
+      (nextKey !== lastLoadedKey || nextClassroom !== lastLoadedClassroom)
+    ) {
       lastLoadedKey = nextKey;
-      fetchSheet(nextKey);
+      lastLoadedClassroom = nextClassroom;
+      fetchSheet(nextKey, nextClassroom);
     }
   }
 
   const setupRuntime = async () => {
-    if (!contentEl || !apiBaseUrl || !sheetKey || !learner?.code) return;
-    if (runtime && lastRuntimeUser === learner.code) {
-      await runtime.refresh();
+    if (!contentEl || !apiBaseUrl || !sheetKey) return;
+
+    const isAnonymous = assignmentForm === 'anonym';
+    const activeClassroom = classroomId;
+    let runtimeUser = '';
+    let runtimeClassroom = activeClassroom;
+
+    if (isAnonymous) {
+      if (!activeClassroom) return;
+      runtimeUser = getAnonymousToken(activeClassroom, sheetKey);
+      anonymousToken = runtimeUser;
+    } else {
+      if (!learner?.code) return;
+      runtimeUser = learner.code;
+      anonymousToken = '';
+    }
+
+    const signature = `${runtimeUser}::${runtimeClassroom ?? ''}::${assignmentForm}`;
+    if (lueckeRuntime && umfrageRuntime && lastRuntimeSignature === signature) {
+      await lueckeRuntime.refresh();
+      await umfrageRuntime.refresh();
       return;
     }
-    runtime?.destroy();
-    runtime = createLueckeRuntime({
+    lueckeRuntime?.destroy();
+    umfrageRuntime?.destroy();
+    lueckeRuntime = createLueckeRuntime({
       root: contentEl,
       apiBaseUrl,
       sheetKey,
-      user: learner.code,
+      user: runtimeUser,
+      classroom: runtimeClassroom,
       onProgress: updateProgress
     });
-    lastRuntimeUser = learner.code;
-    await runtime.refresh();
+    umfrageRuntime = createUmfrageRuntime({
+      root: contentEl,
+      apiBaseUrl,
+      sheetKey,
+      user: runtimeUser,
+      classroom: runtimeClassroom
+    });
+    lastRuntimeSignature = signature;
+    await lueckeRuntime.refresh();
+    await umfrageRuntime.refresh();
   };
 
   onDestroy(() => {
-    runtime?.destroy();
+    lueckeRuntime?.destroy();
+    umfrageRuntime?.destroy();
   });
 </script>
 
@@ -230,7 +318,11 @@
       </div>
       <span class="progress-hint">
         {#if learner}
-          Aktuell als {learner.name} ({learner.code})
+          {#if assignmentForm === 'anonym'}
+            Anonyme Teilnahme{anonymousToken ? ` · Token ${formatAnonymousHint(anonymousToken)}` : ''}
+          {:else}
+            Aktuell als {learner.name} ({learner.code})
+          {/if}
         {:else}
           Bitte zuerst einloggen
         {/if}
@@ -275,7 +367,11 @@
   <footer class="footer">
     <div class="footer-card">
       {#if learner}
-        Antworten werden automatisch unter deinem Code gespeichert.
+        {#if assignmentForm === 'anonym'}
+          Antworten werden anonym gespeichert.
+        {:else}
+          Antworten werden automatisch unter deinem Code gespeichert.
+        {/if}
         <button class="ghost ci-btn-outline" on:click={logoutLearner}>Abmelden</button>
       {:else}
         Bitte einloggen, damit deine Antworten gespeichert werden.
@@ -657,6 +753,96 @@
 
   :global(.feedback--falsch::after) {
     border-bottom-color: #fde7e7;
+  }
+
+  :global(umfrage-matrix) {
+    display: block;
+    margin: 1.5rem 0;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scroll) {
+    overflow-x: auto;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__table) {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 520px;
+  }
+
+  :global(umfrage-matrix th),
+  :global(umfrage-matrix td) {
+    border: 1px solid #e2d8cc;
+    padding: 0.55rem 0.7rem;
+    text-align: center;
+  }
+
+  :global(umfrage-matrix th) {
+    background: #f6f0e6;
+    color: #6a6156;
+    font-weight: 600;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement) {
+    text-align: left;
+    background: #fff;
+    color: #4d463d;
+    font-weight: 500;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-value) {
+    display: block;
+    font-size: 1rem;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-label) {
+    display: block;
+    font-size: 0.75rem;
+    color: #8a8072;
+    margin-top: 2px;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid #c7bdb1;
+    background: #fff;
+    cursor: pointer;
+    position: relative;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option input) {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__dot) {
+    width: 11px;
+    height: 11px;
+    border-radius: 999px;
+    border: 2px solid #8a8072;
+    background: transparent;
+    transition: all 0.15s ease;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option input:checked + .umfrage-matrix__dot) {
+    background: #2f8f83;
+    border-color: #2f8f83;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option input:focus-visible + .umfrage-matrix__dot) {
+    box-shadow: 0 0 0 3px rgba(47, 143, 131, 0.25);
+  }
+
+  @media (max-width: 720px) {
+    :global(umfrage-matrix .umfrage-matrix__table) {
+      min-width: 420px;
+    }
   }
 
   @media (max-width: 720px) {

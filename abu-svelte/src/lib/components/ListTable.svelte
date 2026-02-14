@@ -112,7 +112,7 @@
     );
     gap: 12px;
     align-items: center;
-    padding: 10px 12px;
+    padding: 0;
     border-radius: 14px;
     border: 1px solid #d9dee7;
     background: #ffffff;
@@ -143,6 +143,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    padding: 10px 12px;
   }
 
   .sheet-cell--name {
@@ -152,6 +153,17 @@
   .sheet-cell--actions {
     display: flex;
     justify-content: flex-end;
+    overflow: visible;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    row-gap: 8px;
+  }
+
+  .sheet-cell--actions .icon-btn {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   .sheet-head-btn {
@@ -163,7 +175,6 @@
     gap: 6px;
     background: transparent;
     border: 0;
-    padding: 10px 12px;
     border-radius: 12px;
     text-align: left;
     font: inherit;
@@ -177,7 +188,6 @@
     width: 100%;
     align-self: stretch;
     align-items: center;
-    padding: 10px 12px;
     text-align: left;
     color: inherit;
     cursor: default;
@@ -187,10 +197,6 @@
   .sheet-head-btn:focus-visible {
     color: #1f7a6e;
     background: rgba(31, 122, 110, 0.08);
-  }
-
-  .sheet-row--head .sheet-cell--actions {
-    padding: 10px 12px;
   }
 
   @media (max-width: 720px) {
@@ -211,6 +217,7 @@
       align-items: baseline;
       gap: 10px;
       white-space: normal;
+      padding: 0;
     }
 
     .sheet-cell::before {

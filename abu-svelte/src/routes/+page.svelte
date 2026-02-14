@@ -1,5 +1,4 @@
 <script context="module">
-  export const ssr = false;
 </script>
 
 <script>
@@ -7,7 +6,8 @@
   import { browser } from '$app/environment';
   import { loadConfig } from '$lib/config';
   import { tokenizeCss, tokenizeHtml } from '$lib/codeTokens';
-  import { createLueckeRuntime, ensureLueckeElements } from '$lib/luecke';
+  import { createLueckeRuntime, ensureLueckeElements } from '$lib/custom-elements/luecke';
+  import { createUmfrageRuntime, ensureUmfrageElements } from '$lib/custom-elements/umfrage';
   import { legacySheets } from '$lib/legacySheets';
   import { applySchoolCiCss } from '$lib/ci';
   import ListTable from '$lib/components/ListTable.svelte';
@@ -36,6 +36,14 @@
   let editorName = '';
   let saving = false;
   let saveState = '';
+  let sheetVersions = [];
+  let versionsLoading = false;
+  let versionsError = '';
+  let selectedVersionId = '';
+  let restoringVersion = false;
+  let versionState = '';
+  let selectedVersion = null;
+  let isCurrentVersion = false;
 
   let creating = false;
   let deleting = false;
@@ -45,7 +53,9 @@
   let sheetSort = 'updated_at_desc';
   let showCreateSheetModal = false;
   let activeTab = 'editor';
+  let showTopbarMenu = false;
   let editorView = 'html';
+  let topbarMenuEl = null;
   let sheetHtmlTokens = [];
   let sheetHtmlInput = null;
   let sheetHtmlHighlight = null;
@@ -86,6 +96,7 @@
   let classNotes = '';
   let classSchoolId = '';
   let classSort = 'name_asc';
+  let classDetailView = 'details';
   let newClassName = '';
   let newClassYear = '';
   let newClassProfession = '';
@@ -116,9 +127,12 @@
   let selectedPlanClassId = null;
   let planSaving = false;
   let planAssignmentMap = new Map();
+  let planFormDraft = {};
+  let planStatusDraft = {};
 
   let previewEl = null;
-  let previewRuntime = null;
+  let previewLueckeRuntime = null;
+  let previewUmfrageRuntime = null;
   let previewPending = false;
   let previewUser = '';
 
@@ -126,8 +140,20 @@
   let visualSyncHtml = '';
   let visualPreviewEl = null;
   let visualBlockViews = [];
+  let visualBlockHtmlInputs = [];
+  let visualBlockEditors = [];
+  let visualBlockSelections = [];
   let dragIndex = null;
   let dragOverIndex = null;
+  let visualActiveBlock = 0;
+  let blockInsertIndex = null;
+
+  let agentPrompt = '';
+  let agentStatus = '';
+  let agentPending = false;
+  let agentResponse = '';
+  let agentHistory = [];
+  let agentHistoryEl = null;
 
   let answersEl = null;
   let answers = [];
@@ -136,6 +162,9 @@
   let answersMeta = '';
   let answersPending = false;
   let answersKey = '';
+  let answersClassFilter = '';
+  let answersClassKey = null;
+  let answersClassId = null;
   let answersContent = '';
 
   const PLAN_STATUS_OPTIONS = [
@@ -144,6 +173,10 @@
     { value: 'freiwillig', label: 'Freiwillig' },
     { value: 'archiviert', label: 'Archiviert' }
   ];
+  const PLAN_FORM_OPTIONS = [
+    { value: 'personal', label: 'Personenbezogen' },
+    { value: 'anonym', label: 'Anonym' }
+  ];
   const EDITOR_VIEWS = [
     { id: 'html', label: 'HTML' },
     { id: 'visual', label: 'Visuell' },
@@ -151,13 +184,15 @@
     { id: 'answers', label: 'Antworten' }
   ];
   const SHEET_TABLE_COLUMNS =
-    'minmax(120px, 0.9fr) minmax(180px, 1.1fr) minmax(220px, 2fr) minmax(160px, 0.9fr) minmax(160px, 0.9fr) auto';
+    'minmax(120px, 0.9fr) minmax(180px, 1.1fr) minmax(220px, 2fr) minmax(160px, 0.9fr) minmax(160px, 0.9fr) minmax(90px, auto)';
   const CLASS_TABLE_COLUMNS =
-    'minmax(160px, 1.2fr) minmax(90px, 0.6fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(220px, 1.4fr) auto';
+    'minmax(160px, 1.2fr) minmax(90px, 0.6fr) minmax(160px, 1fr) minmax(160px, 1fr) minmax(220px, 1.4fr) minmax(90px, auto)';
 
   $: planAssignmentMap = new Map(
     planAssignments.map((entry) => [entry.sheet_key, entry])
   );
+
+  $: answersClassId = normalizeClassId(answersClassFilter);
   $: ciSelectSize = Math.max(2, Math.min(6, schools.length + 1));
   $: ciLabel =
     adminCiSchoolId !== ''
@@ -205,6 +240,9 @@
     const keyB = (b.key || '').toString();
     return keyA.localeCompare(keyB, undefined, { numeric: true, sensitivity: 'base' });
   });
+  $: selectedVersion =
+    sheetVersions.find((entry) => String(entry?.id) === String(selectedVersionId)) ?? null;
+  $: isCurrentVersion = selectedVersion ? Number(selectedVersion.is_current) === 1 : false;
 
   $: {
     schoolMap;
@@ -323,6 +361,11 @@
     return window.confirm(`${label} wirklich löschen?`);
   };
 
+  const confirmRestore = (label = 'Version') => {
+    if (!browser) return true;
+    return window.confirm(`${label} wirklich wiederherstellen?`);
+  };
+
   const buildCssTokens = (value = '') => tokenizeCss(value);
   const buildHtmlTokens = (value = '') => tokenizeHtml(value);
 
@@ -339,6 +382,64 @@
   const STORAGE_KEY = 'abu.auth';
   const ADMIN_CI_KEY = 'abu.admin.ci';
 
+  onMount(() => {
+    showTopbarMenu = false;
+
+    const handlePointerDown = (event) => {
+      if (!showTopbarMenu) return;
+      if (!topbarMenuEl) {
+        showTopbarMenu = false;
+        return;
+      }
+      if (event?.target instanceof Node && topbarMenuEl.contains(event.target)) {
+        return;
+      }
+      showTopbarMenu = false;
+    };
+
+    const handleKeyDown = (event) => {
+      if (!showTopbarMenu) return;
+      if (event?.key === 'Escape') {
+        showTopbarMenu = false;
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  });
+
+  onMount(() => {
+    const handlePointerDown = (event) => {
+      if (blockInsertIndex === null) return;
+      if (!(event?.target instanceof Element)) {
+        blockInsertIndex = null;
+        return;
+      }
+      if (event.target.closest('.block-insert')) return;
+      blockInsertIndex = null;
+    };
+
+    const handleKeyDown = (event) => {
+      if (blockInsertIndex === null) return;
+      if (event?.key === 'Escape') {
+        blockInsertIndex = null;
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  });
+
   onMount(async () => {
     loadAdminCi();
     try {
@@ -347,6 +448,7 @@
         ? config.apiBaseUrl
         : `${config.apiBaseUrl}/`;
       ensureLueckeElements();
+      ensureUmfrageElements();
     } catch (err) {
       configError = err?.message ?? 'config konnte nicht geladen werden';
     } finally {
@@ -450,8 +552,45 @@
     }
   };
 
-  function getSchoolLabel(schoolId) {
-    return schoolId ? schoolMap.get(String(schoolId))?.name ?? '' : '';
+  function normalizeSchoolId(value) {
+    if (value === null || value === undefined || value === '') return '';
+    if (typeof value === 'object') return value?.id ?? '';
+    return value;
+  }
+
+  function getSchoolLabel(value) {
+    if (value === null || value === undefined || value === '') return '';
+    if (typeof value === 'object') {
+      if (value?.name) return value.name;
+      if (value?.id !== undefined) {
+        return schoolMap.get(String(value.id))?.name ?? '';
+      }
+      return '';
+    }
+    return schoolMap.get(String(value))?.name ?? '';
+  }
+
+  function normalizeClassId(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num;
+  }
+
+  function formatClassLabel(entry) {
+    if (!entry) return 'Klasse';
+    const parts = [];
+    if (entry?.name) parts.push(String(entry.name));
+    if (entry?.year) parts.push(String(entry.year));
+    if (entry?.profession) parts.push(String(entry.profession));
+    if (parts.length) return parts.join(' · ');
+    if (entry?.id) return `Klasse ${entry.id}`;
+    return 'Klasse';
+  }
+
+  function getAnswersClassLabel(classId) {
+    if (!classId) return 'Alle Klassen';
+    const match = classes.find((entry) => entry.id === classId);
+    return match ? formatClassLabel(match) : `Klasse ${classId}`;
   }
 
   const clearAuth = () => {
@@ -575,6 +714,42 @@
     }
   };
 
+  const resetSheetVersions = () => {
+    sheetVersions = [];
+    versionsLoading = false;
+    versionsError = '';
+    selectedVersionId = '';
+    versionState = '';
+    restoringVersion = false;
+  };
+
+  const fetchSheetVersions = async (key) => {
+    if (!token || !key) {
+      resetSheetVersions();
+      return;
+    }
+    versionsLoading = true;
+    versionsError = '';
+    versionState = '';
+    try {
+      const res = await apiFetch(`sheet?key=${encodeURIComponent(key)}`);
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        versionsError = payload?.warning || 'Versionen konnten nicht geladen werden';
+        return;
+      }
+      const list = payload?.data?.sheet ?? [];
+      sheetVersions = list;
+      const current =
+        list.find((entry) => Number(entry.is_current) === 1) ?? list[0] ?? null;
+      selectedVersionId = current ? String(current.id) : '';
+    } catch (err) {
+      versionsError = err?.message ?? 'Versionen konnten nicht geladen werden';
+    } finally {
+      versionsLoading = false;
+    }
+  };
+
   const selectSheet = (id) => {
     selectedId = id;
     const current = sheets.find((sheet) => sheet.id === id);
@@ -583,11 +758,23 @@
     selectedKey = current?.key ?? '';
     saveState = '';
     editorView = 'html';
+    resetSheetVersions();
     answers = [];
     answersError = '';
     answersMeta = '';
     answersKey = '';
+    answersClassFilter = '';
+    answersClassKey = null;
     answersContent = '';
+    agentPrompt = '';
+    agentStatus = '';
+    agentPending = false;
+    agentResponse = '';
+    agentHistory = [];
+    visualActiveBlock = 0;
+    if (current?.key) {
+      fetchSheetVersions(current.key);
+    }
   };
 
   const closeEditor = () => {
@@ -597,14 +784,26 @@
     editorName = '';
     saveState = '';
     editorView = 'html';
-    previewRuntime?.destroy();
-    previewRuntime = null;
+    resetSheetVersions();
+    previewLueckeRuntime?.destroy();
+    previewUmfrageRuntime?.destroy();
+    previewLueckeRuntime = null;
+    previewUmfrageRuntime = null;
     previewUser = '';
     answers = [];
     answersError = '';
     answersMeta = '';
     answersKey = '';
+    answersClassFilter = '';
+    answersClassKey = null;
     answersContent = '';
+    agentPrompt = '';
+    agentStatus = '';
+    agentPending = false;
+    agentResponse = '';
+    agentHistory = [];
+    visualActiveBlock = 0;
+    blockInsertIndex = null;
   };
 
   const createSheet = async () => {
@@ -677,6 +876,50 @@
       saveState = err?.message ?? 'Speichern fehlgeschlagen';
     } finally {
       saving = false;
+    }
+  };
+
+  const restoreSheetVersion = async () => {
+    if (!selectedVersionId) return;
+    const target = sheetVersions.find(
+      (entry) => String(entry?.id) === String(selectedVersionId)
+    );
+    if (!target) return;
+    if (Number(target.is_current) === 1) {
+      versionState = 'Version ist bereits aktuell.';
+      return;
+    }
+    const label = describeVersion(target);
+    if (!confirmRestore(`Version ${label}`)) return;
+    restoringVersion = true;
+    versionsError = '';
+    versionState = '';
+    const keepView = editorView;
+    try {
+      const res = await apiFetch('sheet', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: target.id,
+          is_current: 1
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        versionsError = payload?.warning || 'Wiederherstellen fehlgeschlagen';
+        return;
+      }
+      await fetchSheets();
+      if (selectedKey) {
+        await fetchSheetVersions(selectedKey);
+      }
+      if (selectedId) {
+        editorView = keepView;
+      }
+      versionState = 'Version wiederhergestellt.';
+    } catch (err) {
+      versionsError = err?.message ?? 'Wiederherstellen fehlgeschlagen';
+    } finally {
+      restoringVersion = false;
     }
   };
 
@@ -935,19 +1178,16 @@
     }
   };
 
-  const refreshPlanData = async () => {
-    if (!token) return;
-    await Promise.all([fetchClasses(), fetchSheets()]);
-  };
-
-  const selectClass = (id) => {
+  const selectClass = (id, view = 'details') => {
     selectedClassId = id;
+    classDetailView = view;
     const current = classes.find((entry) => entry.id === id);
     className = current?.name ?? '';
     classYear = current?.year ?? '';
     classProfession = current?.profession ?? '';
     classNotes = current?.notes ?? '';
-    classSchoolId = current?.school ? String(current.school) : '';
+    const normalizedSchoolId = normalizeSchoolId(current?.school);
+    classSchoolId = normalizedSchoolId ? String(normalizedSchoolId) : '';
     selectedLearnerId = null;
     newLearnerName = '';
     newLearnerEmail = '';
@@ -956,6 +1196,33 @@
     if (id) {
       fetchLearners(id);
     }
+  };
+
+  const openLearnersForClass = async (id = null) => {
+    const targetId = id ?? selectedClassId;
+    if (!targetId) return;
+    if (id && id !== selectedClassId) {
+      selectClass(id, 'learners');
+      return;
+    }
+    classDetailView = 'learners';
+    await fetchLearners(targetId);
+  };
+
+  const openAssignmentsForClass = async (id) => {
+    const targetId = id ?? selectedClassId;
+    if (!targetId) return;
+    classDetailView = 'assignments';
+    selectedPlanClassId = targetId;
+    if (!sheets.length && !loadingSheets) {
+      await fetchSheets();
+    }
+    await fetchPlanAssignments(targetId);
+  };
+
+  const openClassAssignments = async (id) => {
+    selectClass(id);
+    await openAssignmentsForClass(id);
   };
 
   const createClass = async () => {
@@ -1205,35 +1472,61 @@
     }
   };
 
-  const selectPlanClass = (id) => {
-    selectedPlanClassId = id;
-    if (id) {
-      fetchPlanAssignments(id);
-    } else {
-      planAssignments = [];
+  const resetClassSelection = () => {
+    selectedClassId = null;
+    classDetailView = 'details';
+    classSchoolId = '';
+    learners = [];
+    selectedLearnerId = null;
+    newLearnerName = '';
+    newLearnerNotes = '';
+    learnerModalMode = 'create';
+  };
+
+  const resetSchoolSelection = () => {
+    selectedSchoolId = null;
+    schoolName = '';
+    schoolCss = '';
+  };
+
+  const switchTab = async (tab) => {
+    if (activeTab === tab) return;
+    activeTab = tab;
+    if (tab === 'editor') {
+      closeEditor();
+    } else if (tab === 'classes') {
+      resetClassSelection();
+    } else if (tab === 'schools') {
+      resetSchoolSelection();
+    } else if (tab === 'settings') {
+      if (!token || loadingSchools) return;
+      if (!schools.length) {
+        await fetchSchools();
+      }
     }
   };
 
-  const openPlanTab = () => {
-    activeTab = 'plan';
-    if (classes.length) {
-      selectPlanClass(selectedPlanClassId ?? classes[0].id);
-    } else {
-      selectedPlanClassId = null;
-      planAssignments = [];
-    }
+  const selectTopbarTab = async (tab) => {
+    showTopbarMenu = false;
+    await switchTab(tab);
   };
 
   const openSettings = async () => {
-    activeTab = 'settings';
-    if (!token || loadingSchools) return;
-    if (!schools.length) {
-      await fetchSchools();
-    }
+    showTopbarMenu = false;
+    await switchTab('settings');
   };
 
   const getNextLueckeIndex = () => {
     const matches = Array.from(editorContent.matchAll(/name="luecke(\d+)"/g));
+    const max = matches.reduce((acc, match) => {
+      const value = parseInt(match[1], 10);
+      return Number.isFinite(value) ? Math.max(acc, value) : acc;
+    }, 0);
+    return max + 1;
+  };
+
+  const getNextUmfrageIndex = () => {
+    const matches = Array.from(editorContent.matchAll(/name="umfrage(\d+)"/g));
     const max = matches.reduce((acc, match) => {
       const value = parseInt(match[1], 10);
       return Number.isFinite(value) ? Math.max(acc, value) : acc;
@@ -1252,6 +1545,43 @@
     const container = doc.createElement('div');
     nodes.forEach((node) => container.appendChild(node.cloneNode(true)));
     pushBlockHtml(blocks, container.innerHTML);
+  };
+
+  const BLOCK_LEVEL_TAGS = new Set([
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'div',
+    'section',
+    'article',
+    'table',
+    'ul',
+    'ol',
+    'blockquote',
+    'pre',
+    'hr',
+    'figure',
+    'header',
+    'footer',
+    'nav',
+    'umfrage-matrix'
+  ]);
+
+  const isBlockHtml = (value) => {
+    const trimmed = (value || '').trim();
+    if (!trimmed) return false;
+    const match = trimmed.match(/^<\s*([a-z0-9-]+)/i);
+    if (!match) return false;
+    return BLOCK_LEVEL_TAGS.has(match[1].toLowerCase());
+  };
+
+  const renderBlockHtml = (block) => {
+    const trimmed = (block || '').trim();
+    if (!trimmed) return '<p></p>';
+    return isBlockHtml(trimmed) ? trimmed : `<p>${block}</p>`;
   };
 
   const extractParagraphBlocks = (html) => {
@@ -1319,14 +1649,14 @@
   };
 
   const blocksToHtml = (blocks) =>
-    blocks.map((block) => `<p>${block}</p>`).join('\n');
+    blocks.map((block) => renderBlockHtml(block)).join('\n');
 
   const renderVisualPreviewFromBlocks = (blocks) => {
     if (!visualPreviewEl) return;
     const html = blocks
       .map(
         (block, idx) =>
-          `<div class="visual-block" data-abu-idx="${idx}"><p>${block}</p></div>`
+          `<div class="visual-block" data-abu-idx="${idx}">${renderBlockHtml(block)}</div>`
       )
       .join('\n');
     visualPreviewEl.innerHTML = html;
@@ -1367,16 +1697,6 @@
     const next = [...visualBlocks];
     next[index] = normalizeBlockContent(value);
     visualBlocks = next;
-    commitVisualBlocks();
-  };
-
-  const insertVisualBlockAt = (index, value) => {
-    const next = [...visualBlocks];
-    next.splice(index, 0, normalizeBlockContent(value));
-    visualBlocks = next;
-    const nextViews = [...visualBlockViews];
-    nextViews.splice(index, 0, 'html');
-    visualBlockViews = normalizeVisualBlockViews(nextViews, next.length);
     commitVisualBlocks();
   };
 
@@ -1440,6 +1760,7 @@
     moveVisualBlock(from, index);
     dragIndex = null;
     dragOverIndex = null;
+    blockInsertIndex = null;
   };
 
   const handleBlockDragEnd = () => {
@@ -1453,20 +1774,755 @@
     visualBlockViews = normalizeVisualBlockViews(next, visualBlocks.length);
   };
 
-  const insertVisualBlock = (variant = 'gap') => {
+  const buildLueckeSnippet = (variant = 'gap') => {
     const index = getNextLueckeIndex();
     const tag = variant === 'wide' ? 'luecke-gap-wide' : 'luecke-gap';
-    const snippet = `<${tag} name="luecke${index}">Antwort</${tag}>`;
-    insertVisualBlockAt(visualBlocks.length, snippet);
+    return `<${tag} name="luecke${index}">Antwort</${tag}>`;
   };
 
-  const insertVisualParagraph = () => {
-    insertVisualBlockAt(visualBlocks.length, 'Neuer Block');
+  const buildUmfrageSnippet = () => {
+    const index = getNextUmfrageIndex();
+    return `<umfrage-matrix name="umfrage${index}" scale="1 trifft gar nicht zu;2 trifft eher nicht zu;3 teils/teils;4 trifft eher zu;5 trifft voll und ganz zu">
+  Aussage 1
+  Aussage 2
+  Aussage 3
+</umfrage-matrix>`;
   };
 
-  $: if (activeTab === 'editor' && editorView === 'visual' && visualPreviewEl) {
+  const BLOCK_TEMPLATES = [
+    {
+      id: 'text',
+      label: 'Textblock',
+      meta: 'Visuell bearbeiten',
+      view: 'visual',
+      getHtml: () => ''
+    },
+    {
+      id: 'html',
+      label: 'HTML-Block',
+      meta: 'Quelltext',
+      view: 'html',
+      getHtml: () => ''
+    },
+    {
+      id: 'umfrage',
+      label: 'Antwortmatrix',
+      meta: 'Skalenumfrage',
+      view: 'visual',
+      getHtml: buildUmfrageSnippet
+    }
+  ];
+
+  const extractQuotedText = (value = '') => {
+    const match = value.match(/"([^"]+)"|'([^']+)'/);
+    return match ? (match[1] || match[2]).trim() : '';
+  };
+
+  const normalizePrompt = (value = '') =>
+    value
+      .toLowerCase()
+      .replace(/\u00e4/g, 'ae')
+      .replace(/\u00f6/g, 'oe')
+      .replace(/\u00fc/g, 'ue')
+      .replace(/\u00df/g, 'ss');
+
+  const extractPromptPayload = (value = '') => {
+    const quoted = extractQuotedText(value);
+    if (quoted) return quoted;
+    const parts = value.split(':');
+    if (parts.length > 1) return parts.slice(1).join(':').trim();
+    const lower = value.toLowerCase();
+    const mitIndex = lower.indexOf(' mit ');
+    if (mitIndex !== -1) return value.slice(mitIndex + 5).trim();
+    return '';
+  };
+
+  const extractListItems = (value = '') => {
+    const raw = (value || '').trim();
+    if (!raw) return [];
+    const parts = raw
+      .split(/[\n;,|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return parts.length ? parts : [];
+  };
+
+  const parseTableSize = (value = '') => {
+    const lower = value.toLowerCase();
+    let cols = 3;
+    let rows = 3;
+    const sizeMatch = lower.match(/(\d+)\s*[x\u00d7]\s*(\d+)/);
+    if (sizeMatch) {
+      cols = parseInt(sizeMatch[1], 10);
+      rows = parseInt(sizeMatch[2], 10);
+    } else {
+      const colMatch = lower.match(/(\d+)\s*(spalte|spalten|columns?)/);
+      const rowMatch = lower.match(/(\d+)\s*(zeile|zeilen|rows?)/);
+      if (colMatch) cols = parseInt(colMatch[1], 10);
+      if (rowMatch) rows = parseInt(rowMatch[1], 10);
+    }
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    return {
+      cols: clamp(Number.isFinite(cols) ? cols : 3, 2, 6),
+      rows: clamp(Number.isFinite(rows) ? rows : 3, 2, 8)
+    };
+  };
+
+  const extractUrl = (value = '') => {
+    const match = value.match(/https?:\/\/[^\s)]+/i);
+    return match ? match[0] : '';
+  };
+
+  const buildAgentSnippet = (prompt, context) => {
+    const trimmed = (prompt || '').trim();
+    if (!trimmed) return null;
+    const lower = normalizePrompt(trimmed);
+    const payload = extractPromptPayload(trimmed);
+
+    if (lower.includes('luecke') || lower.includes('gap')) {
+      const variant = lower.includes('breit') || lower.includes('wide') ? 'wide' : 'gap';
+      return {
+        html: buildLueckeSnippet(variant),
+        blockLevel: false,
+        label: 'Luecke',
+        view: 'visual'
+      };
+    }
+
+    if (lower.includes('umfrage') || lower.includes('survey') || lower.includes('likert')) {
+      return {
+        html: buildUmfrageSnippet(),
+        blockLevel: true,
+        label: 'Umfrage',
+        view: 'visual'
+      };
+    }
+
+    if (
+      lower.includes('ueberschrift') ||
+      lower.includes('headline') ||
+      lower.includes('titel') ||
+      /\bh[1-6]\b/.test(lower)
+    ) {
+      const match = lower.match(/\bh([1-6])\b/);
+      const level = match ? parseInt(match[1], 10) : lower.includes('titel') ? 1 : 2;
+      const text = payload || 'Ueberschrift';
+      return {
+        html: `<h${level}>${escapeHtml(text)}</h${level}>`,
+        blockLevel: true,
+        label: 'Ueberschrift',
+        view: 'visual'
+      };
+    }
+
+    if (
+      lower.includes('liste') ||
+      lower.includes('aufzaehl') ||
+      lower.includes('bullet') ||
+      lower.includes('ul') ||
+      lower.includes('ol')
+    ) {
+      const ordered = lower.includes('nummer') || lower.includes('ol') || lower.includes('geordnet');
+      const listSource =
+        payload ||
+        trimmed.replace(/^(liste|aufzaehlung|aufzaehl|bullet|ul|ol)\b\s*:?\s*/i, '');
+      const items = extractListItems(listSource);
+      const listItems = items.length ? items : ordered ? ['Erstens', 'Zweitens', 'Drittens'] : ['Punkt 1', 'Punkt 2', 'Punkt 3'];
+      const tag = ordered ? 'ol' : 'ul';
+      return {
+        html: `<${tag}>${listItems.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</${tag}>`,
+        blockLevel: true,
+        label: 'Liste',
+        view: 'html'
+      };
+    }
+
+    if (lower.includes('tabelle') || lower.includes('table')) {
+      const { cols, rows } = parseTableSize(lower);
+      const headers = Array.from({ length: cols }, (_, idx) => `Spalte ${idx + 1}`);
+      const bodyRows = Array.from({ length: rows }, (_, rowIdx) =>
+        `<tr>${headers.map((_, colIdx) => `<td>Zeile ${rowIdx + 1}.${colIdx + 1}</td>`).join('')}</tr>`
+      ).join('');
+      return {
+        html: `<table><thead><tr>${headers
+          .map((header) => `<th>${escapeHtml(header)}</th>`)
+          .join('')}</tr></thead><tbody>${bodyRows}</tbody></table>`,
+        blockLevel: true,
+        label: 'Tabelle',
+        view: 'html'
+      };
+    }
+
+    if (lower.includes('bild') || lower.includes('image') || lower.includes('img')) {
+      const alt = payload || 'Bild';
+      return {
+        html: `<figure><img src="https://placehold.co/600x400" alt="${escapeHtml(
+          alt
+        )}" /><figcaption>${escapeHtml(alt)}</figcaption></figure>`,
+        blockLevel: true,
+        label: 'Bild',
+        view: 'html'
+      };
+    }
+
+    if (lower.includes('link')) {
+      const url = extractUrl(trimmed);
+      const linkText = payload || (url ? url.replace(/^https?:\/\//, '') : 'Link');
+      const href = url && /^https?:\/\//i.test(url) ? url : '#';
+      return {
+        html: `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(
+          linkText
+        )}</a>`,
+        blockLevel: false,
+        label: 'Link',
+        view: 'visual'
+      };
+    }
+
+    if (lower.includes('button') || lower.includes('knopf')) {
+      const text = payload || 'Button';
+      return {
+        html: `<button type="button">${escapeHtml(text)}</button>`,
+        blockLevel: false,
+        label: 'Button',
+        view: 'visual'
+      };
+    }
+
+    if (lower.includes('checkbox')) {
+      const text = payload || 'Option';
+      return {
+        html: `<label><input type="checkbox" /> ${escapeHtml(text)}</label>`,
+        blockLevel: false,
+        label: 'Checkbox',
+        view: 'visual'
+      };
+    }
+
+    if (lower.includes('radio')) {
+      const optionSource =
+        payload || trimmed.replace(/^(radio)\b\s*:?\s*/i, '');
+      const options = extractListItems(optionSource).length
+        ? extractListItems(optionSource)
+        : ['Option 1', 'Option 2'];
+      const name = `auswahl-${Math.random().toString(36).slice(2, 8)}`;
+      return {
+        html: options
+          .map(
+            (option) =>
+              `<label><input type="radio" name="${name}" /> ${escapeHtml(option)}</label>`
+          )
+          .join('<br />'),
+        blockLevel: false,
+        label: 'Radio',
+        view: 'html'
+      };
+    }
+
+    if (
+      lower.includes('select') ||
+      lower.includes('dropdown') ||
+      lower.includes('auswahl')
+    ) {
+      const optionSource =
+        payload || trimmed.replace(/^(select|dropdown|auswahl)\b\s*:?\s*/i, '');
+      const options = extractListItems(optionSource).length
+        ? extractListItems(optionSource)
+        : ['Option 1', 'Option 2', 'Option 3'];
+      return {
+        html: `<select>${options
+          .map((option) => `<option>${escapeHtml(option)}</option>`)
+          .join('')}</select>`,
+        blockLevel: false,
+        label: 'Auswahl',
+        view: 'visual'
+      };
+    }
+
+    if (lower.includes('eingabe') || lower.includes('input') || lower.includes('textfeld')) {
+      const placeholder = payload || 'Eingabe';
+      return {
+        html: `<input type="text" placeholder="${escapeHtml(placeholder)}" />`,
+        blockLevel: false,
+        label: 'Eingabe',
+        view: 'visual'
+      };
+    }
+
+    if (lower.includes('trennlinie') || lower.includes('hr') || lower.includes('linie')) {
+      return {
+        html: '<hr />',
+        blockLevel: true,
+        label: 'Trennlinie',
+        view: 'html'
+      };
+    }
+
+    if (lower.includes('zitat') || lower.includes('quote')) {
+      const text = payload || 'Zitat';
+      return {
+        html: `<blockquote>${escapeHtml(text)}</blockquote>`,
+        blockLevel: true,
+        label: 'Zitat',
+        view: 'html'
+      };
+    }
+
+    if (lower.includes('code') || lower.includes('snippet')) {
+      const text = payload || 'Code';
+      return {
+        html: `<pre><code>${escapeHtml(text)}</code></pre>`,
+        blockLevel: true,
+        label: 'Code',
+        view: 'html'
+      };
+    }
+
+    const fallbackText = payload || trimmed;
+    if (context === 'html') {
+      return {
+        html: `<p>${escapeHtml(fallbackText)}</p>`,
+        blockLevel: true,
+        label: 'Text',
+        view: 'html'
+      };
+    }
+    return {
+      html: escapeHtml(fallbackText),
+      blockLevel: false,
+      label: 'Text',
+      view: 'visual'
+    };
+  };
+
+  const insertHtmlAtCursor = async (html) => {
+    const textarea = sheetHtmlInput;
+    const value = editorContent || '';
+    const hasFocus =
+      textarea && typeof document !== 'undefined' && document.activeElement === textarea;
+    const start =
+      hasFocus && Number.isFinite(textarea?.selectionStart)
+        ? textarea.selectionStart
+        : value.length;
+    const end =
+      hasFocus && Number.isFinite(textarea?.selectionEnd) ? textarea.selectionEnd : start;
+    const nextValue = value.slice(0, start) + html + value.slice(end);
+    editorContent = nextValue;
+    await tick();
+    if (textarea) {
+      const cursor = start + html.length;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    }
+  };
+
+  const appendVisualBlock = async (html, view = 'visual') => {
+    const normalized = normalizeBlockContent(html);
+    const nextBlocks = [...visualBlocks, normalized];
+    visualBlocks = nextBlocks;
+    const nextViews = [...visualBlockViews, view];
+    visualBlockViews = normalizeVisualBlockViews(nextViews, nextBlocks.length);
+    commitVisualBlocks();
+    await tick();
+    visualActiveBlock = Math.max(0, nextBlocks.length - 1);
+    const target =
+      view === 'visual'
+        ? visualBlockEditors[visualActiveBlock]
+        : visualBlockHtmlInputs[visualActiveBlock];
+    target?.focus?.();
+  };
+
+  const insertVisualBlockAt = async (index, html = '', view = 'visual') => {
+    const normalized = normalizeBlockContent(html);
+    const nextBlocks = [...visualBlocks];
+    const clampedIndex = Math.max(0, Math.min(index, nextBlocks.length));
+    nextBlocks.splice(clampedIndex, 0, normalized);
+    visualBlocks = nextBlocks;
+    const nextViews = [...visualBlockViews];
+    nextViews.splice(clampedIndex, 0, view);
+    visualBlockViews = normalizeVisualBlockViews(nextViews, nextBlocks.length);
+    commitVisualBlocks();
+    await tick();
+    visualActiveBlock = clampedIndex;
+    const target =
+      view === 'visual'
+        ? visualBlockEditors[clampedIndex]
+        : visualBlockHtmlInputs[clampedIndex];
+    target?.focus?.();
+  };
+
+  const toggleBlockInsert = (index) => {
+    blockInsertIndex = blockInsertIndex === index ? null : index;
+  };
+
+  const insertBlockTemplateAt = async (index, template) => {
+    blockInsertIndex = null;
+    const html = template?.getHtml ? template.getHtml() : '';
+    const view = template?.view || 'visual';
+    await insertVisualBlockAt(index, html, view);
+  };
+
+  const recordAgentHistory = async ({ prompt, message, status }) => {
+    const trimmedPrompt = (prompt || '').trim();
+    const response = message || status || '';
+    if (!trimmedPrompt || !response) return;
+    agentHistory = [
+      ...agentHistory,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        prompt: trimmedPrompt,
+        message: message || '',
+        status: status || ''
+      }
+    ];
+    await tick();
+    if (agentHistoryEl) {
+      agentHistoryEl.scrollTop = agentHistoryEl.scrollHeight;
+    }
+  };
+
+  const buildAgentContext = (context) => {
+    const payload = {
+      html: editorContent ?? '',
+      view: context
+    };
+    if (context === 'visual') {
+      payload.activeBlockIndex = visualActiveBlock;
+      payload.activeBlockHtml = visualBlocks[visualActiveBlock] ?? '';
+      payload.blockCount = visualBlocks.length;
+    }
+    return payload;
+  };
+
+  const applyAgentInsertion = async (context, html, blockLevel = false, view = 'html') => {
+    if (context === 'html') {
+      await insertHtmlAtCursor(html);
+      return 'inline';
+    }
+
+    const targetIndex = Math.min(
+      Math.max(0, visualActiveBlock),
+      Math.max(visualBlocks.length - 1, 0)
+    );
+    const shouldAppend = !visualBlocks.length || blockLevel;
+
+    if (shouldAppend) {
+      await appendVisualBlock(html, view === 'visual' ? 'visual' : 'html');
+      return 'append';
+    }
+
+    if (visualBlockViews[targetIndex] === 'visual') {
+      insertHtmlIntoVisualBlock(targetIndex, html);
+    } else {
+      await insertHtmlSelection(targetIndex, { prefix: html, suffix: '' });
+    }
+    return 'inline';
+  };
+
+  const applyAgentPrompt = async (context) => {
+    const prompt = agentPrompt.trim();
+    agentStatus = '';
+    agentResponse = '';
+    if (!prompt) {
+      agentStatus = 'Bitte einen Prompt eingeben.';
+      return;
+    }
+    if (agentPending) {
+      return;
+    }
+    if (!apiBaseUrl) {
+      agentStatus = 'API Base URL fehlt.';
+      return;
+    }
+    if (!token) {
+      agentStatus = 'Bitte zuerst einloggen.';
+      return;
+    }
+
+    agentPending = true;
+    agentStatus = 'Agent arbeitet…';
+    const promptText = prompt;
+    const finalizeSuccess = async (status, message = '') => {
+      agentStatus = status;
+      if (message) {
+        agentResponse = message;
+      }
+      agentPrompt = '';
+      await recordAgentHistory({ prompt: promptText, message, status });
+    };
+    try {
+      const res = await apiFetch('agent', {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt,
+          context: buildAgentContext(context)
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        const status = payload?.warning || 'Agent-Aufruf fehlgeschlagen';
+        agentStatus = status;
+        await recordAgentHistory({ prompt: promptText, status });
+        return;
+      }
+
+      const result = payload?.data ?? {};
+      const action = String(result.action || '');
+      const html = typeof result.html === 'string' ? result.html : '';
+      const message = typeof result.message === 'string' ? result.message : '';
+      const blockLevel = Boolean(result.block_level ?? result.blockLevel);
+      const view = result.view === 'visual' ? 'visual' : 'html';
+
+      if (message) {
+        agentResponse = message;
+      }
+
+      if ((action === 'replace_html' || action === 'replace') && html) {
+        editorContent = html;
+        await finalizeSuccess('Uebung aktualisiert.', message);
+        return;
+      }
+
+      if (action === 'insert_html' && html) {
+        const applied = await applyAgentInsertion(context, html, blockLevel, view);
+        await finalizeSuccess(
+          applied === 'append'
+            ? 'Inhalt als neuer Block eingefuegt.'
+            : 'Inhalt eingefuegt.',
+          message
+        );
+        return;
+      }
+
+      if (!action && html) {
+        editorContent = html;
+        await finalizeSuccess('Uebung aktualisiert.', message);
+        return;
+      }
+
+      if (message) {
+        await finalizeSuccess('Antwort erhalten.', message);
+        return;
+      }
+
+      await finalizeSuccess('Keine Aenderung erhalten.', message);
+    } catch (err) {
+      const status = err?.message ?? 'Agent-Aufruf fehlgeschlagen';
+      agentStatus = status;
+      await recordAgentHistory({ prompt: promptText, status });
+    } finally {
+      agentPending = false;
+    }
+  };
+
+  const handleAgentKeydown = (event, context) => {
+    if (event?.key !== 'Enter' || agentPending) return;
+    event.preventDefault();
+    applyAgentPrompt(context);
+  };
+
+  const insertHtmlSelection = async (index, snippet, options = {}) => {
+    const textarea = visualBlockHtmlInputs[index];
+    const fallbackValue = visualBlocks[index] || '';
+    const value = textarea?.value ?? fallbackValue;
+    const start = Number.isFinite(textarea?.selectionStart) ? textarea.selectionStart : value.length;
+    const end = Number.isFinite(textarea?.selectionEnd) ? textarea.selectionEnd : start;
+    const selection = value.slice(start, end);
+    const inner = selection || options.placeholder || '';
+    const nextValue = value.slice(0, start) + snippet.prefix + inner + snippet.suffix + value.slice(end);
+    updateVisualBlock(index, nextValue);
+    await tick();
+    const nextTextarea = visualBlockHtmlInputs[index];
+    if (nextTextarea) {
+      const cursorStart = start + snippet.prefix.length;
+      const cursorEnd = cursorStart + inner.length;
+      nextTextarea.focus();
+      nextTextarea.setSelectionRange(cursorStart, cursorEnd);
+    }
+  };
+
+  const wrapHtmlSelection = (index, prefix, suffix, placeholder = '') =>
+    insertHtmlSelection(index, { prefix, suffix }, { placeholder });
+
+  const getVisualSelectionOffsets = (el) => {
+    const selection = window?.getSelection ? window.getSelection() : null;
+    if (!el || !selection || selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) return null;
+    const preRange = range.cloneRange();
+    preRange.selectNodeContents(el);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    const start = preRange.toString().length;
+    preRange.setEnd(range.endContainer, range.endOffset);
+    const end = preRange.toString().length;
+    return { start, end };
+  };
+
+  const resolveOffsetInElement = (el, offset) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+    let remaining = Math.max(0, offset || 0);
+    let lastText = null;
+    while (node) {
+      const length = node.textContent ? node.textContent.length : 0;
+      if (remaining <= length) {
+        return { node, offset: remaining };
+      }
+      remaining -= length;
+      lastText = node;
+      node = walker.nextNode();
+    }
+    if (lastText) {
+      return {
+        node: lastText,
+        offset: lastText.textContent ? lastText.textContent.length : 0
+      };
+    }
+    return { node: el, offset: el.childNodes.length };
+  };
+
+  const restoreVisualSelection = (index) => {
+    const el = visualBlockEditors[index];
+    if (!el) return null;
+    const selection = window?.getSelection ? window.getSelection() : null;
+    if (!selection) return null;
+    const offsets = visualBlockSelections[index];
+    let range = null;
+    if (offsets && typeof offsets.start === 'number' && typeof offsets.end === 'number') {
+      const start = resolveOffsetInElement(el, offsets.start);
+      const end = resolveOffsetInElement(el, offsets.end);
+      range = document.createRange();
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+    }
+    if (!range) {
+      range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+    }
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return range;
+  };
+
+  const captureVisualSelection = (index) => {
+    const el = visualBlockEditors[index];
+    const offsets = getVisualSelectionOffsets(el);
+    if (!offsets) return;
+    visualBlockSelections[index] = offsets;
+  };
+
+  const handleVisualInput = async (index, event) => {
+    const el = event?.currentTarget;
+    if (!el) return;
+    captureVisualSelection(index);
+    updateVisualBlock(index, el.innerHTML);
+    await tick();
+    if (visualBlockViews[index] === 'visual' && visualActiveBlock === index) {
+      restoreVisualSelection(index);
+    }
+  };
+
+  const insertHtmlIntoVisualBlock = (index, html) => {
+    const el = visualBlockEditors[index];
+    if (!el) return;
+    el.focus();
+    const range = restoreVisualSelection(index);
+    if (!range) return;
+    const fragment = range.createContextualFragment(html);
+    range.deleteContents();
+    range.insertNode(fragment);
+    range.collapse(false);
+    const selection = window?.getSelection ? window.getSelection() : null;
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    updateVisualBlock(index, el.innerHTML);
+    captureVisualSelection(index);
+  };
+
+  const wrapVisualSelection = (index, prefix, suffix, placeholder = '') => {
+    const el = visualBlockEditors[index];
+    if (!el) return;
+    el.focus();
+    const range = restoreVisualSelection(index);
+    if (!range) return;
+    const container = document.createElement('div');
+    container.appendChild(range.cloneContents());
+    const inner = container.innerHTML || placeholder || '';
+    const html = `${prefix}${inner}${suffix}`;
+    insertHtmlIntoVisualBlock(index, html);
+  };
+
+  const applyVisualCommand = (index, command) => {
+    const el = visualBlockEditors[index];
+    if (!el) return;
+    el.focus();
+    restoreVisualSelection(index);
+    if (document?.execCommand) {
+      document.execCommand(command, false, null);
+    }
+    updateVisualBlock(index, el.innerHTML);
+    captureVisualSelection(index);
+  };
+
+  const applyInlineFormat = (index, format) => {
+    if (visualBlockViews[index] === 'visual') {
+      if (format === 'bold') return applyVisualCommand(index, 'bold');
+      if (format === 'italic') return applyVisualCommand(index, 'italic');
+      if (format === 'underline') return applyVisualCommand(index, 'underline');
+      return;
+    }
+    if (format === 'bold') return wrapHtmlSelection(index, '<strong>', '</strong>');
+    if (format === 'italic') return wrapHtmlSelection(index, '<em>', '</em>');
+    if (format === 'underline') return wrapHtmlSelection(index, '<u>', '</u>');
+  };
+
+  const applyBlockFontSize = (index, event) => {
+    const value = event?.currentTarget?.value || '';
+    if (!value) return;
+    if (visualBlockViews[index] === 'visual') {
+      wrapVisualSelection(index, `<span style="font-size: ${value};">`, '</span>', 'Text');
+    } else {
+      wrapHtmlSelection(index, `<span style="font-size: ${value};">`, '</span>');
+    }
+    event.currentTarget.value = '';
+  };
+
+  const applyBlockFontFamily = (index, event) => {
+    const value = event?.currentTarget?.value || '';
+    if (!value) return;
+    if (visualBlockViews[index] === 'visual') {
+      wrapVisualSelection(index, `<span style="font-family: ${value};">`, '</span>', 'Text');
+    } else {
+      wrapHtmlSelection(index, `<span style="font-family: ${value};">`, '</span>');
+    }
+    event.currentTarget.value = '';
+  };
+
+  const insertSnippetIntoBlock = (index, variant = 'gap') => {
+    const snippet = buildLueckeSnippet(variant);
+    if (visualBlockViews[index] === 'visual') {
+      return insertHtmlIntoVisualBlock(index, snippet);
+    }
+    return insertHtmlSelection(index, { prefix: snippet, suffix: '' });
+  };
+
+  const insertUmfrageBlockAt = (index) => {
+    const snippet = buildUmfrageSnippet();
+    const current = (visualBlocks[index] || '').trim();
+    if (!current) {
+      updateVisualBlock(index, snippet);
+      setVisualBlockView(index, 'visual');
+      return;
+    }
+    insertVisualBlockAt(index + 1, snippet, 'visual');
+  };
+
+  $: if (activeTab === 'editor' && editorView === 'visual') {
     editorContent;
-    if (editorContent !== visualSyncHtml) {
+    if (editorContent !== visualSyncHtml || visualBlocks.length === 0) {
       syncVisualPreviewFromHtml();
     }
   }
@@ -1480,12 +2536,18 @@
   $: if (activeTab === 'editor' && editorView === 'answers' && answersEl && apiBaseUrl) {
     editorContent;
     selectedKey;
+    answersClassId;
     scheduleAnswersRefresh();
   }
 
-  $: if ((activeTab !== 'editor' || editorView !== 'preview') && previewRuntime) {
-    previewRuntime.destroy();
-    previewRuntime = null;
+  $: if (
+    (activeTab !== 'editor' || editorView !== 'preview') &&
+    (previewLueckeRuntime || previewUmfrageRuntime)
+  ) {
+    previewLueckeRuntime?.destroy();
+    previewUmfrageRuntime?.destroy();
+    previewLueckeRuntime = null;
+    previewUmfrageRuntime = null;
     previewUser = '';
   }
 
@@ -1497,17 +2559,26 @@
 
     if (!previewEl || !apiBaseUrl || activeTab !== 'editor' || editorView !== 'preview') return;
     ensureLueckeElements();
+    ensureUmfrageElements();
 
     const nextUser = `preview:${selectedKey || 'draft'}`;
-    previewRuntime?.destroy();
-    previewRuntime = createLueckeRuntime({
+    previewLueckeRuntime?.destroy();
+    previewUmfrageRuntime?.destroy();
+    previewLueckeRuntime = createLueckeRuntime({
+      root: previewEl,
+      apiBaseUrl,
+      sheetKey: selectedKey || 'draft',
+      user: nextUser
+    });
+    previewUmfrageRuntime = createUmfrageRuntime({
       root: previewEl,
       apiBaseUrl,
       sheetKey: selectedKey || 'draft',
       user: nextUser
     });
     previewUser = nextUser;
-    await previewRuntime.refresh();
+    await previewLueckeRuntime.refresh();
+    await previewUmfrageRuntime.refresh();
   };
 
   const escapeHtml = (str = '') =>
@@ -1517,6 +2588,34 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+
+  const formatVersionDate = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString('de-CH', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const formatVersionLabel = (version) => {
+    if (!version) return '';
+    const state = Number(version.is_current) === 1 ? 'Aktuell' : 'Version';
+    const stamp = formatVersionDate(version.updated_at || version.created_at);
+    const id = version?.id ? `#${version.id}` : '';
+    return [state, stamp, id].filter(Boolean).join(' · ');
+  };
+
+  const describeVersion = (version) => {
+    if (!version) return 'Version';
+    const stamp = formatVersionDate(version.updated_at || version.created_at);
+    const id = version?.id ? `#${version.id}` : '';
+    return [stamp, id].filter(Boolean).join(' · ') || 'Version';
+  };
 
   const minutesAgo = (dateString) => {
     const d = new Date(dateString);
@@ -1633,7 +2732,7 @@
     });
   };
 
-  const fetchAnswers = async (key) => {
+  const fetchAnswers = async (key, classId = null) => {
     if (!key) {
       answersError = 'Kein Sheet-Key vorhanden.';
       answers = [];
@@ -1644,7 +2743,11 @@
     answersError = '';
     answersMeta = '';
     try {
-      const res = await apiFetch(`answer?sheet=${encodeURIComponent(key)}`);
+      const params = new URLSearchParams({ sheet: key });
+      if (classId) {
+        params.set('classroom', String(classId));
+      }
+      const res = await apiFetch(`answer?${params.toString()}`);
       const payload = await readPayload(res);
       if (!res.ok) {
         answersError = payload?.warning || 'Antworten konnten nicht geladen werden';
@@ -1652,8 +2755,10 @@
         return;
       }
       answers = payload?.data?.answer ?? [];
-      answersMeta = `Antworten geladen (${answers.length} Eintraege)`;
+      const classLabel = getAnswersClassLabel(classId);
+      answersMeta = `Sheet: ${key} · ${classLabel} · Antworten geladen (${answers.length} Eintraege)`;
       answersKey = key;
+      answersClassKey = classId;
     } catch (err) {
       answersError = err?.message ?? 'Antworten konnten nicht geladen werden';
       answers = [];
@@ -1667,7 +2772,7 @@
       answersError = 'Kein Sheet-Key vorhanden.';
       return;
     }
-    await fetchAnswers(selectedKey);
+    await fetchAnswers(selectedKey, answersClassId);
     await tick();
     if (answersEl && activeTab === 'editor' && editorView === 'answers') {
       transformGaps(answersEl);
@@ -1712,15 +2817,17 @@
       answers = [];
       answersMeta = '';
       answersKey = '';
+      answersClassKey = null;
       answersLoading = false;
       return;
     }
 
-    const shouldFetch = selectedKey && selectedKey !== answersKey;
+    const shouldFetch =
+      selectedKey && (selectedKey !== answersKey || answersClassId !== answersClassKey);
     if (shouldFetch) {
-      await fetchAnswers(selectedKey);
+      await fetchAnswers(selectedKey, answersClassId);
     } else if (!answers.length && !answersLoading && !answersError && selectedKey) {
-      await fetchAnswers(selectedKey);
+      await fetchAnswers(selectedKey, answersClassId);
     }
 
     if (editorContent !== answersContent || shouldFetch) {
@@ -1736,14 +2843,32 @@
 
   const setPlanStatus = async (sheetKey, status) => {
     if (!selectedPlanClassId || !sheetKey) return;
+    const existing = planAssignmentMap.get(sheetKey);
+    if (!status && !existing?.id) {
+      if (planStatusDraft[sheetKey] !== undefined) {
+        const { [sheetKey]: _, ...rest } = planStatusDraft;
+        planStatusDraft = rest;
+      }
+      return;
+    }
+    if (!status) {
+      const label = sheetKey ? `Zuordnung "${sheetKey}"` : 'Zuordnung';
+      if (!confirmDelete(label)) {
+        if (planStatusDraft[sheetKey] !== undefined) {
+          const { [sheetKey]: _, ...rest } = planStatusDraft;
+          planStatusDraft = rest;
+        }
+        return;
+      }
+    }
+    planStatusDraft = { ...planStatusDraft, [sheetKey]: status };
     planSaving = true;
     planError = '';
-    const existing = planAssignmentMap.get(sheetKey);
+    const existingForm = existing?.assignment_form ?? planFormDraft[sheetKey] ?? 'personal';
+    let saved = false;
     try {
       if (!status) {
         if (!existing?.id) return;
-        const label = sheetKey ? `Zuordnung "${sheetKey}"` : 'Zuordnung';
-        if (!confirmDelete(label)) return;
         const res = await apiFetch('plan', {
           method: 'DELETE',
           body: JSON.stringify({ id: existing.id })
@@ -1754,6 +2879,7 @@
           return;
         }
         planAssignments = planAssignments.filter((entry) => entry.id !== existing.id);
+        saved = true;
         return;
       }
 
@@ -1770,6 +2896,7 @@
         planAssignments = planAssignments.map((entry) =>
           entry.id === existing.id ? { ...entry, status } : entry
         );
+        saved = true;
         return;
       }
 
@@ -1778,7 +2905,8 @@
         body: JSON.stringify({
           classroom: selectedPlanClassId,
           sheet_key: sheetKey,
-          status
+          status,
+          assignment_form: existingForm
         })
       });
       const payload = await readPayload(res);
@@ -1790,16 +2918,73 @@
       if (newId) {
         planAssignments = [
           ...planAssignments,
-          { id: newId, classroom: selectedPlanClassId, sheet_key: sheetKey, status }
+          {
+            id: newId,
+            classroom: selectedPlanClassId,
+            sheet_key: sheetKey,
+            status,
+            assignment_form: existingForm
+          }
         ];
+        saved = true;
+        if (planFormDraft[sheetKey]) {
+          const { [sheetKey]: _, ...rest } = planFormDraft;
+          planFormDraft = rest;
+        }
       } else {
         await fetchPlanAssignments(selectedPlanClassId);
+        saved = true;
       }
     } catch (err) {
       planError = err?.message ?? 'Zuordnung fehlgeschlagen';
     } finally {
       planSaving = false;
+      if (saved || planError) {
+        if (planStatusDraft[sheetKey] !== undefined) {
+          const { [sheetKey]: _, ...rest } = planStatusDraft;
+          planStatusDraft = rest;
+        }
+      }
     }
+  };
+
+  const setPlanForm = async (sheetKey, form) => {
+    if (!selectedPlanClassId || !sheetKey) return;
+    planSaving = true;
+    planError = '';
+    const existing = planAssignmentMap.get(sheetKey);
+    if (!existing?.id) {
+      planSaving = false;
+      return;
+    }
+    try {
+      const res = await apiFetch('plan', {
+        method: 'PATCH',
+        body: JSON.stringify({ id: existing.id, assignment_form: form })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        planError = payload?.warning || 'Zuordnungsform konnte nicht gespeichert werden';
+        return;
+      }
+      planAssignments = planAssignments.map((entry) =>
+        entry.id === existing.id ? { ...entry, assignment_form: form } : entry
+      );
+    } catch (err) {
+      planError = err?.message ?? 'Zuordnungsform konnte nicht gespeichert werden';
+    } finally {
+      planSaving = false;
+    }
+  };
+
+  const handlePlanFormChange = async (sheetKey, form) => {
+    if (!sheetKey) return;
+    const existing = planAssignmentMap.get(sheetKey);
+    if (existing?.id) {
+      await setPlanForm(sheetKey, form);
+      return;
+    }
+    planFormDraft = { ...planFormDraft, [sheetKey]: form };
   };
 
   function stripHtml(input) {
@@ -1937,23 +3122,15 @@
         <button
           class="ci-tab"
           class:selected={activeTab === 'editor'}
-          on:click={() => (activeTab = 'editor')}
+          on:click={() => switchTab('editor')}
           type="button"
         >
           Inhalt
         </button>
         <button
           class="ci-tab"
-          class:selected={activeTab === 'plan'}
-          on:click={openPlanTab}
-          type="button"
-        >
-          Zuweisen
-        </button>
-        <button
-          class="ci-tab"
           class:selected={activeTab === 'classes'}
-          on:click={() => (activeTab = 'classes')}
+          on:click={() => switchTab('classes')}
           type="button"
         >
           Klassen
@@ -1961,16 +3138,66 @@
         <button
           class="ci-tab"
           class:selected={activeTab === 'schools'}
-          on:click={() => (activeTab = 'schools')}
+          on:click={() => switchTab('schools')}
           type="button"
         >
           Schulen
         </button>
       </div>
+      <div class="topbar-menu" data-open={showTopbarMenu} bind:this={topbarMenuEl}>
+        <button
+          class="ghost ci-btn-outline topbar-menu-btn"
+          type="button"
+          aria-label="Navigation"
+          aria-expanded={showTopbarMenu}
+          aria-controls="topbar-menu-panel"
+          on:click={() => (showTopbarMenu = !showTopbarMenu)}
+        >
+          <span class="topbar-menu-icon" aria-hidden="true"></span>
+        </button>
+        <div
+          id="topbar-menu-panel"
+          class="topbar-menu-panel"
+          class:is-open={showTopbarMenu}
+          role="menu"
+          hidden={!showTopbarMenu}
+        >
+          <button
+            class="topbar-menu-item"
+            class:is-active={activeTab === 'editor'}
+            role="menuitemradio"
+            aria-checked={activeTab === 'editor'}
+            type="button"
+            on:click={() => selectTopbarTab('editor')}
+          >
+            Inhalt
+          </button>
+          <button
+            class="topbar-menu-item"
+            class:is-active={activeTab === 'classes'}
+            role="menuitemradio"
+            aria-checked={activeTab === 'classes'}
+            type="button"
+            on:click={() => selectTopbarTab('classes')}
+          >
+            Klassen
+          </button>
+          <button
+            class="topbar-menu-item"
+            class:is-active={activeTab === 'schools'}
+            role="menuitemradio"
+            aria-checked={activeTab === 'schools'}
+            type="button"
+            on:click={() => selectTopbarTab('schools')}
+          >
+            Schulen
+          </button>
+        </div>
+      </div>
     {/if}
     <div class="status">
       {#if token}
-        <div>
+        <div class="status-user">
           <p class="label">Angemeldet</p>
           <p class="value">{userEmail || 'User'}</p>
         </div>
@@ -2149,220 +3376,415 @@
           <p class:success={saveState === 'Gespeichert'} class="hint">{saveState}</p>
         {/if}
         <div class="editor-body">
-          {#if editorView === 'html'}
+          {#if editorView === 'html' || editorView === 'visual'}
             <div class="fields">
-              <label>
-                <span>Name</span>
-                <input type="text" bind:value={editorName} placeholder="Name" />
-              </label>
-              <div class="code-editor" aria-label="Sheet HTML Editor">
-                <pre class="code-highlight" aria-hidden="true" bind:this={sheetHtmlHighlight}>{#each sheetHtmlTokens as token}<span class={`token token-${token.type}`}>{token.value}</span>{/each}</pre>
-                <textarea
-                  class="code-input code-input--overlay"
-                  bind:value={editorContent}
-                  bind:this={sheetHtmlInput}
-                  spellcheck="false"
-                  aria-label="Sheet HTML"
-                  on:scroll={() => syncCodeScroll(sheetHtmlInput, sheetHtmlHighlight)}
-                ></textarea>
-              </div>
-            </div>
-          {:else if editorView === 'visual'}
-            <div class="fields">
-              <label>
-                <span>Name</span>
-                <input type="text" bind:value={editorName} placeholder="Name" />
-              </label>
-              <div class="visual-layout">
-                <div class="visual-edit-panel">
-                  <div class="visual-edit-header">
-                    <div class="list-title">Bloecke bearbeiten</div>
-                    <div class="hint">{visualBlocks.length} Bloecke</div>
-                  </div>
-                  <div class="visual-toolbar">
-                    <button class="ghost ci-btn-outline" type="button" on:click={insertVisualParagraph}>
-                      + Block
-                    </button>
-                    <button
-                      class="ghost ci-btn-outline"
-                      type="button"
-                      on:click={() => insertVisualBlock('gap')}
-                    >
-                      + Luecke
-                    </button>
-                    <button
-                      class="ghost ci-btn-outline"
-                      type="button"
-                      on:click={() => insertVisualBlock('wide')}
-                    >
-                      + Luecke breit
-                    </button>
-                    <button class="ghost ci-btn-outline" type="button" on:click={syncVisualPreviewFromHtml}>
-                      HTML neu laden
-                    </button>
-                  </div>
-                  <div class="block-editors">
-                    {#if dragIndex !== null}
-                      <div
-                        class="block-insert-row"
-                        class:drag-over={dragOverIndex === 0}
-                        on:dragover={(event) => handleInsertDragOver(event, 0)}
-                        on:drop={(event) => handleInsertDrop(event, 0)}
+              <div class="editor-meta">
+                <div class="editor-meta-row">
+                  <label class="editor-meta-name">
+                    <span>Name</span>
+                    <input type="text" bind:value={editorName} placeholder="Name" />
+                  </label>
+                  <div class="editor-version">
+                    <label class="editor-version-select">
+                      <span>Versionen</span>
+                      <select
+                        bind:value={selectedVersionId}
+                        disabled={versionsLoading || sheetVersions.length === 0}
+                        on:change={() => {
+                          versionState = '';
+                          versionsError = '';
+                        }}
                       >
-                        <button
-                          class="ghost ci-btn-outline block-insert-btn"
-                          type="button"
-                          on:click={() => insertVisualBlockAt(0, 'Neuer Block')}
-                          title="Block einfuegen"
-                          aria-label="Block einfuegen"
-                        >
-                          +
-                        </button>
-                      </div>
-                    {/if}
-                    {#each visualBlocks as block, idx}
-                      <div
-                        class="block-editor"
-                        draggable="true"
-                        on:dragstart={(event) => handleBlockDragStart(event, idx)}
-                        on:dragend={handleBlockDragEnd}
-                      >
-                        <div class="block-editor__header" draggable="true">
-                          <div class="list-title" draggable="true">
-                            {visualBlockViews[idx] === 'visual' ? 'Visuell' : 'HTML'}
-                          </div>
-                          <div class="block-editor__actions">
-                            <div class="block-view-toggle">
-                              <button
-                                class="ghost ci-btn-outline"
-                                class:active={visualBlockViews[idx] === 'html'}
-                                type="button"
-                                on:click={() => setVisualBlockView(idx, 'html')}
-                                title="HTML-Ansicht"
-                                aria-label="HTML-Ansicht"
-                              >
-                                <svg
-                                  class="toggle-icon"
-                                  viewBox="0 0 24 24"
-                                  aria-hidden="true"
-                                  focusable="false"
-                                >
-                                  <path
-                                    d="M8 9l-4 3 4 3M16 9l4 3-4 3"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="1.8"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                  />
-                                </svg>
-                              </button>
-                              <button
-                                class="ghost ci-btn-outline"
-                                class:active={visualBlockViews[idx] === 'visual'}
-                                type="button"
-                                on:click={() => setVisualBlockView(idx, 'visual')}
-                                title="Visuelle Ansicht"
-                                aria-label="Visuelle Ansicht"
-                              >
-                                <svg
-                                  class="toggle-icon"
-                                  viewBox="0 0 24 24"
-                                  aria-hidden="true"
-                                  focusable="false"
-                                >
-                                  <path
-                                    d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="1.8"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                  />
-                                  <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-                                </svg>
-                              </button>
-                            </div>
-                            <button
-                              class="ghost ci-btn-outline"
-                              type="button"
-                              on:click={() =>
-                                confirmDelete('Block') && deleteVisualBlockAt(idx)}
-                            >
-                              Loeschen
-                            </button>
-                          </div>
-                        </div>
-                        {#if visualBlockViews[idx] === 'visual'}
-                          <div
-                            class="block-editor__visual"
-                            contenteditable="true"
-                            spellcheck="false"
-                            on:input={(event) =>
-                              updateVisualBlock(idx, event.currentTarget.innerHTML)}
-                          >
-                            {@html block}
-                          </div>
-                          <p class="hint">
-                            Visuell bearbeiten. HTML wird direkt im Block angepasst.
-                          </p>
+                        {#if versionsLoading}
+                          <option value="">Lade Versionen…</option>
+                        {:else if sheetVersions.length === 0}
+                          <option value="">Keine Versionen</option>
                         {:else}
-                          <textarea
-                            spellcheck="false"
-                            value={block}
-                            on:input={(event) => updateVisualBlock(idx, event.target.value)}
-                          ></textarea>
+                          {#each sheetVersions as version}
+                            <option value={String(version.id)}>
+                              {formatVersionLabel(version)}
+                            </option>
+                          {/each}
+                        {/if}
+                      </select>
+                    </label>
+                    <button
+                      class="icon-btn ci-btn-outline version-restore-btn"
+                      type="button"
+                      on:click={restoreSheetVersion}
+                      disabled={restoringVersion || !selectedVersionId || isCurrentVersion}
+                      aria-label="Version wiederherstellen"
+                      title={isCurrentVersion
+                        ? 'Version ist bereits aktuell'
+                        : 'Ausgewaehlte Version wiederherstellen'}
+                    >
+                      <svg class="restore-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path
+                          d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.8"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                {#if versionsLoading}
+                  <p class="hint">Lade Versionen…</p>
+                {:else if versionsError}
+                  <p class="error-text">{versionsError}</p>
+                {:else if versionState}
+                  <p class="hint" class:success={versionState}>{versionState}</p>
+                {/if}
+              </div>
+              <div class="editor-columns">
+                <div class="editor-main">
+                  {#if editorView === 'html'}
+                    <div class="code-editor" aria-label="Sheet HTML Editor">
+                      <pre class="code-highlight" aria-hidden="true" bind:this={sheetHtmlHighlight}>{#each sheetHtmlTokens as token}<span class={`token token-${token.type}`}>{token.value}</span>{/each}</pre>
+                      <textarea
+                        class="code-input code-input--overlay"
+                        bind:value={editorContent}
+                        bind:this={sheetHtmlInput}
+                        spellcheck="false"
+                        aria-label="Sheet HTML"
+                        on:scroll={() => syncCodeScroll(sheetHtmlInput, sheetHtmlHighlight)}
+                      ></textarea>
+                    </div>
+                  {:else}
+                    <div class="visual-layout">
+                      <div class="visual-edit-panel">
+                        <div class="block-editors">
+                          <div
+                            class="block-insert-row"
+                            class:drag-over={dragOverIndex === 0}
+                            on:dragover={(event) => handleInsertDragOver(event, 0)}
+                            on:drop={(event) => handleInsertDrop(event, 0)}
+                          >
+                            <div class="block-insert">
+                              <button
+                                class="block-insert-btn"
+                                type="button"
+                                on:click={() => toggleBlockInsert(0)}
+                                aria-label="Block einfuegen"
+                                aria-haspopup="menu"
+                                aria-expanded={blockInsertIndex === 0}
+                              >
+                                +
+                              </button>
+                              {#if blockInsertIndex === 0}
+                                <div class="block-insert-menu" role="menu">
+                                  {#each BLOCK_TEMPLATES as template (template.id)}
+                                    <button
+                                      class="block-insert-option"
+                                      type="button"
+                                      role="menuitem"
+                                      on:click={() => insertBlockTemplateAt(0, template)}
+                                    >
+                                      <span class="block-insert-option__label">{template.label}</span>
+                                      <span class="block-insert-option__meta">{template.meta}</span>
+                                    </button>
+                                  {/each}
+                                </div>
+                              {/if}
+                            </div>
+                          </div>
+                          {#each visualBlocks as block, idx}
+                            <div
+                              class="block-editor"
+                              draggable="true"
+                              on:dragstart={(event) => handleBlockDragStart(event, idx)}
+                              on:dragend={handleBlockDragEnd}
+                            >
+                              <div class="block-format-tools">
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  type="button"
+                                  title="Fett"
+                                  aria-label="Fett"
+                                  on:mousedown|preventDefault
+                                  on:click={() => applyInlineFormat(idx, 'bold')}
+                                >
+                                  <span class="tool-icon tool-icon--bold">B</span>
+                                </button>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  type="button"
+                                  title="Kursiv"
+                                  aria-label="Kursiv"
+                                  on:mousedown|preventDefault
+                                  on:click={() => applyInlineFormat(idx, 'italic')}
+                                >
+                                  <span class="tool-icon tool-icon--italic">I</span>
+                                </button>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  type="button"
+                                  title="Unterstrichen"
+                                  aria-label="Unterstrichen"
+                                  on:mousedown|preventDefault
+                                  on:click={() => applyInlineFormat(idx, 'underline')}
+                                >
+                                  <span class="tool-icon tool-icon--underline">U</span>
+                                </button>
+                                <div class="tool-divider" aria-hidden="true"></div>
+                                <select
+                                  class="ghost ci-btn-outline tool-select"
+                                  aria-label="Textgroesse"
+                                  on:change={(event) => applyBlockFontSize(idx, event)}
+                                >
+                                  <option value="">A#</option>
+                                  <option value="0.85em">0.85em</option>
+                                  <option value="1em">1.0em</option>
+                                  <option value="1.2em">1.2em</option>
+                                  <option value="1.5em">1.5em</option>
+                                </select>
+                                <select
+                                  class="ghost ci-btn-outline tool-select"
+                                  aria-label="Schriftart"
+                                  on:change={(event) => applyBlockFontFamily(idx, event)}
+                                >
+                                  <option value="">Aa</option>
+                                  <option value="'Helvetica Neue', Arial, sans-serif">Aa Sans</option>
+                                  <option value="'Georgia', 'Times New Roman', serif">Aa Serif</option>
+                                  <option value="'Courier New', Courier, monospace">Aa Mono</option>
+                                </select>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  type="button"
+                                  title="Luecke einfuegen"
+                                  aria-label="Luecke einfuegen"
+                                  on:mousedown|preventDefault
+                                  on:click={() => insertSnippetIntoBlock(idx, 'gap')}
+                                >
+                                  <span class="tool-icon tool-icon--gap">[]</span>
+                                </button>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  type="button"
+                                  title="Luecke breit"
+                                  aria-label="Luecke breit"
+                                  on:mousedown|preventDefault
+                                  on:click={() => insertSnippetIntoBlock(idx, 'wide')}
+                                >
+                                  <span class="tool-icon tool-icon--gap-wide">[ ]</span>
+                                </button>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  type="button"
+                                  title="Umfrage-Block"
+                                  aria-label="Umfrage-Block"
+                                  on:mousedown|preventDefault
+                                  on:click={() => insertUmfrageBlockAt(idx)}
+                                >
+                                  <span class="tool-icon tool-icon--survey">1-5</span>
+                                </button>
+                                <div class="tool-divider" aria-hidden="true"></div>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  class:active={visualBlockViews[idx] === 'html'}
+                                  type="button"
+                                  on:click={() => setVisualBlockView(idx, 'html')}
+                                  title="HTML-Ansicht"
+                                  aria-label="HTML-Ansicht"
+                                >
+                                  <svg
+                                    class="toggle-icon"
+                                    viewBox="0 0 24 24"
+                                    aria-hidden="true"
+                                    focusable="false"
+                                  >
+                                    <path
+                                      d="M8 9l-4 3 4 3M16 9l4 3-4 3"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="1.8"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                    />
+                                  </svg>
+                                </button>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn"
+                                  class:active={visualBlockViews[idx] === 'visual'}
+                                  type="button"
+                                  on:click={() => setVisualBlockView(idx, 'visual')}
+                                  title="Visuelle Ansicht"
+                                  aria-label="Visuelle Ansicht"
+                                >
+                                  <svg
+                                    class="toggle-icon"
+                                    viewBox="0 0 24 24"
+                                    aria-hidden="true"
+                                    focusable="false"
+                                  >
+                                    <path
+                                      d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="1.8"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                    />
+                                    <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8" />
+                                  </svg>
+                                </button>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn tool-btn--danger"
+                                  type="button"
+                                  title="Block loeschen"
+                                  aria-label="Block loeschen"
+                                  on:click={() =>
+                                    confirmDelete('Block') && deleteVisualBlockAt(idx)}
+                                >
+                                  <svg
+                                    class="toggle-icon"
+                                    viewBox="0 0 24 24"
+                                    aria-hidden="true"
+                                    focusable="false"
+                                  >
+                                    <path
+                                      d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="1.8"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                    />
+                                    <path
+                                      d="M10 11v5M14 11v5"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="1.8"
+                                      stroke-linecap="round"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                              {#if visualBlockViews[idx] === 'visual'}
+                                <div
+                                  class="block-editor__visual"
+                                  contenteditable="true"
+                                  spellcheck="false"
+                                bind:this={visualBlockEditors[idx]}
+                                on:focus={() => (visualActiveBlock = idx)}
+                                on:input={(event) => handleVisualInput(idx, event)}
+                                on:mouseup={() => captureVisualSelection(idx)}
+                                on:keyup={() => captureVisualSelection(idx)}
+                              >
+                                  {@html block}
+                                </div>
+                              {:else}
+                                <textarea
+                                  spellcheck="false"
+                                  value={block}
+                                  bind:this={visualBlockHtmlInputs[idx]}
+                                  on:focus={() => (visualActiveBlock = idx)}
+                                  on:input={(event) => updateVisualBlock(idx, event.target.value)}
+                                ></textarea>
+                              {/if}
+                            </div>
+                          <div
+                            class="block-insert-row"
+                            class:drag-over={dragOverIndex === idx + 1}
+                            on:dragover={(event) => handleInsertDragOver(event, idx + 1)}
+                            on:drop={(event) => handleInsertDrop(event, idx + 1)}
+                          >
+                            <div class="block-insert">
+                              <button
+                                class="block-insert-btn"
+                                type="button"
+                                on:click={() => toggleBlockInsert(idx + 1)}
+                                aria-label="Block einfuegen"
+                                aria-haspopup="menu"
+                                aria-expanded={blockInsertIndex === idx + 1}
+                              >
+                                +
+                              </button>
+                              {#if blockInsertIndex === idx + 1}
+                                <div class="block-insert-menu" role="menu">
+                                  {#each BLOCK_TEMPLATES as template (template.id)}
+                                    <button
+                                      class="block-insert-option"
+                                      type="button"
+                                      role="menuitem"
+                                      on:click={() => insertBlockTemplateAt(idx + 1, template)}
+                                    >
+                                      <span class="block-insert-option__label">{template.label}</span>
+                                      <span class="block-insert-option__meta">{template.meta}</span>
+                                    </button>
+                                  {/each}
+                                </div>
+                              {/if}
+                            </div>
+                          </div>
+                          {/each}
+                        </div>
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+                <aside class="agent-sidebar" aria-label="KI Kontext">
+                  <div class="agent-panel">
+                    <div class="agent-row">
+                      <input
+                        class="agent-input"
+                        type="text"
+                        bind:value={agentPrompt}
+                        placeholder="Agent: z.B. Ueberschrift: Thema, Liste: A, B, C"
+                        disabled={agentPending}
+                        on:input={() => {
+                          agentStatus = '';
+                          agentResponse = '';
+                        }}
+                        on:keydown={(event) => handleAgentKeydown(event, editorView)}
+                      />
+                      <button
+                        class="ghost ci-btn-outline"
+                        type="button"
+                        on:click={() => applyAgentPrompt(editorView)}
+                        disabled={agentPending}
+                      >
+                        {agentPending ? 'Arbeite…' : 'Ausfuehren'}
+                      </button>
+                    </div>
+                    <div class="agent-row agent-row--meta">
+                      <span class="hint">Beispiele: Tabelle 3x2, Button: Start, Link: https://...</span>
+                      {#if agentStatus}
+                        <span class="agent-status">{agentStatus}</span>
+                      {/if}
+                    </div>
+                    {#if agentResponse}
+                      <div class="agent-response">{agentResponse}</div>
+                    {/if}
+                    <div class="agent-history">
+                      <div class="agent-history-title">Chatverlauf</div>
+                      <div class="agent-history-list" bind:this={agentHistoryEl}>
+                        {#if agentHistory.length}
+                          {#each agentHistory as entry (entry.id)}
+                            <div class="agent-history-item">
+                              <div class="agent-history-line">
+                                <span class="agent-history-label">Du</span>
+                                <span class="agent-history-text">{entry.prompt}</span>
+                              </div>
+                              <div class="agent-history-line">
+                                <span class="agent-history-label">KI</span>
+                                <span class="agent-history-text">{entry.message || entry.status}</span>
+                              </div>
+                              {#if entry.message && entry.status}
+                                <div class="agent-history-meta">{entry.status}</div>
+                              {/if}
+                            </div>
+                          {/each}
+                        {:else}
+                          <div class="agent-history-empty hint">Noch kein Verlauf.</div>
                         {/if}
                       </div>
-                      {#if idx < visualBlocks.length - 1}
-                        <div
-                          class="block-insert-row"
-                          class:drag-over={dragOverIndex === idx + 1}
-                          on:dragover={(event) => handleInsertDragOver(event, idx + 1)}
-                          on:drop={(event) => handleInsertDrop(event, idx + 1)}
-                        >
-                          <button
-                            class="ghost ci-btn-outline block-insert-btn"
-                            type="button"
-                            on:click={() => insertVisualBlockAt(idx + 1, 'Neuer Block')}
-                            title="Block einfuegen"
-                            aria-label="Block einfuegen"
-                          >
-                            +
-                          </button>
-                        </div>
-                      {/if}
-                    {/each}
-                    {#if dragIndex !== null}
-                      <div
-                        class="block-insert-row"
-                        class:drag-over={dragOverIndex === visualBlocks.length}
-                        on:dragover={(event) => handleInsertDragOver(event, visualBlocks.length)}
-                        on:drop={(event) => handleInsertDrop(event, visualBlocks.length)}
-                      >
-                        <button
-                          class="ghost ci-btn-outline block-insert-btn"
-                          type="button"
-                          on:click={() => insertVisualBlockAt(visualBlocks.length, 'Neuer Block')}
-                          title="Block einfuegen"
-                          aria-label="Block einfuegen"
-                        >
-                          +
-                        </button>
-                      </div>
-                    {/if}
+                    </div>
                   </div>
-                </div>
-                <div class="visual-pane">
-                  <div class="visual-preview-header">
-                    <div class="list-title">HTML-Elemente</div>
-                    <div class="hint">Vorschau</div>
-                  </div>
-                  <div class="visual-preview" bind:this={visualPreviewEl}></div>
-                  <p class="hint">
-                    Rechts siehst du die enthaltenen HTML-Elemente (z.B. Luecken). Bearbeitung links.
-                  </p>
-                </div>
+                </aside>
               </div>
             </div>
           {:else if editorView === 'preview'}
@@ -2379,25 +3801,36 @@
                 <p class="hint">
                   {answersMeta || (selectedKey ? `Sheet: ${selectedKey}` : 'Kein Sheet ausgewaehlt')}
                 </p>
-                <button
-                  class="icon-btn ci-btn-outline refresh-btn"
-                  on:click={refreshAnswers}
-                  disabled={answersLoading || !selectedKey}
-                  type="button"
-                  title="Antworten aktualisieren"
-                  aria-label="Antworten aktualisieren"
-                >
-                  <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path
-                      d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.8"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    />
-                  </svg>
-                </button>
+                <div class="answers-meta-controls">
+                  <label class="answers-class-select">
+                    <span>Klasse</span>
+                    <select bind:value={answersClassFilter} disabled={loadingClasses}>
+                      <option value="">Alle Klassen</option>
+                      {#each classes as classItem}
+                        <option value={classItem.id}>{formatClassLabel(classItem)}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  <button
+                    class="icon-btn ci-btn-outline refresh-btn"
+                    on:click={refreshAnswers}
+                    disabled={answersLoading || !selectedKey}
+                    type="button"
+                    title="Antworten aktualisieren"
+                    aria-label="Antworten aktualisieren"
+                  >
+                    <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
               </div>
               {#if answersError}
                 <p class="error-text answers-error">{answersError}</p>
@@ -2451,7 +3884,7 @@
         <div class="panel-header">
           <div>
             <h2>Klassen</h2>
-            <p class="hint">Waehle eine Klasse, um die Lernenden zu sehen.</p>
+            <p class="hint">Waehle eine Klasse, um Details zu sehen.</p>
           </div>
           <div class="row-actions">
             <button
@@ -2496,6 +3929,24 @@
               <svelte:fragment slot="actions" let:row>
                 <button
                   class="icon-btn ci-btn-outline"
+                  title="Arbeitsblaetter zuweisen"
+                  aria-label="Arbeitsblaetter zuweisen"
+                  on:click|stopPropagation={() => openClassAssignments(row.id)}
+                  type="button"
+                >
+                  Arbeitsblaetter
+                </button>
+                <button
+                  class="icon-btn ci-btn-outline"
+                  title="Studierende anzeigen"
+                  aria-label="Studierende anzeigen"
+                  on:click|stopPropagation={() => openLearnersForClass(row.id)}
+                  type="button"
+                >
+                  Studierende
+                </button>
+                <button
+                  class="icon-btn ci-btn-outline"
                   title="Klasse loeschen"
                   aria-label="Klasse loeschen"
                   on:click|stopPropagation={() => deleteClass(row.id)}
@@ -2524,17 +3975,17 @@
         <div class="panel-header">
           <div>
             <button class="ghost ci-btn-outline" on:click={() => {
-              selectedClassId = null;
-              classSchoolId = '';
-              learners = [];
-              selectedLearnerId = null;
-              newLearnerName = '';
-              newLearnerNotes = '';
-              learnerModalMode = 'create';
+              resetClassSelection();
             }}>
               Zurueck
             </button>
-            <h2>Lernende</h2>
+            <h2>
+              {classDetailView === 'assignments'
+                ? 'Arbeitsblaetter'
+                : classDetailView === 'learners'
+                ? 'Studierende'
+                : 'Klasse'}
+            </h2>
             <p class="hint">
               {className || 'Klasse'} {classYear || ''} {classProfession || ''}
               {getSchoolLabel(classSchoolId) ? ` · ${getSchoolLabel(classSchoolId)}` : ''}
@@ -2542,107 +3993,214 @@
           </div>
           <div class="row-actions">
             <button
-              class="icon-btn ci-btn-outline refresh-btn"
-              on:click={() => fetchLearners(selectedClassId)}
-              disabled={loadingLearners}
-              title="Lernende aktualisieren"
-              aria-label="Lernende aktualisieren"
+              class="ci-tab"
+              class:selected={classDetailView === 'details'}
+              on:click={() => (classDetailView = 'details')}
+              type="button"
             >
-              <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path
-                  d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.8"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
+              Details
             </button>
             <button
-              class="ci-btn-primary"
-              on:click={() => {
-                learnerModalMode = 'create';
-                newLearnerName = '';
-                newLearnerNotes = '';
-                selectedLearnerCode = '';
-                showLearnerModal = true;
-              }}
+              class="ci-tab"
+              class:selected={classDetailView === 'learners'}
+              on:click={() => openLearnersForClass()}
+              type="button"
             >
-              Neue Lernende
+              Studierende
             </button>
+            <button
+              class="ci-tab"
+              class:selected={classDetailView === 'assignments'}
+              on:click={() => openAssignmentsForClass()}
+              type="button"
+            >
+              Arbeitsblaetter
+            </button>
+            {#if classDetailView === 'learners'}
+              <button
+                class="icon-btn ci-btn-outline refresh-btn"
+                on:click={() => fetchLearners(selectedClassId)}
+                disabled={loadingLearners}
+                title="Lernende aktualisieren"
+                aria-label="Lernende aktualisieren"
+                type="button"
+              >
+                <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="ci-btn-primary"
+                on:click={() => {
+                  learnerModalMode = 'create';
+                  newLearnerName = '';
+                  newLearnerNotes = '';
+                  selectedLearnerCode = '';
+                  showLearnerModal = true;
+                }}
+                type="button"
+              >
+                Neue Lernende
+              </button>
+            {:else if classDetailView === 'assignments'}
+              <button
+                class="icon-btn ci-btn-outline refresh-btn"
+                on:click={() => openAssignmentsForClass()}
+                disabled={loadingPlan}
+                title="Arbeitsblaetter aktualisieren"
+                aria-label="Arbeitsblaetter aktualisieren"
+                type="button"
+              >
+                <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            {/if}
           </div>
         </div>
 
-        <div class="manage-card">
-          <h3>Klasse bearbeiten</h3>
-          <div class="form-grid">
-            <label>
-              <span>Name</span>
-              <input type="text" bind:value={className} placeholder="Klassenname" />
-            </label>
-            <label>
-              <span>Jahr</span>
-              <input type="text" bind:value={classYear} placeholder="2025/26" />
-            </label>
-            <label>
-              <span>Beruf</span>
-              <input type="text" bind:value={classProfession} placeholder="Beruf" />
-            </label>
-            <label>
-              <span>Schule</span>
-              <select bind:value={classSchoolId}>
-                <option value="">Keine Schule</option>
-                {#each schools as school}
-                  <option value={school.id}>{school.name || `Schule #${school.id}`}</option>
-                {/each}
-              </select>
-            </label>
-            <label>
-              <span>Notizen</span>
-              <textarea rows="3" bind:value={classNotes} placeholder="Notizen"></textarea>
-            </label>
-          </div>
-          <div class="row-actions">
-            <button class="ci-btn-primary" on:click={updateClass} disabled={savingClass}>
-              {savingClass ? 'Speichere...' : 'Speichern'}
-            </button>
-          </div>
-        </div>
-
-        <div class="manage-card">
-          {#if loadingLearners}
-            <p class="hint">Lade Lernende...</p>
-          {:else if learners.length === 0}
-            <p class="hint">Noch keine Lernenden.</p>
-          {:else}
-            <div class="list">
-              {#each learners as entry}
-                <div class="list-row">
-                  <button class="ci-btn-soft" on:click={() => selectLearner(entry.id)}>
-                    <div class="list-title">{entry.name || `Lernende #${entry.id}`}</div>
-                    <div class="list-preview">
-                      {entry.code ? `Code: ${entry.code}` : ''}
-                      {entry.notes ? ` ${entry.notes}` : ''}
+        {#if classDetailView === 'assignments'}
+          <div class="manage-card">
+            <h3>Arbeitsblaetter zuweisen</h3>
+            {#if loadingPlan}
+              <p class="hint">Lade Zuordnungen...</p>
+            {:else if sheets.length === 0}
+              <p class="hint">Noch keine Sheets vorhanden.</p>
+            {:else}
+              <p class="hint">{planAssignments.length} zugeordnet</p>
+              <div class="assignment-list">
+                {#each sheets as sheet}
+                  {@const assignment = sheet.key ? planAssignmentMap.get(sheet.key) : null}
+                  {@const statusDraft = sheet.key && planStatusDraft[sheet.key] !== undefined
+                    ? planStatusDraft[sheet.key]
+                    : undefined}
+                  {@const currentStatus = statusDraft !== undefined ? statusDraft : assignment?.status ?? ''}
+                  {@const baseForm = assignment?.assignment_form ?? 'personal'}
+                  {@const currentForm = sheet.key && planFormDraft[sheet.key] ? planFormDraft[sheet.key] : baseForm}
+                  <label class="assignment-row">
+                    <div class="assignment-info">
+                      <div class="list-title">{sheet.name || sheet.key || `Sheet #${sheet.id}`}</div>
+                      <div class="assignment-key">{sheet.key || 'Key fehlt'}</div>
                     </div>
-                  </button>
-                  <button
-                    class="icon-btn ci-btn-outline"
-                    title="Lernende loeschen"
-                    on:click={() => deleteLearnerById(entry.id)}
-                    disabled={deletingLearner}
-                  >
-                    Loeschen
-                  </button>
-                </div>
-              {/each}
+                    <div class="assignment-controls">
+                      <select
+                        class="status-select"
+                        value={currentStatus}
+                        on:change={(event) => setPlanStatus(sheet.key, event.currentTarget.value)}
+                        disabled={planSaving || !sheet.key}
+                      >
+                        {#each PLAN_STATUS_OPTIONS as option}
+                          <option value={option.value}>{option.label}</option>
+                        {/each}
+                      </select>
+                      <select
+                        class="status-select form-select"
+                        value={currentForm}
+                        on:change={(event) => handlePlanFormChange(sheet.key, event.currentTarget.value)}
+                        disabled={planSaving || !sheet.key}
+                      >
+                        {#each PLAN_FORM_OPTIONS as option}
+                          <option value={option.value}>{option.label}</option>
+                        {/each}
+                      </select>
+                    </div>
+                  </label>
+                {/each}
+              </div>
+            {/if}
+            {#if planError}
+              <p class="error-text">{planError}</p>
+            {/if}
+          </div>
+        {:else if classDetailView === 'details'}
+          <div class="manage-card">
+            <h3>Klasse bearbeiten</h3>
+            <div class="form-grid">
+              <label>
+                <span>Name</span>
+                <input type="text" bind:value={className} placeholder="Klassenname" />
+              </label>
+              <label>
+                <span>Jahr</span>
+                <input type="text" bind:value={classYear} placeholder="2025/26" />
+              </label>
+              <label>
+                <span>Beruf</span>
+                <input type="text" bind:value={classProfession} placeholder="Beruf" />
+              </label>
+              <label>
+                <span>Schule</span>
+                <select bind:value={classSchoolId}>
+                  <option value="">Keine Schule</option>
+                  {#each schools as school}
+                    <option value={String(school.id)}>
+                      {school.name || `Schule #${school.id}`}
+                    </option>
+                  {/each}
+                </select>
+              </label>
+              <label>
+                <span>Notizen</span>
+                <textarea rows="3" bind:value={classNotes} placeholder="Notizen"></textarea>
+              </label>
             </div>
-          {/if}
+            <div class="row-actions">
+              <button class="ci-btn-primary" on:click={updateClass} disabled={savingClass} type="button">
+                {savingClass ? 'Speichere...' : 'Speichern'}
+              </button>
+            </div>
+          </div>
+        {:else}
+          <div class="manage-card">
+            <h3>Studierende</h3>
+            {#if loadingLearners}
+              <p class="hint">Lade Lernende...</p>
+            {:else if learners.length === 0}
+              <p class="hint">Noch keine Lernenden.</p>
+            {:else}
+              <div class="list">
+                {#each learners as entry}
+                  <div class="list-row">
+                    <button class="ci-btn-soft" on:click={() => selectLearner(entry.id)}>
+                      <div class="list-title">{entry.name || `Lernende #${entry.id}`}</div>
+                      <div class="list-preview">
+                        {entry.code ? `Code: ${entry.code}` : ''}
+                        {entry.notes ? ` ${entry.notes}` : ''}
+                      </div>
+                    </button>
+                    <button
+                      class="icon-btn ci-btn-outline"
+                      title="Lernende loeschen"
+                      on:click={() => deleteLearnerById(entry.id)}
+                      disabled={deletingLearner}
+                      type="button"
+                    >
+                      Loeschen
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
 
-          {#if learnerError}
-            <p class="error-text">{learnerError}</p>
-          {/if}
-        </div>
+            {#if learnerError}
+              <p class="error-text">{learnerError}</p>
+            {/if}
+          </div>
+        {/if}
       {/if}
     </section>
     {/if}
@@ -2740,9 +4298,7 @@
         <div class="panel-header">
           <div>
             <button class="ghost ci-btn-outline" on:click={() => {
-              selectedSchoolId = null;
-              schoolName = '';
-              schoolCss = '';
+              resetSchoolSelection();
             }}>
               Zurueck
             </button>
@@ -2881,107 +4437,6 @@
     </section>
     {/if}
 
-    {#if activeTab === 'plan'}
-    <section class="panel full">
-      <div class="panel-header">
-        <div>
-          <h2>Planen</h2>
-          <p class="hint">Arbeitsblaetter den Klassen zuordnen.</p>
-        </div>
-        <div class="row-actions">
-          <button
-            class="icon-btn ci-btn-outline refresh-btn"
-            on:click={refreshPlanData}
-            disabled={loadingClasses || loadingSheets}
-            title="Klassen und Sheets aktualisieren"
-            aria-label="Klassen und Sheets aktualisieren"
-          >
-            <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path
-                d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.8"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div class="plan-grid">
-        <div class="plan-card">
-          <h3>Klassen</h3>
-          {#if loadingClasses}
-            <p class="hint">Lade Klassen...</p>
-          {:else if classes.length === 0}
-            <p class="hint">Keine Klassen vorhanden.</p>
-          {:else}
-            <div class="list">
-              {#each classes as entry}
-                <button
-                  class="ci-btn-soft"
-                  class:selected={selectedPlanClassId === entry.id}
-                  on:click={() => selectPlanClass(entry.id)}
-                >
-                  <div class="list-title">{entry.name || `Klasse #${entry.id}`}</div>
-                  <div class="list-preview">
-                    {entry.year || ''} {entry.profession || ''}
-                    {getSchoolLabel(entry.school) ? ` · ${getSchoolLabel(entry.school)}` : ''}
-                  </div>
-                </button>
-              {/each}
-            </div>
-          {/if}
-          {#if classError}
-            <p class="error-text">{classError}</p>
-          {/if}
-        </div>
-
-        <div class="plan-card">
-          <h3>Arbeitsblaetter</h3>
-          {#if !selectedPlanClassId}
-            <p class="hint">Bitte eine Klasse auswaehlen.</p>
-          {:else if loadingPlan}
-            <p class="hint">Lade Zuordnungen...</p>
-          {:else if sheets.length === 0}
-            <p class="hint">Noch keine Sheets vorhanden.</p>
-          {:else}
-            <p class="hint">{planAssignments.length} zugeordnet</p>
-            <div class="assignment-list">
-              {#each sheets as sheet}
-                {@const assignment = sheet.key ? planAssignmentMap.get(sheet.key) : null}
-                {@const currentStatus = assignment?.status ?? ''}
-                <label class="assignment-row">
-                  <div class="assignment-info">
-                    <div class="list-title">{sheet.name || sheet.key || `Sheet #${sheet.id}`}</div>
-                    <div class="assignment-key">{sheet.key || 'Key fehlt'}</div>
-                  </div>
-                  <select
-                    class="status-select"
-                    value={currentStatus}
-                    on:change={(event) => setPlanStatus(sheet.key, event.currentTarget.value)}
-                    disabled={planSaving || !sheet.key}
-                  >
-                    {#each PLAN_STATUS_OPTIONS as option}
-                      <option value={option.value}>{option.label}</option>
-                    {/each}
-                  </select>
-                </label>
-              {/each}
-            </div>
-          {/if}
-          {#if sheetError}
-            <p class="error-text">{sheetError}</p>
-          {/if}
-          {#if planError}
-            <p class="error-text">{planError}</p>
-          {/if}
-        </div>
-      </div>
-    </section>
-    {/if}
   {/if}
 </div>
 
@@ -3040,7 +4495,9 @@
           <select bind:value={newClassSchoolId}>
             <option value="">Keine Schule</option>
             {#each schools as school}
-              <option value={school.id}>{school.name || `Schule #${school.id}`}</option>
+              <option value={String(school.id)}>
+                {school.name || `Schule #${school.id}`}
+              </option>
             {/each}
           </select>
         </label>
@@ -3129,7 +4586,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 24px;
     margin-bottom: 32px;
   }
@@ -3170,7 +4627,7 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .status .label {
@@ -3289,6 +4746,110 @@
 
   .topbar-tabs .ci-tab {
     white-space: nowrap;
+  }
+
+  .topbar-menu {
+    position: relative;
+    display: none;
+    align-items: center;
+  }
+
+  .topbar-menu-btn {
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .topbar-menu-icon,
+  .topbar-menu-icon::before,
+  .topbar-menu-icon::after {
+    display: block;
+    width: 20px;
+    height: 2px;
+    border-radius: 999px;
+    background: #1c2333;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+  }
+
+  .topbar-menu-icon {
+    position: relative;
+  }
+
+  .topbar-menu-icon::before,
+  .topbar-menu-icon::after {
+    content: '';
+    position: absolute;
+    left: 0;
+  }
+
+  .topbar-menu-icon::before {
+    top: -6px;
+  }
+
+  .topbar-menu-icon::after {
+    top: 6px;
+  }
+
+  .topbar-menu[data-open='true'] .topbar-menu-icon {
+    background: transparent;
+  }
+
+  .topbar-menu[data-open='true'] .topbar-menu-icon::before {
+    transform: translateY(6px) rotate(45deg);
+  }
+
+  .topbar-menu[data-open='true'] .topbar-menu-icon::after {
+    transform: translateY(-6px) rotate(-45deg);
+  }
+
+  .topbar-menu-panel {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    min-width: 200px;
+    background: #ffffff;
+    border: 1px solid #d9dee7;
+    border-radius: 16px;
+    padding: 8px;
+    display: none;
+    gap: 6px;
+    box-shadow: 0 16px 30px rgba(15, 23, 42, 0.16);
+    z-index: 20;
+  }
+
+  .topbar-menu-panel.is-open {
+    display: grid;
+  }
+
+  .topbar-menu-item {
+    width: 100%;
+    text-align: left;
+    padding: 10px 14px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+    background: transparent;
+    font-weight: 600;
+  }
+
+  .topbar-menu-item:hover {
+    background: #eff6f4;
+    border-color: #cfe6e1;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .topbar-menu-item.is-active {
+    background: #1f7a6e;
+    border-color: #1f7a6e;
+    color: #ffffff;
+  }
+
+  .topbar-menu-item.is-active:hover {
+    transform: none;
+    box-shadow: none;
   }
 
   .tabs button {
@@ -3621,21 +5182,6 @@
     color: #4d5565;
   }
 
-  .plan-grid {
-    display: grid;
-    grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-    gap: 20px;
-  }
-
-  .plan-card {
-    background: #f5f7fa;
-    border-radius: 16px;
-    padding: 16px;
-    border: 1px solid #e2e8f0;
-    display: grid;
-    gap: 12px;
-  }
-
   .assignment-list {
     display: grid;
     gap: 10px;
@@ -3669,6 +5215,17 @@
     border-radius: 10px;
     border: 1px solid #d9dee7;
     background: #f8fafc;
+  }
+
+  .assignment-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .form-select {
+    min-width: 160px;
   }
 
   .form-grid {
@@ -3734,6 +5291,18 @@
       width: 100%;
       flex-direction: column;
       align-items: stretch;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .status-user {
+      display: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .brand-logo {
+      display: none;
     }
   }
 
@@ -3806,8 +5375,211 @@
     align-content: start;
   }
 
+  .editor-meta {
+    display: grid;
+    gap: 8px;
+  }
+
+  .editor-meta-row {
+    display: grid;
+    gap: 12px;
+    align-items: end;
+  }
+
+  .editor-meta-row label {
+    margin: 0;
+  }
+
+  .editor-version {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: end;
+    justify-self: end;
+  }
+
+  .editor-version label {
+    margin: 0;
+  }
+
+  .editor-version-select {
+    min-width: min(240px, 100%);
+  }
+
+  .editor-version button {
+    white-space: nowrap;
+  }
+
+  .version-restore-btn {
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .restore-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .editor-meta .hint,
+  .editor-meta .error-text {
+    margin: 0;
+  }
+
   .fields textarea {
     min-height: 320px;
+  }
+
+  .editor-columns {
+    display: grid;
+    gap: 16px;
+    align-items: start;
+  }
+
+  .editor-main {
+    display: grid;
+    gap: 12px;
+    align-content: start;
+  }
+
+  .agent-sidebar {
+    display: grid;
+    gap: 12px;
+    min-height: 0;
+    align-self: start;
+  }
+
+  .agent-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+    background: #f8fafc;
+    min-height: 0;
+  }
+
+  .agent-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .agent-row--meta {
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .agent-input {
+    flex: 1 1 260px;
+    min-width: 220px;
+  }
+
+  .agent-status {
+    font-size: 12px;
+    color: #1f7a6e;
+    font-weight: 600;
+  }
+
+  .agent-response {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    background: #ffffff;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #1f2937;
+    white-space: pre-wrap;
+  }
+
+  .agent-history {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    min-height: 0;
+    flex: 1 1 auto;
+  }
+
+  .agent-history-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: #6f7682;
+  }
+
+  .agent-history-list {
+    display: grid;
+    gap: 10px;
+    overflow: auto;
+    padding-right: 4px;
+    min-height: 0;
+  }
+
+  .agent-history-item {
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    background: #ffffff;
+    padding: 10px 12px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .agent-history-line {
+    display: grid;
+    gap: 4px;
+  }
+
+  .agent-history-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .agent-history-text {
+    font-size: 13px;
+    line-height: 1.5;
+    color: #1f2937;
+    white-space: pre-wrap;
+  }
+
+  .agent-history-meta {
+    font-size: 11px;
+    color: #64748b;
+  }
+
+  .agent-history-empty {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+
+  @media (min-width: 900px) {
+    .editor-meta-row {
+      grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+    }
+  }
+
+  @media (min-width: 1100px) {
+    .editor-columns {
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+    }
+
+    .agent-sidebar {
+      position: sticky;
+      top: 16px;
+      max-height: calc(100vh - 180px);
+    }
+
+    .agent-panel {
+      height: 100%;
+    }
   }
 
   .preview {
@@ -3833,50 +5605,158 @@
     overflow: auto;
   }
 
-  .visual-toolbar {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
+  :global(umfrage-matrix) {
+    display: block;
+    margin: 1.2rem 0;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scroll) {
+    overflow-x: auto;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__table) {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 520px;
+  }
+
+  :global(umfrage-matrix th),
+  :global(umfrage-matrix td) {
+    border: 1px solid #d9dee7;
+    padding: 0.45rem 0.6rem;
+    text-align: center;
+  }
+
+  :global(umfrage-matrix th) {
+    background: #f5f7fa;
+    color: #556070;
+    font-weight: 600;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement) {
+    text-align: left;
+    background: #fff;
+    color: #1c2333;
+    font-weight: 500;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-value) {
+    display: block;
+    font-size: 0.95rem;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-label) {
+    display: block;
+    font-size: 0.72rem;
+    color: #6f7682;
+    margin-top: 2px;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-editor) {
+    display: grid;
+    gap: 6px;
+    justify-items: center;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-input) {
+    width: min(160px, 100%);
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    padding: 4px 6px;
+    font-size: 11px;
+    text-align: center;
+    background: #fff;
+    color: #1f2937;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-input:focus-visible) {
+    outline: 2px solid #2f8f83;
+    outline-offset: 2px;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-actions) {
+    display: inline-flex;
+    gap: 6px;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-btn) {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #2f8f83;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-btn:hover) {
+    background: #eef9f7;
+    border-color: #2f8f83;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-btn--remove) {
+    color: #c33b3b;
+    border-color: #e2c8c8;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__scale-btn--remove:hover) {
+    background: #fde7e7;
+    border-color: #c33b3b;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    cursor: pointer;
+    position: relative;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option input) {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__dot) {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    border: 2px solid #8793a1;
+    background: transparent;
+    transition: all 0.15s ease;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option input:checked + .umfrage-matrix__dot) {
+    background: #2f8f83;
+    border-color: #2f8f83;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__option input:focus-visible + .umfrage-matrix__dot) {
+    box-shadow: 0 0 0 3px rgba(47, 143, 131, 0.25);
+  }
+
+  @media (max-width: 720px) {
+    :global(umfrage-matrix .umfrage-matrix__table) {
+      min-width: 420px;
+    }
   }
 
   .visual-layout {
     display: grid;
     gap: 16px;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
-  }
-
-  .visual-pane {
-    display: grid;
-    gap: 10px;
-  }
-
-  .visual-preview {
-    min-height: 320px;
-    border-radius: 14px;
-    border: 1px solid #d9dee7;
-    background: #ffffff;
-    padding: 16px;
-    overflow: auto;
-  }
-
-  .visual-preview :global(.visual-block) {
-    border-radius: 12px;
-    padding: 10px 12px;
-    border: 1px dashed #e2e8f0;
-    margin-bottom: 12px;
-  }
-
-  .visual-preview :global(.visual-block > p) {
-    margin: 0;
-  }
-
-  .visual-preview :global(.visual-block:last-child) {
-    margin-bottom: 0;
-  }
-
-  .visual-preview :global(iframe) {
-    pointer-events: none;
   }
 
   .visual-edit-panel {
@@ -3895,12 +5775,6 @@
     gap: 8px;
   }
 
-  .visual-preview-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
 
   .block-editors {
     display: grid;
@@ -3923,6 +5797,91 @@
 
   .block-editor textarea {
     min-height: 140px;
+  }
+
+  .block-format-tools {
+    display: flex;
+    gap: 6px;
+    flex-wrap: nowrap;
+    align-items: center;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tool-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+  }
+
+  .tool-btn.active {
+    background: #0f172a;
+    color: #fff;
+    border-color: #0f172a;
+  }
+
+  .tool-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .tool-icon--italic {
+    font-style: italic;
+    font-weight: 600;
+  }
+
+  .tool-icon--underline {
+    text-decoration: underline;
+  }
+
+  .tool-icon--gap,
+  .tool-icon--gap-wide {
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: -0.4px;
+  }
+
+  .tool-icon--survey {
+    font-weight: 700;
+    font-size: 9px;
+    letter-spacing: -0.2px;
+  }
+
+  .tool-select {
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid #d9dee7;
+    background: #fff;
+    color: #0f172a;
+    font-weight: 600;
+    height: 32px;
+    font-size: 12px;
+  }
+
+  .tool-select option {
+    color: #0f172a;
+  }
+
+  .tool-divider {
+    width: 1px;
+    height: 20px;
+    background: #d9dee7;
+    margin: 0 2px;
+  }
+
+  .tool-btn--danger {
+    color: #b23a3a;
+    border-color: #f1c7c7;
   }
 
   .block-editor__header {
@@ -3979,24 +5938,109 @@
   }
 
   .block-insert-row {
+    position: relative;
     display: flex;
+    align-items: center;
     justify-content: center;
-    padding: 2px 0;
+    height: 28px;
+    margin: 6px 0;
+    border-radius: 999px;
   }
 
-  .block-insert-row.drag-over .block-insert-btn {
-    border-color: #2f8f83;
-    background: #eef9f7;
-    color: #0f172a;
+  .block-insert-row::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: #d9dee7;
+  }
+
+  .block-insert {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .block-insert-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #ffffff;
+    border: 1px solid #d9dee7;
+    border-radius: 12px;
+    padding: 6px;
+    display: grid;
+    gap: 4px;
+    min-width: 190px;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+    z-index: 5;
+  }
+
+  .block-insert-option {
+    border: 1px solid transparent;
+    background: #fff;
+    border-radius: 10px;
+    padding: 8px 10px;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    cursor: pointer;
+    color: #1f2937;
+    font-size: 13px;
+  }
+
+  .block-insert-option:hover,
+  .block-insert-option:focus-visible {
+    background: #f5f7fa;
+    border-color: #c7d0db;
+  }
+
+  .block-insert-option__label {
+    font-weight: 600;
+  }
+
+  .block-insert-option__meta {
+    font-size: 11px;
+    color: #6f7682;
   }
 
   .block-insert-btn {
-    width: 32px;
-    height: 32px;
+    position: relative;
+    z-index: 1;
+    width: 28px;
+    height: 28px;
     border-radius: 999px;
-    font-weight: 700;
+    border: 1px solid #c7d0db;
+    background: #fff;
+    color: #2f8f83;
+    font-size: 18px;
     line-height: 1;
-    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .block-insert-btn:hover {
+    background: #eef9f7;
+    border-color: #2f8f83;
+    color: #216b61;
+  }
+
+  .block-insert-btn:focus-visible {
+    outline: 2px solid #2f8f83;
+    outline-offset: 2px;
+  }
+
+  .block-insert-row.drag-over {
+    background: #eef9f7;
+    outline: 1px dashed #2f8f83;
+    outline-offset: 2px;
   }
 
   @media (max-width: 980px) {
@@ -4022,6 +6066,44 @@
 
   .answers-meta-row button {
     text-transform: none;
+  }
+
+  .answers-meta-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .answers-class-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid #d9dee7;
+    background: #f8fafc;
+    font-size: 13px;
+    color: #475569;
+  }
+
+  .answers-class-select span {
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 10px;
+    color: #7a6f62;
+  }
+
+  .answers-class-select select {
+    border: none;
+    background: transparent;
+    font-weight: 600;
+    color: #1c232f;
+    padding: 2px 4px;
+  }
+
+  .answers-class-select select:focus {
+    outline: none;
   }
 
   .answers-error {
@@ -4226,8 +6308,15 @@
 
   @media (max-width: 900px) {
     .topbar {
-      flex-direction: column;
-      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .topbar-tabs {
+      display: none;
+    }
+
+    .topbar-menu {
+      display: inline-flex;
     }
 
     .login {
@@ -4238,8 +6327,5 @@
       grid-template-columns: 1fr;
     }
 
-    .plan-grid {
-      grid-template-columns: 1fr;
-    }
   }
 </style>
