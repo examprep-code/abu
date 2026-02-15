@@ -210,12 +210,65 @@
   }
 
   .sheet-table--classes .sheet-cell--actions {
-    flex-wrap: wrap;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    gap: 6px;
+    row-gap: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
   }
 
   .sheet-table--classes .sheet-cell--actions .icon-btn {
     white-space: nowrap;
     overflow-wrap: normal;
+    flex: 0 0 auto;
+  }
+
+  @media (max-width: 1480px) {
+    .sheet-table--classes .sheet-row {
+      grid-template-columns: minmax(0, 1.26fr) minmax(0, 0.45fr) minmax(0, 0.75fr) minmax(
+          0,
+          0.86fr
+        ) minmax(260px, 1.4fr);
+    }
+
+    .sheet-table--classes .sheet-cell--class-notes {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1320px) {
+    .sheet-table--classes .sheet-row {
+      grid-template-columns: minmax(0, 1.32fr) minmax(0, 0.46fr) minmax(0, 0.78fr) minmax(
+          244px,
+          1.36fr
+        );
+    }
+
+    .sheet-table--classes .sheet-cell--class-school {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1140px) {
+    .sheet-table--classes .sheet-row {
+      grid-template-columns: minmax(0, 1.36fr) minmax(0, 0.55fr) minmax(228px, 1.32fr);
+    }
+
+    .sheet-table--classes .sheet-cell--class-profession {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1000px) {
+    .sheet-table--classes .sheet-row {
+      grid-template-columns: minmax(0, 1fr) minmax(220px, 1.24fr);
+    }
+
+    .sheet-table--classes .sheet-cell--class-year {
+      display: none;
+    }
   }
 
   .sheet-head-btn {

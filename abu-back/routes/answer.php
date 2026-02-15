@@ -3,6 +3,10 @@
 $answerConfig = [
     'answer' => ['all'],
 ];
+$modelPolicyModule = dirname(__DIR__) . '/snippets/agent/model_policy.php';
+if (is_readable($modelPolicyModule)) {
+    include_once $modelPolicyModule;
+}
 
 // POST: speichern und KI-Bewertung zurückgeben
 if ($method === 'POST') {
@@ -54,6 +58,13 @@ if ($method === 'POST') {
 
 // PUT/PATCH: Klassifizierung manuell anpassen
 if ($method === 'PUT' || $method === 'PATCH') {
+    $userId = intval($user['id'] ?? 0);
+    if ($userId <= 0) {
+        $return['status'] = 401;
+        $return['warning'] = 'nicht eingeloggt';
+        return;
+    }
+
     $id = $data['id'] ?? null;
     if (empty($id)) {
         $return['status'] = 400;
@@ -71,15 +82,20 @@ if ($method === 'PUT' || $method === 'PATCH') {
     $data['classification'] = $mapped;
     $data['updated_at'] = date('Y-m-d H:i:s');
 
-    $updateConfig = [
-        'answer' => [
-            'id' => [],
-            'classification' => [],
-            'updated_at' => [],
-        ],
-    ];
+    $scopeWhere = answer_scope_clause_for_user($userId);
+    $existing = sql_get(
+        'SELECT `id` FROM `answer` WHERE `id` = ' . intval($id) . ' AND ' . $scopeWhere . ' LIMIT 1;'
+    );
+    if (empty($existing)) {
+        $return['status'] = 404;
+        $return['warning'] = 'answer nicht gefunden';
+        return;
+    }
 
-    serve($updateConfig, [$method]);
+    sql_update('answer', [
+        'classification' => $data['classification'],
+        'updated_at' => $data['updated_at'],
+    ], intval($id));
     return;
 }
 
@@ -89,6 +105,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
 // oder als Query: /answer?sheet={sheet}[&user={user}]
 if ($method === 'GET') {
     $where = [];
+    $userId = intval($user['id'] ?? 0);
 
     $sheet = $paras[0] ?? ($_GET['sheet'] ?? null);
     $user = $paras[1] ?? ($_GET['user'] ?? null);
@@ -104,11 +121,17 @@ if ($method === 'GET') {
         $where[] = '`classroom` = ' . intval($classroom);
     }
 
-    if ($where) {
-        $answerConfig['answer']['_where'] = $where;
-        $return['data'] = array_merge($return['data'], get($answerConfig));
+    if ($userId > 0) {
+        $where[] = answer_scope_clause_for_user($userId);
+    } elseif (empty($sheet)) {
+        $return['status'] = 400;
+        $return['warning'] = 'sheet fehlt';
         return;
     }
+
+    $answerConfig['answer']['_where'] = $where;
+    $return['data'] = array_merge($return['data'], get($answerConfig));
+    return;
 }
 
 serve($answerConfig);
@@ -146,56 +169,104 @@ function bewerteAntwortMitKI($payload)
         ],
     ];
 
-    $body = json_encode([
-        'model' => 'gpt-4.1-mini',
-        'messages' => $messages,
-        'temperature' => 0,
-    ]);
+    $modelCandidates = function_exists('agent_model_chain_for')
+        ? agent_model_chain_for('grading')
+        : ['gpt-4.1-mini'];
+    $selectedModel = '';
+    $decoded = null;
+    $result = '';
+    $finalError = 'Fehler bei der OpenAI-API.';
 
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST => true,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey,
-        ],
-        CURLOPT_POSTFIELDS => $body,
-        CURLOPT_TIMEOUT => 20,
-    ]);
-
-    $result = curl_exec($ch);
-    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlError = curl_error($ch);
-    curl_close($ch);
-
-    if ($result === false) {
-        return ['error' => 'Fehler beim Aufruf der OpenAI-API: ' . $curlError];
-    }
-
-    if ($status < 200 || $status >= 300) {
-        if ($status == 429) {
-            return ['error' => 'OpenAI-Rate-Limit erreicht (429). Bitte kurz warten und erneut probieren.'];
+    foreach ($modelCandidates as $index => $modelName) {
+        $body = json_encode([
+            'model' => $modelName,
+            'messages' => $messages,
+            'temperature' => 0,
+        ]);
+        if (!is_string($body) || $body === '') {
+            $finalError = 'OpenAI-Request konnte nicht serialisiert werden.';
+            continue;
         }
-        return ['error' => 'Fehler bei der OpenAI-API (' . $status . ').'];
-    }
 
-    $decoded = json_decode($result, true);
+        $ch = curl_init('https://api.openai.com/v1/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $apiKey,
+            ],
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_TIMEOUT => 20,
+        ]);
 
-    // Saubere Fehler, wenn JSON kaputt ist oder keine Choice zurückkommt
-    if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
-        return ['error' => 'Antwort der OpenAI-API konnte nicht gelesen werden: ' . json_last_error_msg()];
-    }
-    if (!isset($decoded['choices'][0]['message']['content'])) {
-        $errText = '';
-        if (!empty($decoded['error']['message'])) {
-            $errText = $decoded['error']['message'];
-        } elseif (!empty($result)) {
-            $errText = 'Leere Antwort erhalten. Rohdaten: ' . substr($result, 0, 2000);
-        } else {
-            $errText = 'Leere Antwort erhalten.';
+        $tryResult = curl_exec($ch);
+        $tryStatus = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $tryCurlErrno = curl_errno($ch);
+        $tryCurlError = curl_error($ch);
+        curl_close($ch);
+
+        $hasMoreCandidates = $index < count($modelCandidates) - 1;
+        $shouldRetry = $hasMoreCandidates
+            && (
+                function_exists('agent_model_should_retry')
+                    ? agent_model_should_retry($tryStatus, (string)$tryResult, $tryCurlErrno)
+                    : ($tryCurlErrno !== 0 || $tryStatus === 429 || $tryStatus >= 500)
+            );
+
+        if ($tryResult === false) {
+            $finalError = 'Fehler beim Aufruf der OpenAI-API: ' . $tryCurlError;
+            if ($shouldRetry) {
+                continue;
+            }
+            return ['error' => $finalError];
         }
-        return ['error' => $errText];
+
+        if ($tryStatus < 200 || $tryStatus >= 300) {
+            if ($tryStatus == 429) {
+                $finalError = 'OpenAI-Rate-Limit erreicht (429). Bitte kurz warten und erneut probieren.';
+            } else {
+                $finalError = 'Fehler bei der OpenAI-API (' . $tryStatus . ').';
+            }
+            if ($shouldRetry) {
+                continue;
+            }
+            return ['error' => $finalError];
+        }
+
+        $decodedCandidate = json_decode($tryResult, true);
+        if ($decodedCandidate === null && json_last_error() !== JSON_ERROR_NONE) {
+            $finalError = 'Antwort der OpenAI-API konnte nicht gelesen werden: ' . json_last_error_msg();
+            if ($hasMoreCandidates) {
+                continue;
+            }
+            return ['error' => $finalError];
+        }
+
+        if (!isset($decodedCandidate['choices'][0]['message']['content'])) {
+            $errText = '';
+            if (!empty($decodedCandidate['error']['message'])) {
+                $errText = $decodedCandidate['error']['message'];
+            } elseif (!empty($tryResult)) {
+                $errText = 'Leere Antwort erhalten. Rohdaten: ' . substr($tryResult, 0, 2000);
+            } else {
+                $errText = 'Leere Antwort erhalten.';
+            }
+            $finalError = $errText;
+            if ($hasMoreCandidates) {
+                continue;
+            }
+            return ['error' => $finalError];
+        }
+
+        $decoded = $decodedCandidate;
+        $result = (string)$tryResult;
+        $selectedModel = (string)$modelName;
+        break;
+    }
+
+    if (!is_array($decoded)) {
+        return ['error' => $finalError];
     }
 
     $inhalt = $decoded['choices'][0]['message']['content'] ?? '';
@@ -226,6 +297,7 @@ function bewerteAntwortMitKI($payload)
         'classification_label' => $classificationLabel,
         'explanation' => $erklaerung,
         'raw' => $rohText,
+        'model' => $selectedModel,
     ];
 }
 
@@ -248,4 +320,14 @@ function mapClassificationScore($value)
     if ($upper === 'FALSCH') return 0;
 
     return null;
+}
+
+function answer_scope_clause_for_user($userId)
+{
+    $uid = intval($userId);
+    return '('
+        . '`classroom` IN (SELECT `id` FROM `classroom` WHERE `user` = ' . $uid . ')'
+        . ' OR '
+        . '`sheet` IN (SELECT `key` FROM `sheet` WHERE `user` = ' . $uid . ')'
+        . ')';
 }

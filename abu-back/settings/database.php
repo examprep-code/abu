@@ -9,6 +9,7 @@ $m2s=[
     'email'=>'varchar',
     'array'=> 'text',
     'text'=>'text',
+    'longtext'=>'longtext',
     'fkey'=>'int',
     'rkey'=>'none',
     'float'=>'float',
@@ -24,6 +25,7 @@ $s=[
     'varchar' => 'VARCHAR(255)',
     // allow larger payloads (e.g. JSON logs)
     'text' => 'TEXT',
+    'longtext' => 'LONGTEXT',
     'int' => 'INT',
     'bool' => 'INT(1)',
     'date' => 'DATE',
@@ -38,6 +40,7 @@ $in=[
     'word' => ['validate/type'=>'string', 'validate/length'=>255],
     'password' => ['transform/encrypt'=>''],//is_numeric
     'text' => ['validate/type'=>'string',],
+    'longtext' => ['validate/type'=>'string',],
     'enum' => ['validate/type'=>'integer',],
     'email' => ['validate/email'=>'',],
     'int' => ['validate/type'=>'integer',],

@@ -23,4 +23,12 @@ if (!defined('OPENAI_API_KEY')) {
 // define("AGENT_LOG_MAX_STRING", 18000);
 // define("AGENT_LOG_MAX_ITEMS", 250);
 // define("AGENT_LOG_MAX_DEPTH", 10);
+
+// Optional model routing (comma-separated fallbacks)
+// define("AGENT_INTENT_MODEL", "gpt-4o-mini");
+// define("AGENT_INTENT_FALLBACK_MODELS", "gpt-4.1-mini");
+// define("AGENT_MAIN_MODEL", "gpt-4.1-mini");
+// define("AGENT_MAIN_FALLBACK_MODELS", "gpt-4o-mini");
+// define("AGENT_GRADING_MODEL", "gpt-4.1-mini");
+// define("AGENT_GRADING_FALLBACK_MODELS", "gpt-4o-mini");
 ?>

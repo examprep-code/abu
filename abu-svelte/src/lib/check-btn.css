@@ -10,6 +10,9 @@
   padding: 0;
   font-size: 0.9rem;
   border-radius: 999px;
+  border: 1px solid var(--ci-button-secondary);
+  background-color: var(--ci-button-secondary);
+  color: var(--ci-button-text, #fff);
   cursor: pointer;
   position: relative;
   font-weight: 600;
@@ -23,7 +26,7 @@
   display: inline-block;
   font-size: 1rem;
   line-height: 1;
-  opacity: 0.6;
+  opacity: 1;
 }
 
 :global(.check-btn__label) {
@@ -37,11 +40,21 @@
   border: 0;
 }
 
-:global(.check-btn:hover) {
+:global(.check-btn:hover:enabled),
+:global(.check-btn:focus-visible) {
+  background-color: var(--ci-button-secondary-accent);
+  border-color: var(--ci-button-secondary-accent);
   text-decoration: none;
 }
 
 :global(.check-btn--richtig) {
+  border-color: #1c8f4a;
+  background-color: #e4f5e7;
+  color: #1c8f4a;
+}
+
+:global(.check-btn--richtig:hover:enabled),
+:global(.check-btn--richtig:focus-visible) {
   border-color: #1c8f4a;
   background-color: #e4f5e7;
   color: #1c8f4a;
@@ -58,12 +71,26 @@
   color: #d98a1a;
 }
 
+:global(.check-btn--teilweise:hover:enabled),
+:global(.check-btn--teilweise:focus-visible) {
+  border-color: #d98a1a;
+  background-color: #fff4de;
+  color: #d98a1a;
+}
+
 :global(.check-btn--teilweise::before) {
   content: '≈';
   opacity: 1;
 }
 
 :global(.check-btn--falsch) {
+  border-color: #c33b3b;
+  background-color: #fde7e7;
+  color: #c33b3b;
+}
+
+:global(.check-btn--falsch:hover:enabled),
+:global(.check-btn--falsch:focus-visible) {
   border-color: #c33b3b;
   background-color: #fde7e7;
   color: #c33b3b;

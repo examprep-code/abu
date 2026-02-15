@@ -4,6 +4,8 @@
   --ci-font-title: 'Fraunces', 'Georgia', serif;
   --ci-button-primary: #0f172a;
   --ci-button-accent: #1f2937;
+  --ci-button-secondary: var(--ci-secondary, #ec5a8f);
+  --ci-button-secondary-accent: var(--ci-secondary-accent, #d63e75);
   --ci-button-text: #ffffff;
   --ci-border: #d1d5db;
   --ci-surface: #ffffff;
@@ -12,6 +14,7 @@
 }
 
 .ci-btn-primary,
+.ci-btn-secondary,
 .ci-btn-outline,
 .ci-btn-soft,
 .ci-tab {
@@ -33,6 +36,18 @@
 .ci-btn-primary:focus-visible {
   background: var(--ci-button-accent);
   border-color: var(--ci-button-accent);
+}
+
+.ci-btn-secondary {
+  background: var(--ci-button-secondary);
+  color: var(--ci-button-text);
+  border: 1px solid var(--ci-button-secondary);
+}
+
+.ci-btn-secondary:hover:enabled,
+.ci-btn-secondary:focus-visible {
+  background: var(--ci-button-secondary-accent);
+  border-color: var(--ci-button-secondary-accent);
 }
 
 .ci-btn-outline {
@@ -59,6 +74,7 @@
 }
 
 .ci-btn-primary:disabled,
+.ci-btn-secondary:disabled,
 .ci-btn-outline:disabled,
 .ci-btn-soft:disabled,
 .ci-tab:disabled {

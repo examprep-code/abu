@@ -629,7 +629,7 @@
     animation: abu-caret-blink 1s steps(1, end) infinite;
   }
 
-  .sheet :global(button)::before,
+  .sheet :global(button:not(.check-btn))::before,
   .sheet :global(select)::before,
   .sheet :global(input[type='checkbox'])::before,
   .sheet :global(input[type='radio'])::before,

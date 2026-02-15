@@ -15,6 +15,9 @@
     resolveAgentContext,
     resolveAgentNavigationIntent
   } from '$lib/agent/router';
+  import { createAgentConversation } from '$lib/agent/conversation';
+  import { createDefaultAgentProvider } from '$lib/agent/provider';
+  import { createAgentScopeState } from '$lib/agent/session';
   import ListTable from '$lib/components/ListTable.svelte';
 
   const showLegacyImport = false;
@@ -40,6 +43,10 @@
   let editorContent = '';
   let editorName = '';
   let saving = false;
+  let sheetSaveStatus = 'idle';
+  let sheetHasUnsavedChanges = false;
+  let sheetSaveButtonSaved = false;
+  let sheetSaveButtonLabel = 'Speichern';
   let saveState = '';
   let lastSavedSheetId = null;
   let lastSavedSheetName = '';
@@ -50,9 +57,11 @@
   let versionsError = '';
   let selectedVersionId = '';
   let restoringVersion = false;
-  let versionState = '';
+  let versionRestoreStatus = 'idle';
+  let versionRestoreButtonRestored = false;
   let selectedVersion = null;
   let isCurrentVersion = false;
+  let sheetVersionNumbers = new Map();
 
   let creating = false;
   let deleting = false;
@@ -74,6 +83,8 @@
 
   let adminCiSchoolId = '';
   let adminCiCss = '';
+  let selectedCiSchoolName = '';
+  let isCiSchoolZag = false;
 
   let schools = [];
   let loadingSchools = false;
@@ -105,6 +116,7 @@
   let classNotes = '';
   let classSchoolId = '';
   let classSort = 'name_asc';
+  let classSchoolFilter = '';
   let classDetailView = 'details';
   let newClassName = '';
   let newClassYear = '';
@@ -152,10 +164,25 @@
   let visualBlockHtmlInputs = [];
   let visualBlockEditors = [];
   let visualBlockSelections = [];
+  let blockDragImageEl = null;
   let dragIndex = null;
   let dragOverIndex = null;
   let visualActiveBlock = 0;
   let blockInsertIndex = null;
+  const VISUAL_HISTORY_LIMIT = 200;
+  const VISUAL_HISTORY_CHUNK_MS = 900;
+  const AGENT_HISTORY_CONTEXT_MAX_TURNS = 5;
+  const AGENT_HISTORY_CONTEXT_MIN_TURNS = 2;
+  const AGENT_HISTORY_CONTEXT_MAX_TOTAL_CHARS = 7000;
+  const AGENT_HISTORY_CONTEXT_MAX_PROMPT_CHARS = 520;
+  const AGENT_HISTORY_CONTEXT_MAX_RESPONSE_CHARS = 850;
+  const AGENT_HISTORY_CONTEXT_MAX_SUMMARY_CHARS = 1400;
+  const AGENT_HISTORY_CONTEXT_MAX_SUMMARY_ITEMS = 8;
+  const AGENT_HISTORY_CONTEXT_MAX_SUMMARY_ITEM_CHARS = 180;
+  let visualHistoryPast = [];
+  let visualHistoryFuture = [];
+  let visualHistoryApplying = false;
+  let visualHistoryChunk = null;
 
   let agentPrompt = '';
   let agentStatus = '';
@@ -164,13 +191,7 @@
   let agentHistoryEl = null;
   let agentInputEl = null;
   let agentContext = 'app';
-  const createEmptyAgentMemory = () => ({
-    sheetMatchIds: [],
-    lastExerciseTopic: '',
-    lastExerciseIntent: '',
-    lastSheetAuditIntent: ''
-  });
-  let agentMemoryByScope = {};
+  const agentScopeState = createAgentScopeState();
   let agentSidebarOpen = true;
 
   let answersEl = null;
@@ -215,7 +236,7 @@
   const SHEET_TABLE_COLUMNS =
     'minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(88px, auto)';
   const CLASS_TABLE_COLUMNS =
-    'minmax(0, 1fr) minmax(0, 0.5fr) minmax(0, 0.8fr) minmax(0, 0.9fr) minmax(0, 1fr) minmax(180px, 1.4fr)';
+    'minmax(0, 1.2fr) minmax(0, 0.42fr) minmax(0, 0.72fr) minmax(0, 0.84fr) minmax(0, 0.92fr) minmax(280px, 1.45fr)';
 
   $: planAssignmentMap = new Map(
     planAssignments.map((entry) => [entry.sheet_key, entry])
@@ -228,6 +249,11 @@
       ? schools.find((school) => `${school.id}` === `${adminCiSchoolId}`)?.name ||
         `Schule #${adminCiSchoolId}`
       : 'Standard';
+  $: selectedCiSchoolName =
+    adminCiSchoolId !== ''
+      ? schools.find((school) => `${school.id}` === `${adminCiSchoolId}`)?.name ?? ''
+      : '';
+  $: isCiSchoolZag = /\bzag\b/i.test(selectedCiSchoolName);
   $: {
     agentPrompt;
     resizeAgentInput();
@@ -276,10 +302,23 @@
   $: selectedVersion =
     sheetVersions.find((entry) => String(entry?.id) === String(selectedVersionId)) ?? null;
   $: isCurrentVersion = selectedVersion ? Number(selectedVersion.is_current) === 1 : false;
+  $: sheetVersionNumbers = buildVersionNumberMap(sheetVersions);
 
   $: {
     schoolMap;
-    visibleClasses = [...classes].sort((a, b) => {
+    if (
+      classSchoolFilter &&
+      !schools.some((school) => String(school.id) === String(classSchoolFilter))
+    ) {
+      classSchoolFilter = '';
+    }
+    const filteredClasses = classSchoolFilter
+      ? classes.filter(
+          (entry) =>
+            String(normalizeSchoolId(entry?.school)) === String(classSchoolFilter)
+        )
+      : classes;
+    visibleClasses = [...filteredClasses].sort((a, b) => {
       const { field, dir } = parseClassSort(classSort);
       const direction = dir === 'desc' ? -1 : 1;
       const valueA = getClassSortValue(a, field);
@@ -363,6 +402,8 @@
       sortable: true,
       onSort: () => toggleClassSort('year'),
       sortHint: () => getClassSortHint('year'),
+      className: 'sheet-cell--class-year',
+      headerClass: 'sheet-cell--class-year',
       value: (entry) => entry?.year || ''
     },
     {
@@ -371,6 +412,8 @@
       sortable: true,
       onSort: () => toggleClassSort('profession'),
       sortHint: () => getClassSortHint('profession'),
+      className: 'sheet-cell--class-profession',
+      headerClass: 'sheet-cell--class-profession',
       value: (entry) => entry?.profession || ''
     },
     {
@@ -379,6 +422,8 @@
       sortable: true,
       onSort: () => toggleClassSort('school'),
       sortHint: () => getClassSortHint('school'),
+      className: 'sheet-cell--class-school',
+      headerClass: 'sheet-cell--class-school',
       value: (entry) => getSchoolLabel(entry?.school) || ''
     },
     {
@@ -387,6 +432,8 @@
       sortable: true,
       onSort: () => toggleClassSort('notes'),
       sortHint: () => getClassSortHint('notes'),
+      className: 'sheet-cell--class-notes',
+      headerClass: 'sheet-cell--class-notes',
       value: (entry) => formatClassNotes(entry?.notes)
     }
   ];
@@ -433,7 +480,7 @@
     if (!browser || !selectedId || saving || !hasUnsavedSheetChanges()) return;
     sheetAutosaveTimer = window.setTimeout(() => {
       sheetAutosaveTimer = null;
-      saveSheet({ autosave: true, refreshSheetList: false, statusLabel: 'Automatisch gespeichert' });
+      saveSheet({ refreshSheetList: false });
     }, SHEET_AUTOSAVE_DELAY_MS);
   };
 
@@ -444,11 +491,7 @@
       `Ungelespeicherte Aenderungen erkannt.\n\nZiel: ${targetLabel}\n\nOK: Jetzt speichern und wechseln.\nAbbrechen: Im Editor bleiben.`
     );
     if (!shouldSaveAndLeave) return false;
-    const saved = await saveSheet({
-      autosave: true,
-      refreshSheetList: false,
-      statusLabel: 'Automatisch gespeichert'
-    });
+    const saved = await saveSheet({ refreshSheetList: false });
     if (saved) return true;
     return window.confirm(
       'Speichern ist fehlgeschlagen. Ohne Speichern wechseln und Aenderungen verwerfen?'
@@ -469,11 +512,27 @@
     lastSavedSheetId;
     lastSavedSheetName;
     lastSavedSheetContent;
-    if (selectedId && !saving && hasUnsavedSheetChanges()) {
+    sheetHasUnsavedChanges = hasUnsavedSheetChanges();
+    if (selectedId && !saving && sheetHasUnsavedChanges) {
       scheduleSheetAutosave();
     } else {
       clearSheetAutosaveTimer();
     }
+  }
+  $: sheetSaveButtonSaved =
+    sheetSaveStatus === 'saved' && !saving && !sheetHasUnsavedChanges;
+  $: sheetSaveButtonLabel = saving
+    ? 'Speichere…'
+    : sheetSaveButtonSaved
+      ? 'Gespeichert'
+      : 'Speichern';
+  $: if (sheetSaveStatus === 'saved' && sheetHasUnsavedChanges) {
+    sheetSaveStatus = 'idle';
+  }
+  $: versionRestoreButtonRestored =
+    versionRestoreStatus === 'restored' && !restoringVersion && !sheetHasUnsavedChanges;
+  $: if (versionRestoreStatus === 'restored' && sheetHasUnsavedChanges) {
+    versionRestoreStatus = 'idle';
   }
 
   const syncCodeScroll = (inputEl, highlightEl) => {
@@ -714,10 +773,7 @@
   function formatAnswersLearnerLabel(entry) {
     if (!entry) return 'Lernende';
     const name = (entry?.name ?? '').toString().trim();
-    const code = (entry?.code ?? '').toString().trim();
-    if (name && code) return `${name} (${code})`;
     if (name) return name;
-    if (code) return code;
     if (entry?.id) return `Lernende ${entry.id}`;
     return 'Lernende';
   }
@@ -837,7 +893,7 @@
     agentStatus = '';
     agentPending = false;
     agentHistory = [];
-    agentMemoryByScope = {};
+    agentScopeState.reset();
     destroyAnswersRuntime();
   };
 
@@ -882,7 +938,7 @@
     versionsLoading = false;
     versionsError = '';
     selectedVersionId = '';
-    versionState = '';
+    versionRestoreStatus = 'idle';
     restoringVersion = false;
   };
 
@@ -893,7 +949,6 @@
     }
     versionsLoading = true;
     versionsError = '';
-    versionState = '';
     try {
       const res = await apiFetch(`sheet?key=${encodeURIComponent(key)}`);
       const payload = await readPayload(res);
@@ -921,6 +976,7 @@
     editorContent = current?.content ?? '';
     editorName = current?.name ?? '';
     selectedKey = current?.key ?? '';
+    sheetSaveStatus = 'idle';
     saveState = '';
     if (!preserveView) {
       editorView = 'visual';
@@ -944,6 +1000,7 @@
     answersRenderKey = 0;
     destroyAnswersRuntime();
     visualActiveBlock = 0;
+    resetVisualHistory();
     rememberSavedSheetState();
     if (current?.key) {
       fetchSheetVersions(current.key);
@@ -960,6 +1017,7 @@
     selectedKey = '';
     editorContent = '';
     editorName = '';
+    sheetSaveStatus = 'idle';
     saveState = '';
     editorView = 'visual';
     resetSheetVersions();
@@ -986,6 +1044,7 @@
     answersRenderKey = 0;
     destroyAnswersRuntime();
     visualActiveBlock = 0;
+    resetVisualHistory();
     blockInsertIndex = null;
     resetSavedSheetState();
     return true;
@@ -1037,11 +1096,7 @@
     }
   };
 
-  const saveSheet = async ({
-    autosave = false,
-    refreshSheetList = true,
-    statusLabel = null
-  } = {}) => {
+  const saveSheet = async ({ refreshSheetList = true } = {}) => {
     if (!selectedId || saving) return false;
     if (!hasUnsavedSheetChanges()) {
       return true;
@@ -1051,9 +1106,8 @@
     const nextName = editorName;
     clearSheetAutosaveTimer();
     saving = true;
-    if (!autosave) {
-      saveState = '';
-    }
+    sheetSaveStatus = 'saving';
+    saveState = '';
     try {
       const res = await apiFetch('sheet', {
         method: 'PATCH',
@@ -1065,6 +1119,7 @@
       });
       const payload = await readPayload(res);
       if (!res.ok) {
+        sheetSaveStatus = 'error';
         saveState = payload?.warning || 'Speichern fehlgeschlagen';
         return false;
       }
@@ -1088,9 +1143,11 @@
       if (selectedId === targetId) {
         rememberSavedSheetState();
       }
-      saveState = statusLabel ?? (autosave ? 'Automatisch gespeichert' : 'Gespeichert');
+      sheetSaveStatus = 'saved';
+      saveState = '';
       return true;
     } catch (err) {
+      sheetSaveStatus = 'error';
       saveState = err?.message ?? 'Speichern fehlgeschlagen';
       return false;
     } finally {
@@ -1107,15 +1164,11 @@
       (entry) => String(entry?.id) === String(selectedVersionId)
     );
     if (!target) return;
-    if (Number(target.is_current) === 1) {
-      versionState = 'Version ist bereits aktuell.';
-      return;
-    }
     const label = describeVersion(target);
     if (!confirmRestore(`Version ${label}`)) return;
     restoringVersion = true;
     versionsError = '';
-    versionState = '';
+    versionRestoreStatus = 'restoring';
     const keepView = editorView;
     try {
       const res = await apiFetch('sheet', {
@@ -1128,6 +1181,7 @@
       const payload = await readPayload(res);
       if (!res.ok) {
         versionsError = payload?.warning || 'Wiederherstellen fehlgeschlagen';
+        versionRestoreStatus = 'idle';
         return;
       }
       await fetchSheets();
@@ -1137,9 +1191,10 @@
       if (selectedId) {
         editorView = keepView;
       }
-      versionState = 'Version wiederhergestellt.';
+      versionRestoreStatus = 'restored';
     } catch (err) {
       versionsError = err?.message ?? 'Wiederherstellen fehlgeschlagen';
+      versionRestoreStatus = 'idle';
     } finally {
       restoringVersion = false;
     }
@@ -1953,7 +2008,152 @@
     return next;
   };
 
+  const cloneVisualHistoryState = () => ({
+    blocks: [...visualBlocks],
+    views: [...visualBlockViews],
+    activeBlock: Number.isFinite(visualActiveBlock) ? visualActiveBlock : 0
+  });
+
+  const isSameVisualHistoryState = (a, b) => {
+    if (!a || !b) return false;
+    if ((a.activeBlock ?? 0) !== (b.activeBlock ?? 0)) return false;
+    const aBlocks = Array.isArray(a.blocks) ? a.blocks : [];
+    const bBlocks = Array.isArray(b.blocks) ? b.blocks : [];
+    if (aBlocks.length !== bBlocks.length) return false;
+    for (let idx = 0; idx < aBlocks.length; idx += 1) {
+      if ((aBlocks[idx] ?? '') !== (bBlocks[idx] ?? '')) return false;
+    }
+    const aViews = Array.isArray(a.views) ? a.views : [];
+    const bViews = Array.isArray(b.views) ? b.views : [];
+    if (aViews.length !== bViews.length) return false;
+    for (let idx = 0; idx < aViews.length; idx += 1) {
+      if ((aViews[idx] ?? 'visual') !== (bViews[idx] ?? 'visual')) return false;
+    }
+    return true;
+  };
+
+  const resetVisualHistory = () => {
+    visualHistoryPast = [];
+    visualHistoryFuture = [];
+    visualHistoryChunk = null;
+  };
+
+  const pushVisualHistorySnapshot = (options = {}) => {
+    if (visualHistoryApplying) return;
+    const now = Date.now();
+    const coalesce = Boolean(options?.coalesce);
+    const chunkKey = typeof options?.chunkKey === 'string' ? options.chunkKey : '';
+    const windowMs = Number.isFinite(options?.windowMs)
+      ? Number(options.windowMs)
+      : VISUAL_HISTORY_CHUNK_MS;
+    if (
+      coalesce &&
+      chunkKey &&
+      visualHistoryChunk?.key === chunkKey &&
+      now - Number(visualHistoryChunk?.at || 0) <= windowMs
+    ) {
+      visualHistoryChunk = { key: chunkKey, at: now };
+      visualHistoryFuture = [];
+      return;
+    }
+    const snapshot = cloneVisualHistoryState();
+    const last = visualHistoryPast[visualHistoryPast.length - 1];
+    if (last && isSameVisualHistoryState(last, snapshot)) return;
+    visualHistoryPast = [...visualHistoryPast, snapshot].slice(-VISUAL_HISTORY_LIMIT);
+    visualHistoryFuture = [];
+    visualHistoryChunk = coalesce && chunkKey ? { key: chunkKey, at: now } : null;
+  };
+
+  const getVisualInputHistoryOptions = (index, event, mode = 'visual') => {
+    const inputType = (event?.inputType || '').toLowerCase();
+    if (inputType.startsWith('history')) {
+      return {};
+    }
+    if (inputType.startsWith('delete')) {
+      return {
+        coalesce: true,
+        chunkKey: `block:${index}:${mode}:delete`
+      };
+    }
+    if (inputType.startsWith('insert')) {
+      return {
+        coalesce: true,
+        chunkKey: `block:${index}:${mode}:insert`
+      };
+    }
+    return {};
+  };
+
+  const applyVisualHistoryState = async (state) => {
+    if (!state) return false;
+    visualHistoryApplying = true;
+    visualHistoryChunk = null;
+    try {
+      const nextBlocks = Array.isArray(state.blocks) && state.blocks.length ? [...state.blocks] : [''];
+      visualBlocks = nextBlocks;
+      visualBlockViews = normalizeVisualBlockViews(
+        Array.isArray(state.views) ? state.views : [],
+        nextBlocks.length
+      );
+      const nextActiveBlock = Number.isFinite(state.activeBlock) ? state.activeBlock : 0;
+      visualActiveBlock = Math.max(0, Math.min(nextActiveBlock, nextBlocks.length - 1));
+      commitVisualBlocks();
+      await tick();
+      const activeIndex = Math.min(
+        Math.max(0, visualActiveBlock),
+        Math.max(visualBlocks.length - 1, 0)
+      );
+      const target =
+        visualBlockViews[activeIndex] === 'visual'
+          ? visualBlockEditors[activeIndex]
+          : visualBlockHtmlInputs[activeIndex];
+      target?.focus?.();
+      return true;
+    } finally {
+      visualHistoryApplying = false;
+    }
+  };
+
+  const undoVisualChange = async () => {
+    if (!visualHistoryPast.length) return false;
+    visualHistoryChunk = null;
+    const previous = visualHistoryPast[visualHistoryPast.length - 1];
+    const current = cloneVisualHistoryState();
+    visualHistoryPast = visualHistoryPast.slice(0, -1);
+    const nextFuture = [...visualHistoryFuture, current];
+    visualHistoryFuture = nextFuture.slice(-VISUAL_HISTORY_LIMIT);
+    return applyVisualHistoryState(previous);
+  };
+
+  const redoVisualChange = async () => {
+    if (!visualHistoryFuture.length) return false;
+    visualHistoryChunk = null;
+    const next = visualHistoryFuture[visualHistoryFuture.length - 1];
+    const current = cloneVisualHistoryState();
+    visualHistoryFuture = visualHistoryFuture.slice(0, -1);
+    visualHistoryPast = [...visualHistoryPast, current].slice(-VISUAL_HISTORY_LIMIT);
+    return applyVisualHistoryState(next);
+  };
+
+  const isUndoShortcut = (event) => {
+    const key = (event?.key || '').toLowerCase();
+    const hasModifier = Boolean(event?.metaKey || event?.ctrlKey);
+    if (!hasModifier || event?.altKey) return false;
+    return key === 'z' && !event.shiftKey;
+  };
+
+  const isRedoShortcut = (event) => {
+    const key = (event?.key || '').toLowerCase();
+    if (event?.altKey) return false;
+    const isCmdShiftZ = Boolean(event?.metaKey || event?.ctrlKey) && key === 'z' && event.shiftKey;
+    const isCtrlY = Boolean(event?.ctrlKey) && !event?.metaKey && key === 'y';
+    return isCmdShiftZ || isCtrlY;
+  };
+
   const syncVisualPreviewFromHtml = () => {
+    if (!visualHistoryApplying) {
+      resetVisualHistory();
+    }
     const blocks = extractParagraphBlocks(editorContent || '');
     visualBlocks = blocks;
     visualBlockViews = normalizeVisualBlockViews(visualBlockViews, blocks.length);
@@ -1979,14 +2179,20 @@
     renderVisualPreviewFromBlocks(nextBlocks);
   };
 
-  const updateVisualBlock = (index, value) => {
+  const updateVisualBlock = (index, value, historyOptions = {}) => {
+    if (index < 0 || index >= visualBlocks.length) return;
+    const normalizedValue = normalizeBlockContent(value);
+    if ((visualBlocks[index] ?? '') === normalizedValue) return;
+    pushVisualHistorySnapshot(historyOptions);
     const next = [...visualBlocks];
-    next[index] = normalizeBlockContent(value);
+    next[index] = normalizedValue;
     visualBlocks = next;
     commitVisualBlocks();
   };
 
   const deleteVisualBlockAt = (index) => {
+    if (index < 0 || index >= visualBlocks.length) return;
+    pushVisualHistorySnapshot();
     const next = [...visualBlocks];
     next.splice(index, 1);
     if (!next.length) next.push('');
@@ -1999,9 +2205,12 @@
 
   const moveVisualBlock = (from, to) => {
     if (from === null || to === null || from === to) return;
+    if (from < 0 || from >= visualBlocks.length) return;
     const next = [...visualBlocks];
     const [item] = next.splice(from, 1);
     const adjusted = from < to ? to - 1 : to;
+    if (adjusted < 0 || adjusted > next.length) return;
+    pushVisualHistorySnapshot();
     next.splice(adjusted, 0, item);
     visualBlocks = next;
     const nextViews = [...visualBlockViews];
@@ -2017,6 +2226,48 @@
     return Boolean(target.closest('input, textarea, [contenteditable="true"]'));
   };
 
+  const removeBlockDragImage = () => {
+    if (!blockDragImageEl) return;
+    blockDragImageEl.remove();
+    blockDragImageEl = null;
+  };
+
+  const getDragImageOffsetScale = () => {
+    if (!browser) return 1;
+    const dpr = window.devicePixelRatio || 1;
+    if (dpr <= 1) return 1;
+    const ua = navigator.userAgent || '';
+    const vendor = navigator.vendor || '';
+    const isSafari =
+      /Safari/i.test(ua) &&
+      /Apple/i.test(vendor) &&
+      !/(Chrome|CriOS|Chromium|Edg|OPR|Firefox|FxiOS)/i.test(ua);
+    return isSafari ? dpr : 1;
+  };
+
+  const setBlockDragImage = (event) => {
+    if (!browser || !event?.dataTransfer) return;
+    const source = event.currentTarget;
+    if (!(source instanceof HTMLElement)) return;
+
+    removeBlockDragImage();
+    const rect = source.getBoundingClientRect();
+    const ghost = source.cloneNode(true);
+    if (!(ghost instanceof HTMLElement)) return;
+    ghost.classList.add('block-editor--drag-image');
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    document.body.appendChild(ghost);
+    blockDragImageEl = ghost;
+
+    const rawX = Number.isFinite(event.clientX) ? event.clientX - rect.left : rect.width / 2;
+    const rawY = Number.isFinite(event.clientY) ? event.clientY - rect.top : rect.height / 2;
+    const offsetScale = getDragImageOffsetScale();
+    const offsetX = Math.max(0, Math.min(rect.width * offsetScale, rawX * offsetScale));
+    const offsetY = Math.max(0, Math.min(rect.height * offsetScale, rawY * offsetScale));
+    event.dataTransfer.setDragImage(ghost, offsetX, offsetY);
+  };
+
   const handleBlockDragStart = (event, index) => {
     if (isEditableDragTarget(event)) {
       event.preventDefault();
@@ -2027,6 +2278,7 @@
     if (event?.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData('text/plain', String(index));
+      setBlockDragImage(event);
     }
   };
 
@@ -2044,12 +2296,14 @@
       dragIndex ?? (event?.dataTransfer ? parseInt(event.dataTransfer.getData('text/plain'), 10) : NaN);
     const from = Number.isFinite(fromRaw) ? fromRaw : null;
     moveVisualBlock(from, index);
+    removeBlockDragImage();
     dragIndex = null;
     dragOverIndex = null;
     blockInsertIndex = null;
   };
 
   const handleBlockDragEnd = () => {
+    removeBlockDragImage();
     dragIndex = null;
     dragOverIndex = null;
   };
@@ -2058,6 +2312,11 @@
     const next = [...visualBlockViews];
     next[index] = view;
     visualBlockViews = normalizeVisualBlockViews(next, visualBlocks.length);
+  };
+
+  const toggleVisualBlockView = (index) => {
+    const currentView = visualBlockViews[index] === 'html' ? 'html' : 'visual';
+    setVisualBlockView(index, currentView === 'visual' ? 'html' : 'visual');
   };
 
   const buildLueckeSnippet = (variant = 'gap') => {
@@ -2397,6 +2656,7 @@
 
   const appendVisualBlock = async (html, view = 'visual') => {
     const normalized = normalizeBlockContent(html);
+    pushVisualHistorySnapshot();
     const nextBlocks = [...visualBlocks, normalized];
     visualBlocks = nextBlocks;
     const nextViews = [...visualBlockViews, view];
@@ -2413,6 +2673,7 @@
 
   const insertVisualBlockAt = async (index, html = '', view = 'visual') => {
     const normalized = normalizeBlockContent(html);
+    pushVisualHistorySnapshot();
     const nextBlocks = [...visualBlocks];
     const clampedIndex = Math.max(0, Math.min(index, nextBlocks.length));
     nextBlocks.splice(clampedIndex, 0, normalized);
@@ -2448,7 +2709,19 @@
     }
   };
 
-  const appendAgentHistoryPrompt = async (prompt) => {
+  const patchAgentHistoryEntry = (id, patch) => {
+    if (!id) return null;
+    let nextEntry = null;
+    agentHistory = agentHistory.map((entry) => {
+      if (entry.id !== id) return entry;
+      const nextPatch = typeof patch === 'function' ? patch(entry) : patch;
+      nextEntry = { ...entry, ...(nextPatch || {}) };
+      return nextEntry;
+    });
+    return nextEntry;
+  };
+
+  const appendAgentHistoryPrompt = async (prompt, scope = 'app') => {
     const trimmedPrompt = (prompt || '').trim();
     if (!trimmedPrompt) return '';
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2456,32 +2729,204 @@
       ...agentHistory,
       {
         id,
+        scope: typeof scope === 'string' && scope ? scope : 'app',
         prompt: trimmedPrompt,
         response: '',
         pending: true,
-        error: false
+        error: false,
+        feedbackOpen: false,
+        logId: '',
+        ratingValue: null,
+        ratingComment: '',
+        ratingSaving: false,
+        ratingSaved: false,
+        ratingError: ''
       }
     ];
     await scrollAgentHistoryToBottom();
     return id;
   };
 
+  const trimAgentHistoryText = (value, maxChars = 240) => {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    if (text.length <= maxChars) return text;
+    const remaining = text.length - maxChars;
+    return `${text.slice(0, maxChars)}...[truncated ${remaining} chars]`;
+  };
+
+  const estimateAgentHistoryContextChars = (summary, turns) =>
+    (summary || '').length +
+    (Array.isArray(turns)
+      ? turns.reduce(
+          (sum, entry) =>
+            sum + String(entry?.user || '').length + String(entry?.assistant || '').length,
+          0
+        )
+      : 0);
+
+  const buildAgentHistoryContext = (scope) => {
+    const normalizedScope = typeof scope === 'string' && scope ? scope : 'app';
+    const completedEntries = agentHistory
+      .filter((entry) => {
+        if (!entry || entry.pending) return false;
+        const entryScope = typeof entry.scope === 'string' && entry.scope ? entry.scope : 'app';
+        return entryScope === normalizedScope;
+      })
+      .map((entry) => ({
+        prompt: trimAgentHistoryText(entry.prompt, AGENT_HISTORY_CONTEXT_MAX_PROMPT_CHARS),
+        response: trimAgentHistoryText(entry.response, AGENT_HISTORY_CONTEXT_MAX_RESPONSE_CHARS)
+      }))
+      .filter((entry) => entry.prompt && entry.response);
+
+    if (!completedEntries.length) return null;
+
+    let turns = completedEntries
+      .slice(-AGENT_HISTORY_CONTEXT_MAX_TURNS)
+      .map((entry) => ({ user: entry.prompt, assistant: entry.response }));
+    const olderEntries = completedEntries.slice(0, Math.max(0, completedEntries.length - turns.length));
+
+    let summary = '';
+    if (olderEntries.length) {
+      const summaryLines = olderEntries
+        .slice(-AGENT_HISTORY_CONTEXT_MAX_SUMMARY_ITEMS)
+        .map(
+          (entry, index) =>
+            `${index + 1}. U: ${trimAgentHistoryText(entry.prompt, AGENT_HISTORY_CONTEXT_MAX_SUMMARY_ITEM_CHARS)} | A: ${trimAgentHistoryText(entry.response, AGENT_HISTORY_CONTEXT_MAX_SUMMARY_ITEM_CHARS)}`
+        );
+      summary = trimAgentHistoryText(
+        `Fruehere Unterhaltung (kompakt):\n${summaryLines.join('\n')}`,
+        AGENT_HISTORY_CONTEXT_MAX_SUMMARY_CHARS
+      );
+    }
+
+    while (
+      estimateAgentHistoryContextChars(summary, turns) > AGENT_HISTORY_CONTEXT_MAX_TOTAL_CHARS &&
+      turns.length > AGENT_HISTORY_CONTEXT_MIN_TURNS
+    ) {
+      turns = turns.slice(1);
+    }
+
+    if (estimateAgentHistoryContextChars(summary, turns) > AGENT_HISTORY_CONTEXT_MAX_TOTAL_CHARS) {
+      summary = trimAgentHistoryText(summary, Math.floor(AGENT_HISTORY_CONTEXT_MAX_SUMMARY_CHARS * 0.6));
+    }
+
+    if (estimateAgentHistoryContextChars(summary, turns) > AGENT_HISTORY_CONTEXT_MAX_TOTAL_CHARS) {
+      turns = turns.map((turn) => ({
+        user: trimAgentHistoryText(turn.user, Math.floor(AGENT_HISTORY_CONTEXT_MAX_PROMPT_CHARS * 0.65)),
+        assistant: trimAgentHistoryText(
+          turn.assistant,
+          Math.floor(AGENT_HISTORY_CONTEXT_MAX_RESPONSE_CHARS * 0.65)
+        )
+      }));
+    }
+
+    if (!summary && !turns.length) return null;
+    return {
+      summary,
+      turns
+    };
+  };
+
   const resolveAgentHistoryPrompt = async (id, response, error = false) => {
     const text = (response || '').trim();
     if (!id || !text) return;
-    let updated = false;
-    agentHistory = agentHistory.map((entry) => {
-      if (entry.id !== id) return entry;
-      updated = true;
-      return {
-        ...entry,
-        response: text,
-        pending: false,
-        error
-      };
+    const nextEntry = patchAgentHistoryEntry(id, {
+      response: text,
+      pending: false,
+      error
     });
-    if (!updated) return;
+    if (!nextEntry) return;
     await scrollAgentHistoryToBottom();
+  };
+
+  const setAgentHistoryLogId = (id, logId) => {
+    if (!id || !logId) return;
+    patchAgentHistoryEntry(id, {
+      logId: String(logId),
+      ratingError: ''
+    });
+  };
+
+  const toggleAgentHistoryFeedback = (id) => {
+    patchAgentHistoryEntry(id, (entry) => ({
+      feedbackOpen: !Boolean(entry?.feedbackOpen)
+    }));
+  };
+
+  const setAgentHistoryRatingValue = (id, value) => {
+    patchAgentHistoryEntry(id, {
+      ratingValue: value,
+      ratingSaved: false,
+      ratingError: ''
+    });
+  };
+
+  const setAgentHistoryRatingComment = (id, value) => {
+    patchAgentHistoryEntry(id, {
+      ratingComment: String(value ?? '').slice(0, 1200),
+      ratingSaved: false,
+      ratingError: ''
+    });
+  };
+
+  const submitAgentHistoryFeedback = async (id) => {
+    const entry = agentHistory.find((item) => item.id === id);
+    if (!entry || entry.pending) return;
+    if (!entry.logId) {
+      patchAgentHistoryEntry(id, { ratingError: 'Log-ID fehlt. Bitte Anfrage erneut senden.' });
+      return;
+    }
+
+    const rating = Number(entry.ratingValue);
+    if (rating !== 1 && rating !== 0 && rating !== -1) {
+      patchAgentHistoryEntry(id, {
+        ratingError: 'Bitte zuerst positiv, teilweise oder negativ auswaehlen.'
+      });
+      return;
+    }
+
+    patchAgentHistoryEntry(id, {
+      ratingSaving: true,
+      ratingError: ''
+    });
+
+    try {
+      const res = await apiFetch('agent_log', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          log_id: entry.logId,
+          rating,
+          comment: (entry.ratingComment || '').trim()
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        patchAgentHistoryEntry(id, {
+          ratingSaving: false,
+          ratingSaved: false,
+          ratingError: payload?.warning || 'Bewertung konnte nicht gespeichert werden.'
+        });
+        return;
+      }
+
+      patchAgentHistoryEntry(id, {
+        ratingSaving: false,
+        ratingSaved: true,
+        ratingError: '',
+        ratingValue: Number(payload?.data?.rating ?? rating),
+        ratingComment:
+          typeof payload?.data?.comment === 'string'
+            ? payload.data.comment
+            : (entry.ratingComment || '').trim()
+      });
+    } catch (err) {
+      patchAgentHistoryEntry(id, {
+        ratingSaving: false,
+        ratingSaved: false,
+        ratingError: err?.message ?? 'Bewertung konnte nicht gespeichert werden.'
+      });
+    }
   };
 
   const resizeAgentInput = () => {
@@ -2497,41 +2942,30 @@
     (context === 'html' || context === 'visual' || context === 'preview' || context === 'answers');
 
   const resolveAgentMemoryScope = () => {
-    if (activeTab === 'editor') return 'editor';
-    if (activeTab === 'classes') return 'classes';
-    if (activeTab === 'schools') return 'schools';
+    if (activeTab === 'editor') {
+      if (selectedId) return `editor:sheet:${selectedId}`;
+      return 'editor:list';
+    }
+    if (activeTab === 'classes') {
+      if (selectedClassId) return `classes:class:${selectedClassId}`;
+      return 'classes:list';
+    }
+    if (activeTab === 'schools') {
+      if (selectedSchoolId) return `schools:school:${selectedSchoolId}`;
+      return 'schools:list';
+    }
     if (activeTab === 'settings') return 'settings';
     return 'app';
   };
 
-  const getAgentMemoryForScope = (scope) => {
-    const current = agentMemoryByScope?.[scope];
-    if (!current || typeof current !== 'object') return createEmptyAgentMemory();
-    return {
-      sheetMatchIds: Array.isArray(current.sheetMatchIds) ? current.sheetMatchIds : [],
-      lastExerciseTopic:
-        typeof current.lastExerciseTopic === 'string' ? current.lastExerciseTopic : '',
-      lastExerciseIntent:
-        typeof current.lastExerciseIntent === 'string' ? current.lastExerciseIntent : '',
-      lastSheetAuditIntent:
-        typeof current.lastSheetAuditIntent === 'string' ? current.lastSheetAuditIntent : ''
-    };
-  };
+  const getAgentMemoryForScope = (scope) => agentScopeState.getMemory(scope);
 
-  const setAgentMemoryForScope = (scope, memory) => {
-    agentMemoryByScope = {
-      ...agentMemoryByScope,
-      [scope]: {
-        sheetMatchIds: Array.isArray(memory?.sheetMatchIds) ? memory.sheetMatchIds : [],
-        lastExerciseTopic:
-          typeof memory?.lastExerciseTopic === 'string' ? memory.lastExerciseTopic : '',
-        lastExerciseIntent:
-          typeof memory?.lastExerciseIntent === 'string' ? memory.lastExerciseIntent : '',
-        lastSheetAuditIntent:
-          typeof memory?.lastSheetAuditIntent === 'string' ? memory.lastSheetAuditIntent : ''
-      }
-    };
-  };
+  const setAgentMemoryForScope = (scope, memory) =>
+    agentScopeState.setMemory(scope, memory);
+
+  const getAgentDraftForScope = (scope) => agentScopeState.getDraft(scope);
+
+  const setAgentDraftForScope = (scope, draft) => agentScopeState.setDraft(scope, draft);
 
   const buildAgentVisibleItems = (context) => {
     if (context === 'visual') {
@@ -2598,14 +3032,68 @@
     visible: buildAgentVisibleItems(context)
   });
 
-  const handleAgentNavigationIntent = async (prompt) => {
-    const scope = resolveAgentMemoryScope();
-    const memory = getAgentMemoryForScope(scope);
-    const result = await resolveAgentNavigationIntent({
+  const logAgentConversation = async ({
+    prompt = '',
+    response = '',
+    status = '',
+    context = 'app',
+    source = 'navigation',
+    error = false,
+    modelIntent = null,
+    navigation = null,
+    action = '',
+    agentResult = null,
+    agentFlow = null
+  } = {}) => {
+    const normalizedPrompt = (prompt || '').trim();
+    if (!normalizedPrompt) return '';
+    try {
+      const res = await apiFetch('agent_log', {
+        method: 'POST',
+        body: JSON.stringify({
+          prompt: normalizedPrompt,
+          response: (response || '').toString(),
+          status: (status || '').toString(),
+          context: buildAgentContextDetails(context || 'app'),
+          source: (source || 'navigation').toString(),
+          error: Boolean(error),
+          outcome: error ? 'client_error' : 'client_success',
+          model_intent:
+            modelIntent && typeof modelIntent === 'object' ? modelIntent : null,
+          navigation:
+            navigation && typeof navigation === 'object' ? navigation : null,
+          action: (action || '').toString(),
+          agent_result:
+            agentResult && typeof agentResult === 'object' ? agentResult : null,
+          agent_flow:
+            agentFlow && typeof agentFlow === 'object' ? agentFlow : null
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) return '';
+      return payload?.data?.log_id ? String(payload.data.log_id) : '';
+    } catch {
+      // Logging darf die Agent-Antwort nicht blockieren.
+      return '';
+    }
+  };
+
+  const runAgentNavigationIntent = async (prompt, memory, modelIntent = null) =>
+    resolveAgentNavigationIntent({
       prompt,
       memory,
+      modelIntent,
       getSheets: () => sheets,
       isLoadingSheets: () => loadingSheets,
+      getClasses: () => classes,
+      isLoadingClasses: () => loadingClasses,
+      fetchClasses: async () => {
+        await fetchClasses();
+      },
+      fetchLearnersByClass: async (classId) => fetchAgentLearnersByClass(classId),
+      fetchAnswers: async ({ sheetKey = '', classId = null, user = '' } = {}) =>
+        fetchAnswerEntries({ sheetKey, classId, user }),
+      fetchPlansByClass: async (classId) => fetchAgentPlanByClass(classId),
       getActiveTab: () => activeTab,
       getSelectedId: () => selectedId,
       getEditorView: () => editorView,
@@ -2616,11 +3104,40 @@
       },
       openSheet: async (sheet) => {
         if (!sheet?.id) return false;
+        if (activeTab === 'editor' && selectedId && String(selectedId) !== String(sheet.id)) {
+          const targetLabel = sheet?.name
+            ? `Sheet "${sheet.name}"`
+            : sheet?.key
+            ? `Sheet "${sheet.key}"`
+            : 'anderes Sheet';
+          const canLeave = await maybeWarnAndSaveBeforeLeavingEditor(targetLabel);
+          if (!canLeave) return false;
+        }
         if (activeTab !== 'editor') {
           await switchTab('editor');
           if (activeTab !== 'editor') return false;
         }
         selectSheet(sheet.id);
+        return true;
+      },
+      openClass: async (classEntry, view = 'details') => {
+        if (!classEntry?.id) return false;
+        if (activeTab !== 'classes') {
+          await switchTab('classes');
+          if (activeTab !== 'classes') return false;
+        }
+        const targetView =
+          view === 'learners'
+            ? 'learners'
+            : view === 'assignments'
+            ? 'assignments'
+            : 'details';
+        selectClass(classEntry.id, targetView);
+        if (targetView === 'learners') {
+          await openLearnersForClass(classEntry.id);
+        } else if (targetView === 'assignments') {
+          await openAssignmentsForClass(classEntry.id);
+        }
         return true;
       },
       closeEditorToList: async () => closeEditor({ targetLabel: 'Liste' }),
@@ -2635,10 +3152,6 @@
         return activeTab === tab || before === tab;
       }
     });
-
-    setAgentMemoryForScope(scope, result.memory);
-    return result;
-  };
 
   $: agentContext = resolveAgentContext({ activeTab, selectedId, editorView });
   const buildAgentContext = (context) => {
@@ -2704,11 +3217,20 @@
       return;
     }
     const clampedIndex = Math.max(0, Math.min(index, visualBlocks.length - 1));
+    const nextValue = normalizeBlockContent(html);
+    const nextView = view === 'html' ? 'html' : 'visual';
+    if (
+      (visualBlocks[clampedIndex] ?? '') === nextValue &&
+      (visualBlockViews[clampedIndex] ?? 'visual') === nextView
+    ) {
+      return;
+    }
+    pushVisualHistorySnapshot();
     const nextBlocks = [...visualBlocks];
-    nextBlocks[clampedIndex] = normalizeBlockContent(html);
+    nextBlocks[clampedIndex] = nextValue;
     visualBlocks = nextBlocks;
     const nextViews = [...visualBlockViews];
-    nextViews[clampedIndex] = view === 'html' ? 'html' : 'visual';
+    nextViews[clampedIndex] = nextView;
     visualBlockViews = normalizeVisualBlockViews(nextViews, nextBlocks.length);
     commitVisualBlocks();
     await tick();
@@ -2740,6 +3262,99 @@
     return 'inline';
   };
 
+  const isApplyDraftPrompt = (prompt = '') =>
+    /\b(anwenden|uebernehmen|apply|ausfuehren|ausfuhren|bestaetigen|bestaetige)\b/.test(
+      normalizePrompt(prompt)
+    );
+
+  const isDiscardDraftPrompt = (prompt = '') =>
+    /\b(verwerfen|verwerfe|discard|loeschen|loesche|zuruecksetzen|zurucksetzen)\b/.test(
+      normalizePrompt(prompt)
+    );
+
+  const applyAgentDraft = async ({ draft, context }) => {
+    const draftApplyContext = context === 'visual' ? 'visual' : 'html';
+
+    if (draft.mode === 'insert') {
+      const applied = await applyAgentInsertion(
+        draftApplyContext,
+        draft.html,
+        draft.blockLevel,
+        draft.view
+      );
+      return {
+        ok: true,
+        status:
+          applied === 'append'
+            ? 'Vorschlag als neuer Block angewendet.'
+            : 'Vorschlag eingefuegt.',
+        message: draft.message || '',
+        details: {
+          mode: 'insert',
+          applied,
+          context: draftApplyContext
+        }
+      };
+    }
+
+    if (draftApplyContext === 'visual') {
+      const targetIndex = Math.min(
+        Math.max(0, visualActiveBlock),
+        Math.max(visualBlocks.length - 1, 0)
+      );
+      await replaceVisualBlockAt(targetIndex, draft.html, draft.view);
+      return {
+        ok: true,
+        status: 'Vorschlag auf aktiven Block angewendet.',
+        message: draft.message || '',
+        details: {
+          mode: 'replace',
+          target: 'visual_block',
+          index: targetIndex
+        }
+      };
+    }
+
+    editorContent = draft.html;
+    return {
+      ok: true,
+      status: 'Vorschlag auf Dokument angewendet.',
+      message: draft.message || '',
+      details: {
+        mode: 'replace',
+        target: 'editor_document'
+      }
+    };
+  };
+
+  const agentProvider = createDefaultAgentProvider({
+    apiFetch: (path, options = {}) => apiFetch(path, options),
+    readPayload: (res) => readPayload(res),
+    resolveNavigation: ({ prompt, memory, modelIntent }) =>
+      runAgentNavigationIntent(prompt, memory, modelIntent),
+    buildContextDetails: (context) => buildAgentContextDetails(context),
+    buildAgentContextPayload: (context) => buildAgentContext(context),
+    isApplyDraftPrompt,
+    isDiscardDraftPrompt,
+    canEditContext: (context) => isAgentHtmlEditableContext(context),
+    applyDraft: ({ draft, context }) => applyAgentDraft({ draft, context })
+  });
+
+  const agentConversation = createAgentConversation({
+    runTurn: (request) => agentProvider.runTurn(request),
+    appendHistoryPrompt: (prompt, scope) => appendAgentHistoryPrompt(prompt, scope),
+    resolveHistoryPrompt: (id, response, error = false) =>
+      resolveAgentHistoryPrompt(id, response, error),
+    setHistoryLogId: (id, logId) => setAgentHistoryLogId(id, logId),
+    logConversation: (payload) => logAgentConversation(payload),
+    resolveScope: () => resolveAgentMemoryScope(),
+    buildHistoryContext: (scope) => buildAgentHistoryContext(scope),
+    getMemoryForScope: (scope) => getAgentMemoryForScope(scope),
+    setMemoryForScope: (scope, memory) => setAgentMemoryForScope(scope, memory),
+    getDraftForScope: (scope) => getAgentDraftForScope(scope),
+    setDraftForScope: (scope, draft) => setAgentDraftForScope(scope, draft)
+  });
+
   const applyAgentPrompt = async (context = agentContext) => {
     const prompt = agentPrompt.trim();
     agentStatus = '';
@@ -2760,126 +3375,21 @@
     }
 
     const promptText = prompt;
-    const historyEntryId = await appendAgentHistoryPrompt(promptText);
+    const currentContext = context || agentContext;
     agentPrompt = '';
     resizeAgentInput();
     agentPending = true;
     agentStatus = 'Agent arbeitet…';
-    const finalizeSuccess = async (status, message = '') => {
-      await resolveAgentHistoryPrompt(historyEntryId, message || status || '');
-      agentStatus = '';
-    };
-    const finalizeError = async (status) => {
-      const message = status || 'Agent-Aufruf fehlgeschlagen';
-      await resolveAgentHistoryPrompt(historyEntryId, message, true);
-      agentStatus = message;
-    };
+
     try {
-      const navigation = await handleAgentNavigationIntent(promptText);
-      if (navigation?.handled) {
-        await finalizeSuccess(
-          navigation.status || 'Navigation ausgefuehrt.',
-          navigation.message || ''
-        );
-        return;
-      }
-
-      const currentContext = context || agentContext;
-      const canApplyHtml = isAgentHtmlEditableContext(currentContext);
-      const applyContext = currentContext === 'visual' ? 'visual' : 'html';
-      const agentContextPayload = buildAgentContext(currentContext);
-      const res = await apiFetch('agent', {
-        method: 'POST',
-        body: JSON.stringify({
-          prompt,
-          context: agentContextPayload
-        })
+      const result = await agentConversation.runPrompt({
+        prompt: promptText,
+        context: currentContext,
+        selectedSheetId: selectedId ?? null
       });
-      const payload = await readPayload(res);
-      if (!res.ok) {
-        const status = payload?.warning || 'Agent-Aufruf fehlgeschlagen';
-        await finalizeError(status);
-        return;
-      }
-
-      const result = payload?.data ?? {};
-      const action = String(result.action || '');
-      const html = typeof result.html === 'string' ? result.html : '';
-      const message = typeof result.message === 'string' ? result.message : '';
-      const blockLevel = Boolean(result.block_level ?? result.blockLevel);
-      const view = result.view === 'visual' ? 'visual' : 'html';
-
-      if ((action === 'replace_html' || action === 'replace') && html) {
-        if (canApplyHtml && applyContext === 'visual' && agentContextPayload.scope === 'block') {
-          const targetIndex = Math.min(
-            Math.max(0, Number(agentContextPayload.activeBlockIndex ?? visualActiveBlock)),
-            Math.max(visualBlocks.length - 1, 0)
-          );
-          await replaceVisualBlockAt(targetIndex, html, view);
-          await finalizeSuccess('Block aktualisiert.', message);
-          return;
-        }
-        if (canApplyHtml) {
-          editorContent = html;
-          await finalizeSuccess('Uebung aktualisiert.', message);
-          return;
-        }
-        await finalizeSuccess(
-          'Antwort erhalten (ohne direkte Aenderung).',
-          message || 'In diesem Bereich wird HTML nicht direkt angewendet.'
-        );
-        return;
-      }
-
-      if (action === 'insert_html' && html) {
-        if (!canApplyHtml) {
-          await finalizeSuccess(
-            'Antwort erhalten (ohne direkte Aenderung).',
-            message || 'In diesem Bereich wird HTML nicht direkt eingefuegt.'
-          );
-          return;
-        }
-        const applied = await applyAgentInsertion(applyContext, html, blockLevel, view);
-        await finalizeSuccess(
-          applied === 'append'
-            ? 'Inhalt als neuer Block eingefuegt.'
-            : 'Inhalt eingefuegt.',
-          message
-        );
-        return;
-      }
-
-      if (!action && html) {
-        if (canApplyHtml && applyContext === 'visual' && agentContextPayload.scope === 'block') {
-          const targetIndex = Math.min(
-            Math.max(0, Number(agentContextPayload.activeBlockIndex ?? visualActiveBlock)),
-            Math.max(visualBlocks.length - 1, 0)
-          );
-          await replaceVisualBlockAt(targetIndex, html, view);
-          await finalizeSuccess('Block aktualisiert.', message);
-          return;
-        }
-        if (canApplyHtml) {
-          editorContent = html;
-          await finalizeSuccess('Uebung aktualisiert.', message);
-          return;
-        }
-        await finalizeSuccess(
-          'Antwort erhalten (ohne direkte Aenderung).',
-          message || 'In diesem Bereich wird HTML nicht direkt angewendet.'
-        );
-        return;
-      }
-
-      if (message) {
-        await finalizeSuccess('Antwort erhalten.', message);
-        return;
-      }
-
-      await finalizeSuccess('Keine Aenderung erhalten.', message);
+      agentStatus = result.displayStatus || '';
     } catch (err) {
-      const status = err?.message ?? 'Agent-Aufruf fehlgeschlagen';
-      await finalizeError(status);
+      agentStatus = err?.message ?? 'Agent-Aufruf fehlgeschlagen';
     } finally {
       agentPending = false;
     }
@@ -2997,10 +3507,35 @@
       return;
     }
     captureVisualSelection(index);
-    updateVisualBlock(index, el.innerHTML);
+    updateVisualBlock(index, el.innerHTML, getVisualInputHistoryOptions(index, event, 'visual'));
     await tick();
     if (visualBlockViews[index] === 'visual' && visualActiveBlock === index) {
       restoreVisualSelection(index);
+    }
+  };
+
+  const handleVisualHtmlInput = (index, event) => {
+    const value = event?.currentTarget?.value ?? event?.target?.value ?? '';
+    updateVisualBlock(index, value, getVisualInputHistoryOptions(index, event, 'html'));
+  };
+
+  const handleVisualKeydown = (event) => {
+    const target = event?.target;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement
+    ) {
+      return;
+    }
+    if (isUndoShortcut(event)) {
+      event.preventDefault();
+      void undoVisualChange();
+      return;
+    }
+    if (isRedoShortcut(event)) {
+      event.preventDefault();
+      void redoVisualChange();
     }
   };
 
@@ -3203,19 +3738,73 @@
     });
   };
 
+  const getVersionTimestamp = (entry) => {
+    if (!entry) return Number.NaN;
+    const raw = entry.updated_at || entry.created_at;
+    if (!raw) return Number.NaN;
+    const stamp = new Date(raw).getTime();
+    return Number.isNaN(stamp) ? Number.NaN : stamp;
+  };
+
+  const compareVersionsByLocalOrder = (a, b) => {
+    const stampA = getVersionTimestamp(a);
+    const stampB = getVersionTimestamp(b);
+    const hasStampA = !Number.isNaN(stampA);
+    const hasStampB = !Number.isNaN(stampB);
+    if (hasStampA && hasStampB && stampA !== stampB) {
+      return stampA - stampB;
+    }
+    if (hasStampA !== hasStampB) {
+      return hasStampA ? -1 : 1;
+    }
+    const idA = Number(a?.id);
+    const idB = Number(b?.id);
+    const hasIdA = Number.isFinite(idA);
+    const hasIdB = Number.isFinite(idB);
+    if (hasIdA && hasIdB && idA !== idB) {
+      return idA - idB;
+    }
+    return String(a?.id ?? '').localeCompare(String(b?.id ?? ''), undefined, {
+      numeric: true,
+      sensitivity: 'base'
+    });
+  };
+
+  const buildVersionNumberMap = (versions = []) => {
+    const ordered = [...versions].sort(compareVersionsByLocalOrder);
+    const map = new Map();
+    ordered.forEach((entry, index) => {
+      if (entry?.id === null || entry?.id === undefined) return;
+      map.set(String(entry.id), index + 1);
+    });
+    return map;
+  };
+
+  const getVersionNumber = (version) => {
+    if (!version) return null;
+    if (version?.id !== null && version?.id !== undefined) {
+      const mapped = sheetVersionNumbers.get(String(version.id));
+      if (mapped) return mapped;
+    }
+    const fallbackIndex = sheetVersions.findIndex((entry) => entry === version);
+    return fallbackIndex >= 0 ? fallbackIndex + 1 : null;
+  };
+
   const formatVersionLabel = (version) => {
     if (!version) return '';
+    const versionNumber = getVersionNumber(version);
     const state = Number(version.is_current) === 1 ? 'Aktuell' : 'Version';
+    const number = versionNumber ? `V${versionNumber}` : '';
     const stamp = formatVersionDate(version.updated_at || version.created_at);
-    const id = version?.id ? `#${version.id}` : '';
-    return [state, stamp, id].filter(Boolean).join(' · ');
+    return [state, number, stamp].filter(Boolean).join(' · ');
   };
 
   const describeVersion = (version) => {
     if (!version) return 'Version';
+    const versionNumber = getVersionNumber(version);
+    const number = versionNumber ? `V${versionNumber}` : '';
     const stamp = formatVersionDate(version.updated_at || version.created_at);
-    const id = version?.id ? `#${version.id}` : '';
-    return [stamp, id].filter(Boolean).join(' · ') || 'Version';
+    return [number, stamp].filter(Boolean).join(' · ') || 'Version';
   };
 
   const minutesAgo = (dateString) => {
@@ -3375,6 +3964,56 @@
     }
   };
 
+  const fetchAgentLearnersByClass = async (classId) => {
+    const normalizedClassId = normalizeClassId(classId);
+    if (!token || !normalizedClassId) return [];
+    try {
+      const res = await apiFetch(`learner?classroom=${normalizedClassId}`);
+      const payload = await readPayload(res);
+      if (!res.ok) return [];
+      return payload?.data?.learner ?? [];
+    } catch {
+      return [];
+    }
+  };
+
+  const fetchAgentPlanByClass = async (classId) => {
+    const normalizedClassId = normalizeClassId(classId);
+    if (!token || !normalizedClassId) return [];
+    try {
+      const res = await apiFetch(`plan?classroom=${normalizedClassId}`);
+      const payload = await readPayload(res);
+      if (!res.ok) return [];
+      return payload?.data?.classroom_sheet ?? [];
+    } catch {
+      return [];
+    }
+  };
+
+  const fetchAnswerEntries = async ({ sheetKey = '', classId = null, user = '' } = {}) => {
+    const params = new URLSearchParams();
+    const normalizedSheetKey = (sheetKey || '').toString().trim();
+    const normalizedClassId = normalizeClassId(classId);
+    const normalizedUser = (user || '').toString().trim();
+    if (normalizedSheetKey) {
+      params.set('sheet', normalizedSheetKey);
+    }
+    if (normalizedClassId) {
+      params.set('classroom', String(normalizedClassId));
+    }
+    if (normalizedUser) {
+      params.set('user', normalizedUser);
+    }
+    const query = params.toString();
+    const path = query ? `answer?${query}` : 'answer';
+    const res = await apiFetch(path);
+    const payload = await readPayload(res);
+    if (!res.ok) {
+      throw new Error(payload?.warning || 'Antworten konnten nicht geladen werden');
+    }
+    return payload?.data?.answer ?? [];
+  };
+
   const fetchAnswers = async (key, classId = null, userFilter = '') => {
     if (!key) {
       answersError = 'Kein Sheet-Key vorhanden.';
@@ -3386,22 +4025,8 @@
     answersError = '';
     answersMeta = '';
     try {
-      const params = new URLSearchParams({ sheet: key });
-      if (classId) {
-        params.set('classroom', String(classId));
-      }
       const user = (userFilter || '').trim();
-      if (user) {
-        params.set('user', user);
-      }
-      const res = await apiFetch(`answer?${params.toString()}`);
-      const payload = await readPayload(res);
-      if (!res.ok) {
-        answersError = payload?.warning || 'Antworten konnten nicht geladen werden';
-        answers = [];
-        return;
-      }
-      answers = payload?.data?.answer ?? [];
+      answers = await fetchAnswerEntries({ sheetKey: key, classId, user });
       const classLabel = getAnswersClassLabel(classId);
       const userLabel = getAnswersUserLabel(user);
       answersMeta = `Sheet: ${key} · ${classLabel} · ${userLabel} · Antworten geladen (${answers.length} Eintraege)`;
@@ -3825,6 +4450,7 @@
   class="app"
   class:app--with-agent={token}
   class:app--agent-collapsed={token && !agentSidebarOpen}
+  class:app--ci-zag={isCiSchoolZag}
 >
   <header class="topbar">
     <div class="brand-block">
@@ -3836,24 +4462,24 @@
     {#if token}
       <div class="tabs topbar-tabs">
         <button
-          class="ci-tab"
-          class:selected={activeTab === 'editor'}
+          class="ghost ci-btn-outline topbar-tab-btn"
+          aria-pressed={activeTab === 'editor'}
           on:click={() => switchTab('editor')}
           type="button"
         >
           Inhalt
         </button>
         <button
-          class="ci-tab"
-          class:selected={activeTab === 'classes'}
+          class="ghost ci-btn-outline topbar-tab-btn"
+          aria-pressed={activeTab === 'classes'}
           on:click={() => switchTab('classes')}
           type="button"
         >
           Klassen
         </button>
         <button
-          class="ci-tab"
-          class:selected={activeTab === 'schools'}
+          class="ghost ci-btn-outline topbar-tab-btn"
+          aria-pressed={activeTab === 'schools'}
           on:click={() => switchTab('schools')}
           type="button"
         >
@@ -4042,7 +4668,7 @@
               />
             </label>
             <button
-              class="ci-btn-primary"
+              class="ci-btn-secondary"
               on:click={() => {
                 newSheetName = '';
                 newSheetKey = '';
@@ -4116,13 +4742,40 @@
                 </button>
               {/each}
             </div>
-            <button class="ci-btn-primary editor-action-btn" on:click={saveSheet} disabled={saving}>
-              {saving ? 'Speichere…' : 'Speichern'}
+            <button
+              class="ci-btn-secondary editor-action-btn"
+              class:editor-action-btn--saved={sheetSaveButtonSaved}
+              on:click={saveSheet}
+              disabled={saving}
+            >
+              <span class="editor-action-btn__status" aria-hidden="true">
+                {#if saving}
+                  <span class="editor-action-btn__spinner"></span>
+                {:else if sheetSaveButtonSaved}
+                  <span class="editor-action-btn__check">✓</span>
+                {:else}
+                  <svg
+                    class="editor-action-btn__disk"
+                    viewBox="0 0 24 24"
+                    focusable="false"
+                  >
+                    <path
+                      d="M5 4h11l3 3v13H5zM8 4v6h8V4M9 16h6"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                {/if}
+              </span>
+              <span>{sheetSaveButtonLabel}</span>
             </button>
           </div>
         </div>
-        {#if saveState}
-          <p class:success={saveState === 'Gespeichert'} class="hint">{saveState}</p>
+        {#if sheetSaveStatus === 'error' && saveState}
+          <p class="hint error-text">{saveState}</p>
         {/if}
         <div class="editor-body">
           {#if editorView === 'html' || editorView === 'visual'}
@@ -4140,7 +4793,7 @@
                         bind:value={selectedVersionId}
                         disabled={versionsLoading || sheetVersions.length === 0}
                         on:change={() => {
-                          versionState = '';
+                          versionRestoreStatus = 'idle';
                           versionsError = '';
                         }}
                       >
@@ -4159,24 +4812,37 @@
                     </label>
                     <button
                       class="icon-btn ci-btn-outline version-restore-btn"
+                      class:version-restore-btn--restored={versionRestoreButtonRestored}
                       type="button"
                       on:click={restoreSheetVersion}
-                      disabled={restoringVersion || !selectedVersionId || isCurrentVersion}
+                      disabled={restoringVersion || !selectedVersionId}
                       aria-label="Version wiederherstellen"
-                      title={isCurrentVersion
-                        ? 'Version ist bereits aktuell'
-                        : 'Ausgewaehlte Version wiederherstellen'}
+                      title={restoringVersion
+                        ? 'Version wird wiederhergestellt'
+                        : versionRestoreButtonRestored
+                          ? 'Version wiederhergestellt'
+                          : isCurrentVersion
+                            ? 'Aktuelle Version erneut als aktuell setzen'
+                            : 'Ausgewaehlte Version wiederherstellen'}
                     >
-                      <svg class="restore-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                        <path
-                          d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.8"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        />
-                      </svg>
+                      <span class="version-restore-btn__status" aria-hidden="true">
+                        {#if restoringVersion}
+                          <span class="editor-action-btn__spinner"></span>
+                        {:else if versionRestoreButtonRestored}
+                          <span class="editor-action-btn__check">✓</span>
+                        {:else}
+                          <svg class="restore-icon" viewBox="0 0 24 24" focusable="false">
+                            <path
+                              d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="1.8"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            />
+                          </svg>
+                        {/if}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -4184,8 +4850,6 @@
                   <p class="hint">Lade Versionen…</p>
                 {:else if versionsError}
                   <p class="error-text">{versionsError}</p>
-                {:else if versionState}
-                  <p class="hint" class:success={versionState}>{versionState}</p>
                 {/if}
               </div>
               <div class="editor-columns">
@@ -4324,56 +4988,7 @@
                                   <div class="tool-divider" aria-hidden="true"></div>
                                 {/if}
                                 <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  class:active={visualBlockViews[idx] === 'html'}
-                                  type="button"
-                                  on:click={() => setVisualBlockView(idx, 'html')}
-                                  title="HTML-Ansicht"
-                                  aria-label="HTML-Ansicht"
-                                >
-                                  <svg
-                                    class="toggle-icon"
-                                    viewBox="0 0 24 24"
-                                    aria-hidden="true"
-                                    focusable="false"
-                                  >
-                                    <path
-                                      d="M8 9l-4 3 4 3M16 9l4 3-4 3"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-width="1.8"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                    />
-                                  </svg>
-                                </button>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn"
-                                  class:active={visualBlockViews[idx] === 'visual'}
-                                  type="button"
-                                  on:click={() => setVisualBlockView(idx, 'visual')}
-                                  title="Visuelle Ansicht"
-                                  aria-label="Visuelle Ansicht"
-                                >
-                                  <svg
-                                    class="toggle-icon"
-                                    viewBox="0 0 24 24"
-                                    aria-hidden="true"
-                                    focusable="false"
-                                  >
-                                    <path
-                                      d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-width="1.8"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                    />
-                                    <circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="1.8" />
-                                  </svg>
-                                </button>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn tool-btn--danger"
+                                  class="ghost ci-btn-outline tool-btn tool-btn--right-start tool-btn--danger"
                                   type="button"
                                   title="Block loeschen"
                                   aria-label="Block loeschen"
@@ -4403,6 +5018,63 @@
                                     />
                                   </svg>
                                 </button>
+                                <button
+                                  class="ghost ci-btn-outline tool-btn tool-btn--view-toggle"
+                                  type="button"
+                                  on:click={() => toggleVisualBlockView(idx)}
+                                  title={
+                                    visualBlockViews[idx] === 'html'
+                                      ? 'Aktuell HTML - zu Visuell wechseln'
+                                      : 'Aktuell Visuell - zu HTML wechseln'
+                                  }
+                                  aria-label={
+                                    visualBlockViews[idx] === 'html'
+                                      ? 'Darstellung: HTML. Zu Visuell wechseln'
+                                      : 'Darstellung: Visuell. Zu HTML wechseln'
+                                  }
+                                >
+                                  {#if visualBlockViews[idx] === 'html'}
+                                    <svg
+                                      class="toggle-icon"
+                                      viewBox="0 0 24 24"
+                                      aria-hidden="true"
+                                      focusable="false"
+                                    >
+                                      <path
+                                        d="M8 9l-4 3 4 3M16 9l4 3-4 3"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="1.8"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      />
+                                    </svg>
+                                  {:else}
+                                    <svg
+                                      class="toggle-icon"
+                                      viewBox="0 0 24 24"
+                                      aria-hidden="true"
+                                      focusable="false"
+                                    >
+                                      <path
+                                        d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="1.8"
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                      />
+                                      <circle
+                                        cx="12"
+                                        cy="12"
+                                        r="2.5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="1.8"
+                                      />
+                                    </svg>
+                                  {/if}
+                                </button>
                               </div>
                               {#if visualBlockViews[idx] === 'visual'}
                                 <div
@@ -4411,6 +5083,7 @@
                                   spellcheck="false"
                                 bind:this={visualBlockEditors[idx]}
                                 on:focus={() => (visualActiveBlock = idx)}
+                                on:keydown={handleVisualKeydown}
                                 on:input={(event) => handleVisualInput(idx, event)}
                                 on:mouseup={() => captureVisualSelection(idx)}
                                 on:keyup={() => captureVisualSelection(idx)}
@@ -4423,7 +5096,7 @@
                                   value={block}
                                   bind:this={visualBlockHtmlInputs[idx]}
                                   on:focus={() => (visualActiveBlock = idx)}
-                                  on:input={(event) => updateVisualBlock(idx, event.target.value)}
+                                  on:input={(event) => handleVisualHtmlInput(idx, event)}
                                 ></textarea>
                               {/if}
                             </div>
@@ -4587,6 +5260,17 @@
             <p class="hint">Waehle eine Klasse, um Details zu sehen.</p>
           </div>
           <div class="row-actions">
+            <label class="classes-school-filter">
+              <span>Schule</span>
+              <select bind:value={classSchoolFilter} disabled={loadingSchools}>
+                <option value="">Alle Schulen</option>
+                {#each schools as school}
+                  <option value={String(school.id)}>
+                    {school.name || `Schule #${school.id}`}
+                  </option>
+                {/each}
+              </select>
+            </label>
             <button
               class="icon-btn ci-btn-outline refresh-btn"
               on:click={fetchClasses}
@@ -4605,7 +5289,7 @@
                 />
               </svg>
             </button>
-            <button class="ci-btn-primary" on:click={() => (showClassModal = true)}>Neue Klasse</button>
+            <button class="ci-btn-secondary" on:click={() => (showClassModal = true)}>Neue Klasse</button>
           </div>
         </div>
 
@@ -4614,6 +5298,8 @@
             <p class="hint">Lade Klassen...</p>
           {:else if classes.length === 0}
             <p class="hint">Keine Klassen vorhanden.</p>
+          {:else if visibleClasses.length === 0}
+            <p class="hint">Keine Klassen fuer die ausgewaehlte Schule.</p>
           {:else}
             <div class="class-table-wrap">
               <ListTable
@@ -4630,32 +5316,52 @@
               >
                 <svelte:fragment slot="actions" let:row>
                   <button
-                    class="icon-btn ci-btn-outline"
+                    class="icon-btn ci-btn-outline class-action-btn"
                     title="Arbeitsblaetter zuweisen"
                     aria-label="Arbeitsblaetter zuweisen"
                     on:click|stopPropagation={() => openClassAssignments(row.id)}
                     type="button"
                   >
+                    <svg class="class-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5v-11ZM8 8h8M8 12h8M8 16h5"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
                     Arbeitsblaetter
                   </button>
                   <button
-                    class="icon-btn ci-btn-outline"
+                    class="icon-btn ci-btn-outline class-action-btn"
                     title="Studierende anzeigen"
                     aria-label="Studierende anzeigen"
                     on:click|stopPropagation={() => openLearnersForClass(row.id)}
                     type="button"
                   >
+                    <svg class="class-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M16 18.5a3.5 3.5 0 0 1 3.5 3.5M8 18.5A3.5 3.5 0 0 0 4.5 22M12 14a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm7-2a2.5 2.5 0 1 0 0-5m-14 5a2.5 2.5 0 1 1 0-5"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
                     Studierende
                   </button>
                   <button
-                    class="icon-btn ci-btn-outline"
+                    class="icon-btn ci-btn-outline class-action-btn"
                     title="Klasse loeschen"
                     aria-label="Klasse loeschen"
                     on:click|stopPropagation={() => deleteClass(row.id)}
                     disabled={deletingClass}
                     type="button"
                   >
-                    <svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <svg class="class-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                       <path
                         d="M4 7h16M9 7v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M10 11v6M14 11v6M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
                         fill="none"
@@ -4665,6 +5371,7 @@
                         stroke-linejoin="round"
                       />
                     </svg>
+                    Loeschen
                   </button>
                 </svelte:fragment>
               </ListTable>
@@ -4740,7 +5447,7 @@
                 </svg>
               </button>
               <button
-                class="ci-btn-primary"
+                class="ci-btn-secondary"
                 on:click={() => {
                   learnerModalMode = 'create';
                   newLearnerName = '';
@@ -4862,7 +5569,7 @@
               </label>
             </div>
             <div class="row-actions">
-              <button class="ci-btn-primary" on:click={updateClass} disabled={savingClass} type="button">
+              <button class="ci-btn-secondary" on:click={updateClass} disabled={savingClass} type="button">
                 {savingClass ? 'Speichere...' : 'Speichern'}
               </button>
             </div>
@@ -4962,7 +5669,7 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="ci-btn-primary" on:click={createSchool} disabled={creatingSchool}>
+            <button class="ci-btn-secondary" on:click={createSchool} disabled={creatingSchool}>
               {creatingSchool ? 'Erstelle...' : 'Schule erstellen'}
             </button>
           </div>
@@ -5061,7 +5768,7 @@
             </label>
           </div>
           <div class="row-actions">
-            <button class="ci-btn-primary" on:click={updateSchool} disabled={savingSchool}>
+            <button class="ci-btn-secondary" on:click={updateSchool} disabled={savingSchool}>
               {savingSchool ? 'Speichere...' : 'Speichern'}
             </button>
           </div>
@@ -5172,6 +5879,100 @@
                         <span class="agent-history-meta">Warte auf Antwort…</span>
                       </div>
                     {/if}
+                    {#if entry.response && !entry.pending && entry.feedbackOpen}
+                      <div class="agent-feedback">
+                        <div class="agent-feedback-label">Bewertung</div>
+                        <div class="agent-feedback-actions">
+                          <button
+                            type="button"
+                            class="agent-feedback-btn agent-feedback-btn--positive"
+                            class:agent-feedback-btn--active={entry.ratingValue === 1}
+                            disabled={entry.ratingSaving}
+                            on:click={() => setAgentHistoryRatingValue(entry.id, 1)}
+                          >
+                            Positiv
+                          </button>
+                          <button
+                            type="button"
+                            class="agent-feedback-btn agent-feedback-btn--partial"
+                            class:agent-feedback-btn--active={entry.ratingValue === 0}
+                            disabled={entry.ratingSaving}
+                            on:click={() => setAgentHistoryRatingValue(entry.id, 0)}
+                          >
+                            Teilweise
+                          </button>
+                          <button
+                            type="button"
+                            class="agent-feedback-btn agent-feedback-btn--negative"
+                            class:agent-feedback-btn--active={entry.ratingValue === -1}
+                            disabled={entry.ratingSaving}
+                            on:click={() => setAgentHistoryRatingValue(entry.id, -1)}
+                          >
+                            Negativ
+                          </button>
+                        </div>
+                        <textarea
+                          class="agent-feedback-comment"
+                          rows="2"
+                          placeholder="Optionaler Kommentar zur Antwort"
+                          value={entry.ratingComment || ''}
+                          disabled={entry.ratingSaving}
+                          on:input={(event) =>
+                            setAgentHistoryRatingComment(
+                              entry.id,
+                              event?.currentTarget?.value ?? ''
+                            )}
+                        ></textarea>
+                        <div class="agent-feedback-row">
+                          <button
+                            type="button"
+                            class="ci-btn-secondary agent-feedback-submit"
+                            disabled={entry.ratingSaving || !entry.logId}
+                            on:click={() => submitAgentHistoryFeedback(entry.id)}
+                          >
+                            {entry.ratingSaving
+                              ? 'Speichere…'
+                              : entry.ratingSaved
+                              ? 'Bewertung aktualisieren'
+                              : 'Bewertung speichern'}
+                          </button>
+                          {#if entry.ratingError}
+                            <span class="agent-feedback-error">{entry.ratingError}</span>
+                          {:else if entry.ratingSaved}
+                            <span class="agent-feedback-ok">Gespeichert</span>
+                          {/if}
+                        </div>
+                      </div>
+                    {/if}
+                    {#if entry.response && !entry.pending}
+                      <div class="agent-feedback-toggle-row">
+                        <button
+                          type="button"
+                          class="agent-feedback-toggle"
+                          class:agent-feedback-toggle--active={
+                            entry.feedbackOpen ||
+                            entry.ratingSaved ||
+                            entry.ratingValue === 1 ||
+                            entry.ratingValue === 0 ||
+                            entry.ratingValue === -1
+                          }
+                          on:click={() => toggleAgentHistoryFeedback(entry.id)}
+                          aria-label={entry.feedbackOpen ? 'Bewertung ausblenden' : 'Bewertung einblenden'}
+                          title={entry.feedbackOpen ? 'Bewertung ausblenden' : 'Bewertung einblenden'}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path
+                              d="M5 14.5V4.5h5l1 3h8v7h-5l-1 3H5z"
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="1.8"
+                              stroke-linecap="round"
+                              stroke-linejoin="round"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    {/if}
                   </div>
                 {/each}
               {:else}
@@ -5189,7 +5990,6 @@
               rows="1"
               bind:this={agentInputEl}
               bind:value={agentPrompt}
-              placeholder="Agent: z.B. Gehe zu Klassen, Oeffne Sheet Algebra. Shift+Enter fuer Zeilenumbruch."
               disabled={agentPending}
               on:input={() => {
                 agentStatus = '';
@@ -5198,7 +5998,7 @@
               on:keydown={handleAgentKeydown}
             ></textarea>
             <button
-              class="ghost ci-btn-outline agent-send-btn"
+              class="ci-btn-secondary agent-send-btn"
               type="button"
               on:click={() => applyAgentPrompt()}
               disabled={agentPending}
@@ -5248,7 +6048,7 @@
           <button class="ghost ci-btn-outline" type="button" on:click={() => (showCreateSheetModal = false)}>
             Abbrechen
           </button>
-          <button class="ci-btn-primary" type="submit" disabled={creating}>
+          <button class="ci-btn-secondary" type="submit" disabled={creating}>
             {creating ? 'Erstelle…' : 'Erstellen'}
           </button>
         </div>
@@ -5293,7 +6093,7 @@
       <div class="row-actions">
         <button class="ghost ci-btn-outline" on:click={() => (showClassModal = false)}>Abbrechen</button>
         <button
-          class="ci-btn-primary"
+          class="ci-btn-secondary"
           on:click={() => {
             createClass();
             showClassModal = false;
@@ -5330,7 +6130,7 @@
       <div class="row-actions">
         <button class="ghost ci-btn-outline" on:click={() => (showLearnerModal = false)}>Abbrechen</button>
         <button
-          class="ci-btn-primary"
+          class="ci-btn-secondary"
           on:click={() => {
             if (learnerModalMode === 'edit') {
               updateLearner();
@@ -5366,6 +6166,11 @@
     padding: 5px clamp(20px, 4vw, 48px) 48px;
   }
 
+  .app.app--ci-zag {
+    --ci-button-secondary: #06b6d4;
+    --ci-button-secondary-accent: #0891b2;
+  }
+
   .app.app--with-agent {
     --agent-sidebar-expanded: min(300px, 25vw);
     --agent-sidebar-collapsed: 0px;
@@ -5377,6 +6182,8 @@
     align-items: stretch;
     padding-left: 5px;
     padding-right: 5px;
+    height: 100vh;
+    overflow: hidden;
   }
 
   .app.app--agent-collapsed {
@@ -5387,6 +6194,9 @@
     grid-column: 1;
     grid-row: 2;
     min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .topbar {
@@ -5477,6 +6287,15 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    color: #ec5a8f;
+    border-color: #ec5a8f;
+  }
+
+  .agent-topbar-toggle:hover:enabled:not([aria-pressed="true"]),
+  .agent-topbar-toggle:focus-visible:not([aria-pressed="true"]) {
+    background: rgba(236, 90, 143, 0.12);
+    border-color: #ec5a8f;
+    color: #ec5a8f;
   }
 
   .agent-topbar-toggle-icon {
@@ -5484,7 +6303,9 @@
     height: 20px;
   }
 
-  .settings-btn[aria-pressed="true"] {
+  .settings-btn[aria-pressed="true"],
+  .topbar-tab-btn[aria-pressed="true"],
+  .agent-topbar-toggle[aria-pressed="true"] {
     background: #ec5a8f;
     border-color: #ec5a8f;
     color: #ffffff;
@@ -5571,7 +6392,7 @@
     justify-content: center;
   }
 
-  .topbar-tabs .ci-tab {
+  .topbar-tabs .topbar-tab-btn {
     white-space: nowrap;
   }
 
@@ -5669,12 +6490,14 @@
   }
 
   .topbar-menu-item.is-active {
-    background: #1f7a6e;
-    border-color: #1f7a6e;
-    color: #ffffff;
+    background: transparent;
+    border-color: transparent;
+    color: inherit;
   }
 
   .topbar-menu-item.is-active:hover {
+    background: #eff6f4;
+    border-color: #cfe6e1;
     transform: none;
     box-shadow: none;
   }
@@ -6083,6 +6906,53 @@
     min-width: 0;
   }
 
+  .classes-school-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    border: 1px solid #d9dee7;
+    background: #f8fafc;
+    font-size: 13px;
+    color: #475569;
+  }
+
+  .classes-school-filter span {
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 10px;
+    color: #7a6f62;
+  }
+
+  .classes-school-filter select {
+    border: none;
+    background: transparent;
+    font-weight: 600;
+    color: #1c232f;
+    padding: 2px 4px;
+  }
+
+  .classes-school-filter select:focus {
+    outline: none;
+  }
+
+  .class-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    padding: 6px 8px;
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .class-action-icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+  }
+
   .list-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -6211,6 +7081,51 @@
 
   .editor-action-btn {
     padding: 8px 14px;
+    min-width: 150px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .editor-action-btn__status {
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 14px;
+  }
+
+  .editor-action-btn__spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: editor-save-spin 0.8s linear infinite;
+  }
+
+  .editor-action-btn__check {
+    font-size: 13px;
+    line-height: 1;
+    font-weight: 700;
+  }
+
+  .editor-action-btn__disk {
+    width: 14px;
+    height: 14px;
+    display: block;
+  }
+
+  .editor-action-btn--saved {
+    box-shadow: inset 0 0 0 1px rgba(31, 122, 110, 0.35);
+  }
+
+  @keyframes editor-save-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .fields {
@@ -6270,6 +7185,19 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .version-restore-btn__status {
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 18px;
+  }
+
+  .version-restore-btn--restored {
+    box-shadow: inset 0 0 0 1px rgba(31, 122, 110, 0.35);
   }
 
   .restore-icon {
@@ -6411,6 +7339,7 @@
   }
 
   .agent-history-item {
+    position: relative;
     border-radius: 12px;
     border: 1px solid #e2e8f0;
     background: #ffffff;
@@ -6452,6 +7381,163 @@
   .agent-history-meta {
     font-size: 11px;
     color: #64748b;
+  }
+
+  .agent-feedback-toggle-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: -2px;
+  }
+
+  .agent-feedback-toggle {
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: transparent;
+    color: #94a3b8;
+    opacity: 0.48;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+    cursor: pointer;
+  }
+
+  .agent-feedback-toggle svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .agent-feedback-toggle:hover:enabled,
+  .agent-feedback-toggle:focus-visible {
+    color: #64748b;
+    opacity: 0.9;
+  }
+
+  .agent-feedback-toggle--active {
+    color: #0f766e;
+    opacity: 0.75;
+  }
+
+  .agent-feedback {
+    display: grid;
+    gap: 6px;
+    border-top: 1px solid #edf2f7;
+    padding-top: 8px;
+  }
+
+  .agent-feedback-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .agent-feedback-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .agent-feedback-btn {
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #334155;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+    line-height: 1.2;
+    cursor: pointer;
+  }
+
+  .agent-feedback-btn:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+  }
+
+  .agent-feedback-btn--positive {
+    border-color: #86efac;
+    background: #f0fdf4;
+    color: #166534;
+  }
+
+  .agent-feedback-btn--partial {
+    border-color: #fcd34d;
+    background: #fffbeb;
+    color: #92400e;
+  }
+
+  .agent-feedback-btn--negative {
+    border-color: #fca5a5;
+    background: #fef2f2;
+    color: #991b1b;
+  }
+
+  .agent-feedback-btn--active {
+    font-weight: 600;
+  }
+
+  .agent-feedback-btn--positive.agent-feedback-btn--active {
+    border-color: #15803d;
+    background: #16a34a;
+    color: #ffffff;
+  }
+
+  .agent-feedback-btn--partial.agent-feedback-btn--active {
+    border-color: #d97706;
+    background: #f59e0b;
+    color: #ffffff;
+  }
+
+  .agent-feedback-btn--negative.agent-feedback-btn--active {
+    border-color: #b91c1c;
+    background: #dc2626;
+    color: #ffffff;
+  }
+
+  .agent-feedback-comment {
+    width: 100%;
+    min-height: 52px;
+    border-radius: 10px;
+    border: 1px solid #dbe3ee;
+    background: #ffffff;
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.35;
+    resize: vertical;
+  }
+
+  .agent-feedback-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .agent-feedback-submit {
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 11px;
+    line-height: 1.2;
+    cursor: pointer;
+  }
+
+  .agent-feedback-submit:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+  }
+
+  .agent-feedback-error {
+    font-size: 11px;
+    color: #b91c1c;
+  }
+
+  .agent-feedback-ok {
+    font-size: 11px;
+    color: #166534;
+    font-weight: 600;
   }
 
   .agent-history-empty {
@@ -6732,6 +7818,18 @@
     gap: 10px;
   }
 
+  .block-editor--drag-image {
+    position: fixed;
+    top: 0;
+    left: 0;
+    margin: 0;
+    box-sizing: border-box;
+    pointer-events: none;
+    opacity: 0.92;
+    z-index: 2147483647;
+    transform: translate(-9999px, -9999px);
+  }
+
   .block-editor.drag-over {
     border-color: #2f8f83;
     background: #eef9f7;
@@ -6764,13 +7862,13 @@
     animation: block-caret-blink 1s steps(1, end) infinite;
   }
 
-  .block-editor__visual :global(button)::before,
+  .block-editor__visual :global(button:not(.check-btn))::before,
   .block-editor__visual :global(select)::before,
   .block-editor__visual :global(input[type='checkbox'])::before,
   .block-editor__visual :global(input[type='radio'])::before,
   .block-editor__visual :global(input[type='button'])::before,
   .block-editor__visual :global(input[type='submit'])::before,
-  .preview-body :global(button:not(.gap-action-btn))::before,
+  .preview-body :global(button:not(.gap-action-btn):not(.check-btn))::before,
   .preview-body :global(select)::before,
   .preview-body :global(input[type='checkbox'])::before,
   .preview-body :global(input[type='radio'])::before,
@@ -6821,6 +7919,7 @@
     gap: 6px;
     flex-wrap: nowrap;
     align-items: center;
+    justify-content: flex-start;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
@@ -6835,10 +7934,28 @@
     border-radius: 10px;
   }
 
+  .tool-btn--right-start {
+    margin-left: auto;
+  }
+
   .tool-btn.active {
     background: #0f172a;
     color: #fff;
     border-color: #0f172a;
+  }
+
+  .tool-btn--view-toggle {
+    border-radius: 999px;
+    background: var(--ci-button-secondary, #06b6d4);
+    border-color: var(--ci-button-secondary, #06b6d4);
+    color: var(--ci-button-text, #fff);
+  }
+
+  .tool-btn--view-toggle:hover:enabled,
+  .tool-btn--view-toggle:focus-visible {
+    background: var(--ci-button-secondary-accent, #0891b2);
+    border-color: var(--ci-button-secondary-accent, #0891b2);
+    color: var(--ci-button-text, #fff);
   }
 
   .tool-icon {
@@ -7346,6 +8463,13 @@
       grid-template-columns: minmax(0, 1fr);
       grid-template-rows: auto auto;
       column-gap: 0;
+      height: auto;
+      min-height: 100vh;
+      overflow: visible;
+    }
+
+    .app.app--with-agent > :not(.topbar):not(.agent-sidebar) {
+      overflow: visible;
     }
 
     .agent-sidebar {
