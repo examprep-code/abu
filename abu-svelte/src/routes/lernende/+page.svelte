@@ -7,6 +7,7 @@
   import { applySchoolCiCss } from '$lib/ci';
 
   const STORAGE_KEY = 'abu.learner';
+  const ARCHIVED_STATUS = 'archiviert';
 
   let apiBaseUrl = '';
   let configError = '';
@@ -20,6 +21,9 @@
   let sheets = [];
   let loadingSheets = false;
   let sheetError = '';
+  let sortedSheets = [];
+  let currentSheets = [];
+  let archivedSheets = [];
 
   const readPayload = async (res) => {
     try {
@@ -100,9 +104,52 @@
     }
   };
 
-  const logoutLearner = () => {
-    persistLearner(null);
+  const buildSheetHref = (sheetKey) => {
+    const key = String(sheetKey ?? '').trim();
+    if (!key) return '/lernende';
+    const params = new URLSearchParams();
+    const code = String(learner?.code ?? '').trim();
+    if (code) params.set('code', code);
+    const classroom = String(learner?.classroom ?? '').trim();
+    if (classroom) params.set('classroom', classroom);
+    const query = params.toString();
+    return query ? `/sheet/${key}?${query}` : `/sheet/${key}`;
   };
+
+  const normalizeStatus = (status) => String(status ?? '').trim().toLowerCase();
+  const isAnonymousAssignment = (entry) =>
+    String(entry?.assignment_form ?? '')
+      .trim()
+      .toLowerCase() === 'anonym';
+
+  const summarizeSheet = (entry) => {
+    const summary = String(entry?.summary ?? '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (summary) return summary;
+    const key = String(entry?.key ?? '').trim();
+    return key ? `Key: ${key}` : 'Keine Zusammenfassung';
+  };
+
+  const sortSheetsByUpdate = (entries) =>
+    [...entries].sort((a, b) => {
+      const timeA = Date.parse(String(a?.updated_at ?? '')) || 0;
+      const timeB = Date.parse(String(b?.updated_at ?? '')) || 0;
+      if (timeB !== timeA) return timeB - timeA;
+      const nameA = String(a?.name ?? a?.key ?? '').toLowerCase();
+      const nameB = String(b?.name ?? b?.key ?? '').toLowerCase();
+      if (nameA < nameB) return -1;
+      if (nameA > nameB) return 1;
+      return 0;
+    });
+
+  $: sortedSheets = sortSheetsByUpdate(sheets);
+  $: currentSheets = sortedSheets.filter(
+    (entry) => normalizeStatus(entry?.assignment_status) !== ARCHIVED_STATUS
+  );
+  $: archivedSheets = sortedSheets.filter(
+    (entry) => normalizeStatus(entry?.assignment_status) === ARCHIVED_STATUS
+  );
 
   onMount(async () => {
     try {
@@ -117,6 +164,26 @@
     }
 
     if (typeof localStorage !== 'undefined') {
+      if (typeof window !== 'undefined') {
+        const params = new URL(window.location.href).searchParams;
+        const urlCode = (params.get('code') || '').replace(/\s+/g, '');
+        if (urlCode) {
+          const validated = await validateLearner(urlCode);
+          params.delete('code');
+          const newUrl =
+            window.location.pathname +
+            (params.toString() ? `?${params.toString()}` : '') +
+            window.location.hash;
+          window.history.replaceState({}, document.title, newUrl);
+          if (validated) {
+            persistLearner(validated);
+            await loadSheets();
+            return;
+          }
+          loginError = 'Code ungueltig.';
+        }
+      }
+
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         try {
@@ -148,7 +215,6 @@
       <div class="status-card">
         <strong>Eingeloggt als</strong>
         <span>{learner.name} ({learner.code})</span>
-        <button class="ghost" on:click={logoutLearner}>Abmelden</button>
       </div>
     {/if}
   </header>
@@ -207,14 +273,83 @@
         {:else if sheets.length === 0}
           <p class="state">Keine Arbeitsblaetter gefunden.</p>
         {:else}
-          <div class="sheet-grid">
-            {#each sheets as entry}
-              <article class="sheet-card">
-                <h3>{entry.name || `Sheet ${entry.key}`}</h3>
-                <p>Key: {entry.key}</p>
-                <a class="sheet-link" href={`/sheet/${entry.key}`}>Oeffnen</a>
-              </article>
-            {/each}
+          <div class="sheet-groups">
+            <section class="sheet-group">
+              <div class="group-head">
+                <h3>Aktuell</h3>
+                <span>{currentSheets.length}</span>
+              </div>
+              {#if currentSheets.length === 0}
+                <p class="state">Keine aktuellen Arbeitsblaetter.</p>
+              {:else}
+                <div class="sheet-list">
+                  {#each currentSheets as entry}
+                    <a class="sheet-item" href={buildSheetHref(entry.key)}>
+                      <span class="sheet-item__title">
+                        {entry.name || `Sheet ${entry.key}`}
+                        {#if isAnonymousAssignment(entry)}
+                          <span
+                            class="assignment-symbol"
+                            title="Anonyme Zuweisung"
+                            aria-label="Anonyme Zuweisung"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                              <path
+                                d="M7 10V8a5 5 0 1 1 10 0v2M6 10h12v9H6z"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.8"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              />
+                            </svg>
+                          </span>
+                        {/if}
+                      </span>
+                      <span class="sheet-item__summary">{summarizeSheet(entry)}</span>
+                    </a>
+                  {/each}
+                </div>
+              {/if}
+            </section>
+            <section class="sheet-group">
+              <div class="group-head">
+                <h3>Archiviert</h3>
+                <span>{archivedSheets.length}</span>
+              </div>
+              {#if archivedSheets.length === 0}
+                <p class="state">Keine archivierten Arbeitsblaetter.</p>
+              {:else}
+                <div class="sheet-list">
+                  {#each archivedSheets as entry}
+                    <a class="sheet-item sheet-item--archived" href={buildSheetHref(entry.key)}>
+                      <span class="sheet-item__title">
+                        {entry.name || `Sheet ${entry.key}`}
+                        {#if isAnonymousAssignment(entry)}
+                          <span
+                            class="assignment-symbol"
+                            title="Anonyme Zuweisung"
+                            aria-label="Anonyme Zuweisung"
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                              <path
+                                d="M7 10V8a5 5 0 1 1 10 0v2M6 10h12v9H6z"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="1.8"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                              />
+                            </svg>
+                          </span>
+                        {/if}
+                      </span>
+                      <span class="sheet-item__summary">{summarizeSheet(entry)}</span>
+                    </a>
+                  {/each}
+                </div>
+              {/if}
+            </section>
           </div>
         {/if}
       </section>
@@ -255,7 +390,7 @@
 
   h1 {
     margin: 0;
-    font-family: var(--ci-font-title, 'Arial Black', Arial, sans-serif);
+    font-family: var(--ci-font-title);
     font-size: clamp(28px, 4vw, 42px);
   }
 
@@ -300,8 +435,7 @@
     font-size: 16px;
   }
 
-  .primary,
-  .ghost {
+  .primary {
     padding: 10px 16px;
     border-radius: 999px;
     border: 1px solid #0f172a;
@@ -311,13 +445,7 @@
     cursor: pointer;
   }
 
-  .ghost {
-    background: #fff;
-    color: #0f172a;
-  }
-
-  .primary:hover,
-  .ghost:hover {
+  .primary:hover {
     background: #1f2937;
     color: #fff;
   }
@@ -360,35 +488,97 @@
     gap: 12px;
   }
 
-  .sheet-grid {
+  .sheet-groups {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 16px;
+    gap: 14px;
   }
 
-  .sheet-card {
-    background: #fff;
-    border-radius: 16px;
-    border: 1px solid #e2e8f0;
-    padding: 16px;
+  .sheet-group {
+    display: grid;
+    gap: 10px;
+  }
+
+  .group-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .group-head h3 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  .group-head span {
+    min-width: 26px;
+    text-align: center;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 12px;
+    background: rgba(15, 23, 42, 0.08);
+    color: #374151;
+  }
+
+  .sheet-list {
     display: grid;
     gap: 8px;
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
   }
 
-  .sheet-link {
-    align-self: flex-start;
-    padding: 8px 14px;
-    border-radius: 999px;
-    border: 1px solid #0f172a;
+  .sheet-item {
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 12px;
+    border: 1px solid #dbe4ef;
+    padding: 10px 12px;
+    display: grid;
+    gap: 4px;
     text-decoration: none;
-    color: #0f172a;
-    font-weight: 600;
+    color: inherit;
+    transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
   }
 
-  .sheet-link:hover {
-    background: #0f172a;
-    color: #fff;
+  .sheet-item:hover {
+    border-color: #0f172a;
+    background: #fff;
+    transform: translateY(-1px);
+  }
+
+  .sheet-item--archived {
+    opacity: 0.78;
+  }
+
+  .sheet-item__title {
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.25;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .assignment-symbol {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #4b5563;
+  }
+
+  .assignment-symbol svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .sheet-item__summary {
+    font-size: 12px;
+    color: #4b5563;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   .state {

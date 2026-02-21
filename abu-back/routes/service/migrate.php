@@ -1,7 +1,11 @@
 <?php
 require_once 'datian-core/migration.php';
 
-// init_sql(); // disabled: do not drop tables
+// First deployment: initialize schema metadata table and base tables if missing.
+$migrationTable = sql_get("SHOW TABLES LIKE 'migration';");
+if (empty($migrationTable)) {
+    init_sql();
+}
 
 alter_sql();
 

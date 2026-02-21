@@ -1,7 +1,7 @@
 <?php
 
 $answerConfig = [
-    'answer' => ['all'],
+    'answer' => answer_payload_fields(),
 ];
 $modelPolicyModule = dirname(__DIR__) . '/snippets/agent/model_policy.php';
 if (is_readable($modelPolicyModule)) {
@@ -15,18 +15,22 @@ if ($method === 'POST') {
     if (empty($data['user'])) {
         $data['user'] = 'testnutzer';
     }
-    if (array_key_exists('classroom', $data)) {
+    if (array_key_exists('classroom', $data) && answer_table_has_column('classroom')) {
         $classroomId = intval($data['classroom']);
         if ($classroomId > 0) {
             $data['classroom'] = $classroomId;
         } else {
             unset($data['classroom']);
         }
+    } else {
+        unset($data['classroom']);
     }
 
     // Speichere die KI-Klassifizierung direkt mit der Antwort
-    if (isset($chatgpt['classification'])) {
+    if (isset($chatgpt['classification']) && answer_table_has_column('classification')) {
         $data['classification'] = $chatgpt['classification']; // numeric 0/500/1000
+    } else {
+        unset($data['classification']);
     }
 
     // Timestamps setzen
@@ -58,6 +62,11 @@ if ($method === 'POST') {
 
 // PUT/PATCH: Klassifizierung manuell anpassen
 if ($method === 'PUT' || $method === 'PATCH') {
+    if (!answer_table_has_column('classification')) {
+        $return['status'] = 400;
+        $return['warning'] = 'classification ist in dieser Datenbank nicht verfuegbar';
+        return;
+    }
     $userId = intval($user['id'] ?? 0);
     if ($userId <= 0) {
         $return['status'] = 401;
@@ -117,7 +126,7 @@ if ($method === 'GET') {
     if (!empty($user)) {
         $where[] = '`user` = "' . sql_escape($user) . '"';
     }
-    if (!empty($classroom)) {
+    if (!empty($classroom) && answer_table_has_column('classroom')) {
         $where[] = '`classroom` = ' . intval($classroom);
     }
 
@@ -325,9 +334,55 @@ function mapClassificationScore($value)
 function answer_scope_clause_for_user($userId)
 {
     $uid = intval($userId);
-    return '('
-        . '`classroom` IN (SELECT `id` FROM `classroom` WHERE `user` = ' . $uid . ')'
-        . ' OR '
-        . '`sheet` IN (SELECT `key` FROM `sheet` WHERE `user` = ' . $uid . ')'
-        . ')';
+    $clauses = [];
+    if (answer_table_has_column('classroom')) {
+        $clauses[] = '`classroom` IN (SELECT `id` FROM `classroom` WHERE `user` = ' . $uid . ')';
+    }
+    if (answer_table_has_column('sheet')) {
+        $clauses[] = '`sheet` IN (SELECT `key` FROM `sheet` WHERE `user` = ' . $uid . ')';
+    }
+    if (empty($clauses)) {
+        return '1 = 0';
+    }
+    return '(' . implode(' OR ', $clauses) . ')';
+}
+
+function answer_payload_fields()
+{
+    $fields = [];
+    $candidates = [
+        'id',
+        'key',
+        'sheet',
+        'value',
+        'user',
+        'classroom',
+        'classification',
+        'created_at',
+        'updated_at',
+    ];
+    foreach ($candidates as $column) {
+        if (answer_table_has_column($column)) {
+            $fields[$column] = [];
+        }
+    }
+    if (empty($fields)) {
+        $fields['id'] = [];
+    }
+    return $fields;
+}
+
+function answer_table_has_column($column)
+{
+    static $cache = [];
+    $name = trim((string)$column);
+    if ($name === '') return false;
+    if (array_key_exists($name, $cache)) {
+        return $cache[$name];
+    }
+    $rows = sql_get(
+        'SHOW COLUMNS FROM `answer` LIKE "' . sql_escape($name) . '";'
+    );
+    $cache[$name] = !empty($rows);
+    return $cache[$name];
 }

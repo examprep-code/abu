@@ -14,6 +14,7 @@ export interface AgentDraftState {
   sourceAction: string;
   selectedSheetId: string | number | null;
   createdAt: string;
+  awaitingConfirmation: boolean;
 }
 
 export interface AgentProviderStep {
@@ -47,6 +48,7 @@ export interface AgentTurnResult {
   message: string;
   source: string;
   action: string;
+  changeDecision: AgentChangeDecision;
   modelIntent: AgentModelIntent | null;
   memory: AgentMemory;
   draft: AgentDraftState;
@@ -54,6 +56,8 @@ export interface AgentTurnResult {
   agentResult: Record<string, unknown> | null;
   steps: AgentProviderStep[];
 }
+
+export type AgentChangeDecision = 'none' | 'pending' | 'accepted' | 'rejected';
 
 type ApplyDraftResult = {
   ok: boolean;
@@ -73,6 +77,7 @@ export interface AgentProviderDeps {
   buildContextDetails: (context: string) => Record<string, unknown>;
   buildAgentContextPayload: (context: string) => Record<string, unknown>;
   isApplyDraftPrompt: (prompt: string) => boolean;
+  isConfirmDraftApplyPrompt: (prompt: string) => boolean;
   isDiscardDraftPrompt: (prompt: string) => boolean;
   canEditContext: (context: string) => boolean;
   applyDraft: (params: {
@@ -91,7 +96,8 @@ const createEmptyDraft = (): AgentDraftState => ({
   context: '',
   sourceAction: '',
   selectedSheetId: null,
-  createdAt: ''
+  createdAt: '',
+  awaitingConfirmation: false
 });
 
 const cloneMemory = (input: AgentMemory): AgentMemory => ({
@@ -115,7 +121,8 @@ const normalizeDraft = (input: AgentDraftState | null | undefined): AgentDraftSt
     input?.selectedSheetId === null || input?.selectedSheetId === undefined
       ? null
       : input.selectedSheetId,
-  createdAt: typeof input?.createdAt === 'string' ? input.createdAt : ''
+  createdAt: typeof input?.createdAt === 'string' ? input.createdAt : '',
+  awaitingConfirmation: Boolean(input?.awaitingConfirmation)
 });
 
 const normalizeIntentPayload = (raw: unknown): AgentModelIntent | null => {
@@ -160,6 +167,7 @@ const buildResult = (payload: Partial<AgentTurnResult>): AgentTurnResult => ({
   message: payload.message || '',
   source: payload.source || 'navigation',
   action: payload.action || '',
+  changeDecision: payload.changeDecision || 'none',
   modelIntent: payload.modelIntent ?? null,
   memory: payload.memory ? cloneMemory(payload.memory) : cloneMemory({
     sheetMatchIds: [],
@@ -174,6 +182,16 @@ const buildResult = (payload: Partial<AgentTurnResult>): AgentTurnResult => ({
   agentResult: payload.agentResult ?? null,
   steps: Array.isArray(payload.steps) ? payload.steps : []
 });
+
+const hasOpenDraft = (draft: AgentDraftState): boolean => Boolean(draft.mode && draft.html);
+
+const buildDraftConfirmationMessage = (draft: AgentDraftState): string => {
+  const mode = draft.mode === 'insert' ? 'Einfuegen' : 'Ersetzen';
+  const target = draft.view === 'visual' ? 'visuellen Editor' : 'HTML-Editor';
+  const summary = `Geplante Aenderung: ${mode} (${draft.html.length} Zeichen) im ${target}.`;
+  const detail = draft.message ? `${draft.message}\n\n` : '';
+  return `${detail}${summary}\nBitte bestaetige oder verwerfe den Vorschlag ueber die Buttons unter "Vorgeschlagene Aenderung".`;
+};
 
 export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
   runTurn: async (request: AgentTurnRequest): Promise<AgentTurnResult> => {
@@ -190,26 +208,30 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
     if (deps.isDiscardDraftPrompt(request.prompt)) {
       addStep('draft_discard_request', {
         scope: request.scope,
-        hadDraft: Boolean(nextDraft.mode && nextDraft.html)
+        hadDraft: hasOpenDraft(nextDraft),
+        awaitingConfirmation: Boolean(nextDraft.awaitingConfirmation)
       });
-      if (!nextDraft.mode || !nextDraft.html) {
+      if (!hasOpenDraft(nextDraft)) {
         return buildResult({
           ok: true,
           status: 'Kein offener Vorschlag vorhanden.',
           source: 'navigation',
-          action: 'draft_discard',
+          action: 'draft_discard_noop',
+          changeDecision: 'none',
           modelIntent,
           memory: nextMemory,
           draft: nextDraft,
           steps
         });
       }
+      addStep('change_decision', { decision: 'rejected' });
       nextDraft = createEmptyDraft();
       return buildResult({
         ok: true,
         status: 'Vorschlag verworfen.',
         source: 'navigation',
         action: 'draft_discard',
+        changeDecision: 'rejected',
         modelIntent,
         memory: nextMemory,
         draft: nextDraft,
@@ -217,17 +239,22 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
       });
     }
 
-    if (deps.isApplyDraftPrompt(request.prompt)) {
+    const hasExplicitConfirmation = deps.isConfirmDraftApplyPrompt(request.prompt);
+    const requestedApply = deps.isApplyDraftPrompt(request.prompt) || hasExplicitConfirmation;
+    if (requestedApply) {
       addStep('draft_apply_request', {
         scope: request.scope,
-        hadDraft: Boolean(nextDraft.mode && nextDraft.html)
+        hadDraft: hasOpenDraft(nextDraft),
+        awaitingConfirmation: Boolean(nextDraft.awaitingConfirmation),
+        trigger: hasExplicitConfirmation ? 'confirm_prompt' : 'apply_prompt'
       });
-      if (!nextDraft.mode || !nextDraft.html) {
+      if (!hasOpenDraft(nextDraft)) {
         return buildResult({
           ok: true,
           status: 'Kein offener Vorschlag vorhanden.',
           source: 'navigation',
-          action: 'draft_apply',
+          action: 'draft_apply_noop',
+          changeDecision: 'none',
           modelIntent,
           memory: nextMemory,
           draft: nextDraft,
@@ -241,6 +268,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
           message: 'Bitte oeffne zuerst ein Sheet im Editor und wiederhole "anwenden".',
           source: 'navigation',
           action: 'draft_apply_blocked',
+          changeDecision: 'none',
           modelIntent,
           memory: nextMemory,
           draft: nextDraft,
@@ -259,6 +287,52 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
             'Bitte oeffne das gleiche Sheet wie bei der Vorschlagserstellung oder erstelle einen neuen Vorschlag.',
           source: 'navigation',
           action: 'draft_apply_blocked',
+          changeDecision: 'none',
+          modelIntent,
+          memory: nextMemory,
+          draft: nextDraft,
+          steps
+        });
+      }
+
+      if (!nextDraft.awaitingConfirmation && !hasExplicitConfirmation) {
+        nextDraft = {
+          ...nextDraft,
+          awaitingConfirmation: true
+        };
+        addStep('draft_apply_confirmation_required', {
+          reason: 'initial_confirmation',
+          mode: nextDraft.mode,
+          context: nextDraft.context
+        });
+        addStep('change_decision', { decision: 'pending' });
+        return buildResult({
+          ok: true,
+          status: 'Bestaetigung erforderlich.',
+          message: buildDraftConfirmationMessage(nextDraft),
+          source: 'navigation',
+          action: 'draft_confirm_required',
+          changeDecision: 'pending',
+          modelIntent,
+          memory: nextMemory,
+          draft: nextDraft,
+          steps
+        });
+      }
+
+      if (!hasExplicitConfirmation) {
+        addStep('draft_apply_confirmation_required', {
+          reason: 'explicit_confirmation_missing'
+        });
+        addStep('change_decision', { decision: 'pending' });
+        return buildResult({
+          ok: true,
+          status: 'Bestaetigung erforderlich.',
+          message:
+            'Der Vorschlag ist noch nicht angewendet. Bitte nutze "Anwenden" oder "Verwerfen" unter "Vorgeschlagene Aenderung".',
+          source: 'navigation',
+          action: 'draft_confirm_required',
+          changeDecision: 'pending',
           modelIntent,
           memory: nextMemory,
           draft: nextDraft,
@@ -278,6 +352,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
           message: applied.message || '',
           source: 'agent_runtime',
           action: 'draft_apply_error',
+          changeDecision: 'none',
           modelIntent,
           memory: nextMemory,
           draft: nextDraft,
@@ -288,6 +363,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
       addStep('draft_applied', {
         ...(applied.details || {}),
       });
+      addStep('change_decision', { decision: 'accepted' });
       const applyMessage = nextDraft.message || applied.message || '';
       nextDraft = createEmptyDraft();
       return buildResult({
@@ -296,6 +372,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
         message: applyMessage,
         source: 'navigation',
         action: 'draft_apply',
+        changeDecision: 'accepted',
         modelIntent,
         memory: nextMemory,
         draft: nextDraft,
@@ -455,7 +532,8 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
         context: request.context,
         sourceAction: action || (suggestionMode === 'insert' ? 'insert_html' : 'replace_html'),
         selectedSheetId: request.selectedSheetId,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        awaitingConfirmation: false
       };
       addStep('agent_draft_staged', {
         mode: suggestionMode,
@@ -464,7 +542,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
         selectedSheetId: request.selectedSheetId
       });
       const followup =
-        'Vorschlag gespeichert. Schreibe "anwenden", um ihn zu uebernehmen, oder "verwerfen".';
+        'Vorschlag gespeichert. Pruefe die aufgelisteten Aenderungen und bestaetige mit "Anwenden" oder "Verwerfen".';
       return buildResult({
         ok: true,
         status: 'Vorschlag erstellt (nicht angewendet).',

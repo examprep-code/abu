@@ -10,7 +10,9 @@
   import { applySchoolCiCss } from '$lib/ci';
 
   const STORAGE_KEY = 'abu.learner';
-  const ANON_TOKEN_PREFIX = 'abu.anon';
+  const ANON_RUNTIME_TOKEN_PREFIX = 'abu.anon.runtime';
+  const ANON_SESSION_CODE_PREFIX = 'abu.anon.code';
+  const ANON_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 
   let apiBaseUrl = '';
   let configError = '';
@@ -21,10 +23,15 @@
   let sheet = null;
   let sheetHtml = '';
   let assignmentForm = '';
+  let classroomSchoolCss = '';
   let classroomId = null;
   let anonymousToken = '';
+  let anonymousSessionCode = '';
 
   let progress = { percent: 0, answered: 0, total: 0 };
+  let saveStatus = '';
+  let saveMessage = '';
+  let saveAt = 0;
 
   let contentEl;
   let lueckeRuntime = null;
@@ -38,6 +45,7 @@
   let loginError = '';
   let loginLoading = false;
   let authReady = false;
+  let classroomHint = null;
 
   const updateProgress = (next) => {
     progress = next;
@@ -70,26 +78,126 @@
     return `anon_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   };
 
-  const getAnonymousToken = (classId, key) => {
-    if (!classId || !key) return '';
-    if (typeof localStorage === 'undefined') return '';
-    const storageKey = `${ANON_TOKEN_PREFIX}.${classId}.${key}`;
-    const existing = localStorage.getItem(storageKey);
-    if (existing) return existing;
-    const token = createAnonymousToken();
-    localStorage.setItem(storageKey, token);
-    return token;
+  const createAnonymousSessionCode = () => {
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      const buffer = new Uint8Array(4);
+      crypto.getRandomValues(buffer);
+      return Array.from(buffer)
+        .map((num) => num.toString(16).padStart(2, '0'))
+        .join('')
+        .toUpperCase();
+    }
+    return Math.random().toString(36).slice(2, 10).toUpperCase();
   };
 
-  const formatAnonymousHint = (token) => {
-    if (!token) return '';
-    if (token.length <= 10) return token;
-    return `${token.slice(0, 6)}…${token.slice(-4)}`;
+  const readCookie = (name) => {
+    if (typeof document === 'undefined') return '';
+    const encodedName = `${encodeURIComponent(name)}=`;
+    const parts = document.cookie ? document.cookie.split(';') : [];
+    for (const rawPart of parts) {
+      const part = rawPart.trim();
+      if (part.startsWith(encodedName)) {
+        const encodedValue = part.slice(encodedName.length);
+        try {
+          return decodeURIComponent(encodedValue);
+        } catch {
+          return encodedValue;
+        }
+      }
+    }
+    return '';
+  };
+
+  const writeCookie = (name, value) => {
+    if (typeof document === 'undefined') return;
+    document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; Path=/; Max-Age=${ANON_COOKIE_MAX_AGE_SECONDS}; SameSite=Lax`;
+  };
+
+  const getPersistentAnonymousValue = (prefix, classId, key, creator) => {
+    if (!classId || !key) return '';
+    const storageKey = `${prefix}.${classId}.${key}`;
+
+    const fromCookie = readCookie(storageKey);
+    if (fromCookie) return fromCookie;
+
+    if (typeof sessionStorage !== 'undefined') {
+      const fromSession = sessionStorage.getItem(storageKey);
+      if (fromSession) {
+        writeCookie(storageKey, fromSession);
+        return fromSession;
+      }
+    }
+
+    const value = creator();
+    writeCookie(storageKey, value);
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(storageKey, value);
+    }
+    return value;
+  };
+
+  const getAnonymousRuntimeToken = (classId, key) => {
+    return getPersistentAnonymousValue(ANON_RUNTIME_TOKEN_PREFIX, classId, key, createAnonymousToken);
+  };
+
+  const getAnonymousSessionCode = (classId, key) => {
+    return getPersistentAnonymousValue(ANON_SESSION_CODE_PREFIX, classId, key, createAnonymousSessionCode);
+  };
+
+  const resolveActiveCiCss = (learnerEntry = learner) => {
+    const learnerCss = (learnerEntry?.school_css ?? '').trim();
+    const fallbackCss = (classroomSchoolCss ?? '').trim();
+    return learnerCss || fallbackCss;
+  };
+
+  const applyLearnerCi = (learnerEntry = learner) => {
+    applySchoolCiCss(resolveActiveCiCss(learnerEntry));
+  };
+
+  const normalizeClassroomId = (value) => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num;
+  };
+
+  const normalizeAssignmentForm = (value) => String(value ?? '').trim().toLowerCase();
+  const isAnonymousModeActive = () => normalizeAssignmentForm(assignmentForm) === 'anonym';
+  const isAnonymousRuntimeActive = () =>
+    typeof anonymousToken === 'string' && anonymousToken.startsWith('anon_');
+  const isAnonymousDisplayMode = () => isAnonymousModeActive() || isAnonymousRuntimeActive();
+
+  const updateSaveState = (event) => {
+    saveStatus = event?.status || '';
+    saveMessage = event?.message || '';
+    if (event?.at) {
+      saveAt = event.at;
+    }
+  };
+
+  const saveStatusLabel = () => {
+    if (saveStatus === 'saving') return 'Speichert...';
+    if (saveStatus === 'saved') {
+      if (saveAt) {
+        try {
+          const formatted = new Intl.DateTimeFormat('de-CH', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          }).format(new Date(saveAt));
+          return `Gespeichert um ${formatted}`;
+        } catch {
+          return 'Gespeichert';
+        }
+      }
+      return 'Gespeichert';
+    }
+    if (saveStatus === 'error') return saveMessage ? `Fehler: ${saveMessage}` : 'Speichern fehlgeschlagen';
+    return '';
   };
 
   const persistLearner = (nextLearner) => {
     learner = nextLearner;
-    applySchoolCiCss(nextLearner?.school_css);
+    applyLearnerCi(nextLearner);
     if (typeof localStorage !== 'undefined') {
       if (nextLearner) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(nextLearner));
@@ -136,22 +244,12 @@
     }
   };
 
-  const logoutLearner = () => {
-    persistLearner(null);
-    lueckeRuntime?.destroy();
-    umfrageRuntime?.destroy();
-    lueckeRuntime = null;
-    umfrageRuntime = null;
-    lastRuntimeSignature = '';
-    assignmentForm = '';
-    anonymousToken = '';
-    progress = { percent: 0, answered: 0, total: 0 };
-  };
-
   async function fetchSheet(key, classId = null) {
     if (!apiBaseUrl) return;
     loading = true;
     loadError = '';
+    anonymousToken = '';
+    anonymousSessionCode = '';
 
     try {
       const url = new URL(`${apiBaseUrl}sheet/public`);
@@ -166,18 +264,25 @@
         sheet = null;
         sheetHtml = '';
         assignmentForm = '';
+        classroomSchoolCss = '';
         loading = false;
         return;
       }
       sheet = payload?.data ?? null;
       sheetHtml = sheet?.content ?? '';
       assignmentForm = sheet?.assignment_form ?? '';
+      classroomSchoolCss = typeof sheet?.school_css === 'string' ? sheet.school_css : '';
+      saveStatus = '';
+      saveMessage = '';
+      saveAt = 0;
+      applyLearnerCi(learner);
 
       loading = false;
       await tick();
       await setupRuntime();
     } catch (err) {
       loadError = err?.message ?? 'Sheet konnte nicht geladen werden';
+      classroomSchoolCss = '';
       loading = false;
     }
   }
@@ -197,18 +302,27 @@
     if (typeof localStorage !== 'undefined') {
       if (typeof window !== 'undefined') {
         const params = new URL(window.location.href).searchParams;
+        const hadPersonalParam = params.has('personal');
+        params.delete('personal');
+        classroomHint = normalizeClassroomId(params.get('classroom'));
         const urlCode = (params.get('code') || '').trim();
         if (urlCode) {
           const validated = await validateLearner(urlCode.replace(/\s+/g, ''));
+          params.delete('code');
+          const newUrl =
+            window.location.pathname +
+            (params.toString() ? `?${params.toString()}` : '') +
+            window.location.hash;
+          window.history.replaceState({}, document.title, newUrl);
           if (validated) {
             persistLearner(validated);
-            params.delete('code');
-            const newUrl =
-              window.location.pathname +
-              (params.toString() ? `?${params.toString()}` : '') +
-              window.location.hash;
-            window.history.replaceState({}, document.title, newUrl);
           }
+        } else if (hadPersonalParam) {
+          const newUrl =
+            window.location.pathname +
+            (params.toString() ? `?${params.toString()}` : '') +
+            window.location.hash;
+          window.history.replaceState({}, document.title, newUrl);
         }
       }
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -230,7 +344,7 @@
     }
   });
 
-  $: classroomId = learner?.classroom ?? null;
+  $: classroomId = learner?.classroom ?? classroomHint ?? null;
 
   $: {
     const nextKey = $page?.params?.key || '';
@@ -250,19 +364,21 @@
   const setupRuntime = async () => {
     if (!contentEl || !apiBaseUrl || !sheetKey) return;
 
-    const isAnonymous = assignmentForm === 'anonym';
+    const isAnonymous = isAnonymousModeActive();
     const activeClassroom = classroomId;
     let runtimeUser = '';
     let runtimeClassroom = activeClassroom;
 
     if (isAnonymous) {
       if (!activeClassroom) return;
-      runtimeUser = getAnonymousToken(activeClassroom, sheetKey);
+      runtimeUser = getAnonymousRuntimeToken(activeClassroom, sheetKey);
       anonymousToken = runtimeUser;
+      anonymousSessionCode = getAnonymousSessionCode(activeClassroom, sheetKey);
     } else {
       if (!learner?.code) return;
       runtimeUser = learner.code;
       anonymousToken = '';
+      anonymousSessionCode = '';
     }
 
     const signature = `${runtimeUser}::${runtimeClassroom ?? ''}::${assignmentForm}`;
@@ -279,14 +395,16 @@
       sheetKey,
       user: runtimeUser,
       classroom: runtimeClassroom,
-      onProgress: updateProgress
+      onProgress: updateProgress,
+      onSaveState: updateSaveState
     });
     umfrageRuntime = createUmfrageRuntime({
       root: contentEl,
       apiBaseUrl,
       sheetKey,
       user: runtimeUser,
-      classroom: runtimeClassroom
+      classroom: runtimeClassroom,
+      onSaveState: updateSaveState
     });
     lastRuntimeSignature = signature;
     await lueckeRuntime.refresh();
@@ -303,7 +421,7 @@
   <header class="hero">
     <div class="hero-text">
       <p class="eyebrow">ABU - Lueckentext</p>
-      <h1>{sheet?.name || (sheetKey ? `Sheet ${sheetKey}` : 'Lueckentext')}</h1>
+      <h1 class="ci-title">{sheet?.name || (sheetKey ? `Sheet ${sheetKey}` : 'Lueckentext')}</h1>
       <p class="meta">
         Key: {sheetKey || '-'}
         {sheet?.updated_at ? `- Stand ${sheet.updated_at}` : ''}
@@ -317,20 +435,36 @@
         <div class="progress-fill" style={`width: ${progress.percent}%`}></div>
       </div>
       <span class="progress-hint">
-        {#if learner}
-          {#if assignmentForm === 'anonym'}
-            Anonyme Teilnahme{anonymousToken ? ` · Token ${formatAnonymousHint(anonymousToken)}` : ''}
-          {:else}
-            Aktuell als {learner.name} ({learner.code})
-          {/if}
+        {#if isAnonymousDisplayMode()}
+          <span class="anonymous-symbol" title="Anonyme Zuweisung" aria-label="Anonyme Zuweisung">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M7 10V8a5 5 0 1 1 10 0v2M6 10h12v9H6z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </span>
+          Anonyme Teilnahme
+          {anonymousSessionCode ? ` · Session-Code ${anonymousSessionCode}` : ''}
+        {:else if learner}
+          Aktuell als {learner.name} ({learner.code})
         {:else}
           Bitte zuerst einloggen
         {/if}
       </span>
+      {#if saveStatusLabel()}
+        <span class={`save-state ${saveStatus === 'error' ? 'save-state--error' : ''}`}>
+          {saveStatusLabel()}
+        </span>
+      {/if}
     </div>
   </header>
 
-  {#if authReady && !learner}
+  {#if authReady && !learner && !isAnonymousDisplayMode()}
     <div class="login-card">
       <h2>Identifikationscode</h2>
       <p>Bitte gib deinen 12-stelligen Code ein, um Antworten zu speichern.</p>
@@ -352,6 +486,13 @@
     </div>
   {/if}
 
+  {#if isAnonymousDisplayMode() && !classroomId}
+    <div class="state error">
+      Dieser anonyme Link braucht eine Klasse (classroom-Parameter). Bitte den korrekten Klassenlink
+      verwenden.
+    </div>
+  {/if}
+
   {#if configError}
     <div class="state error">{configError}</div>
   {:else if loading}
@@ -366,16 +507,30 @@
 
   <footer class="footer">
     <div class="footer-card">
-      {#if learner}
-        {#if assignmentForm === 'anonym'}
-          Antworten werden anonym gespeichert.
-        {:else}
-          Antworten werden automatisch unter deinem Code gespeichert.
-        {/if}
-        <button class="ghost ci-btn-outline" on:click={logoutLearner}>Abmelden</button>
+      {#if isAnonymousDisplayMode()}
+        <span class="anonymous-symbol" title="Anonyme Zuweisung" aria-label="Anonyme Zuweisung">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path
+              d="M7 10V8a5 5 0 1 1 10 0v2M6 10h12v9H6z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </span>
+        Anonym geoeffnet. Antworten werden anonym gespeichert.
+        {anonymousSessionCode
+          ? ` Dein Session-Code: ${anonymousSessionCode} (lokal als Cookie gespeichert).`
+          : ''}
+      {:else if learner}
+        Persoenlich geoeffnet als {learner.name || 'Lernende:r'}
+        {learner.code ? ` (${learner.code})` : ''}.
       {:else}
         Bitte einloggen, damit deine Antworten gespeichert werden.
       {/if}
+      Lueckentext-Antworten werden beim Klick auf ? gespeichert, Umfrage-Antworten direkt bei Auswahl.
     </div>
   </footer>
 </div>
@@ -399,6 +554,7 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+    font-family: var(--ci-font-body, 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif);
   }
 
   .hero {
@@ -419,7 +575,6 @@
 
   h1 {
     margin: 0;
-    font-family: 'Fraunces', serif;
     font-size: clamp(30px, 4vw, 44px);
     letter-spacing: -0.02em;
   }
@@ -502,6 +657,29 @@
     color: #8a847b;
   }
 
+  .save-state {
+    font-size: 12px;
+    color: #4d463d;
+  }
+
+  .save-state--error {
+    color: #b42318;
+  }
+
+  .anonymous-symbol {
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    vertical-align: text-bottom;
+    margin-right: 4px;
+    color: #6f6a60;
+  }
+
+  .anonymous-symbol svg {
+    width: 14px;
+    height: 14px;
+  }
+
   .state {
     padding: 18px 20px;
     border-radius: 14px;
@@ -532,7 +710,6 @@
 
   .sheet :global(h2) {
     margin: 1.6rem 0 0.8rem;
-    font-family: 'Fraunces', serif;
   }
 
   .sheet :global(.video-container) {
@@ -584,6 +761,8 @@
     color: #6a6156;
     border: 1px solid #eadfd3;
     font-size: 13px;
+    display: grid;
+    gap: 6px;
   }
 
   :global(.luecke) {
@@ -627,22 +806,6 @@
     color: #0f172a;
     pointer-events: none;
     animation: abu-caret-blink 1s steps(1, end) infinite;
-  }
-
-  .sheet :global(button:not(.check-btn))::before,
-  .sheet :global(select)::before,
-  .sheet :global(input[type='checkbox'])::before,
-  .sheet :global(input[type='radio'])::before,
-  .sheet :global(input[type='button'])::before,
-  .sheet :global(input[type='submit'])::before {
-    content: '☝';
-    position: absolute;
-    top: -16px;
-    left: 0;
-    line-height: 1;
-    font-size: 15px;
-    color: #0f172a;
-    pointer-events: none;
   }
 
   @keyframes abu-caret-blink {
@@ -816,12 +979,18 @@
 
   :global(umfrage-matrix .umfrage-matrix__scroll) {
     overflow-x: auto;
+    padding-right: 2.4rem;
   }
 
   :global(umfrage-matrix .umfrage-matrix__table) {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
     min-width: 520px;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__col-statement) {
+    min-width: 220px;
   }
 
   :global(umfrage-matrix th),
@@ -844,6 +1013,60 @@
     font-weight: 500;
   }
 
+  :global(umfrage-matrix .umfrage-matrix__table tbody td:last-child),
+  :global(umfrage-matrix .umfrage-matrix__table tbody th:last-child) {
+    position: relative;
+  }
+
+  :global(umfrage-matrix .umfrage-save-indicator) {
+    position: absolute;
+    top: 50%;
+    right: -1.05rem;
+    min-width: 0.9rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    text-align: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-family: inherit;
+    line-height: 1;
+    opacity: 0;
+    transform: translateY(-50%) scale(0.92);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    pointer-events: none;
+    cursor: default;
+    z-index: 4;
+  }
+
+  :global(umfrage-matrix .umfrage-save-indicator--visible) {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+
+  :global(umfrage-matrix .umfrage-save-indicator--saving) {
+    color: #8a8072;
+  }
+
+  :global(umfrage-matrix .umfrage-save-indicator--saved) {
+    color: #2f8f83;
+  }
+
+  :global(umfrage-matrix .umfrage-save-indicator--error) {
+    color: #b42318;
+  }
+
+  :global(umfrage-matrix .umfrage-save-indicator--retry) {
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  :global(umfrage-matrix .umfrage-save-indicator--retry:focus-visible) {
+    outline: 2px solid rgba(180, 35, 24, 0.35);
+    outline-offset: 2px;
+    border-radius: 999px;
+  }
+
   :global(umfrage-matrix .umfrage-matrix__scale-value) {
     display: block;
     font-size: 1rem;
@@ -860,37 +1083,20 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 999px;
-    border: 1px solid #c7bdb1;
-    background: #fff;
     cursor: pointer;
-    position: relative;
+    margin: 0;
   }
 
   :global(umfrage-matrix .umfrage-matrix__option input) {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #2f8f83;
   }
 
-  :global(umfrage-matrix .umfrage-matrix__dot) {
-    width: 11px;
-    height: 11px;
-    border-radius: 999px;
-    border: 2px solid #8a8072;
-    background: transparent;
-    transition: all 0.15s ease;
-  }
-
-  :global(umfrage-matrix .umfrage-matrix__option input:checked + .umfrage-matrix__dot) {
-    background: #2f8f83;
-    border-color: #2f8f83;
-  }
-
-  :global(umfrage-matrix .umfrage-matrix__option input:focus-visible + .umfrage-matrix__dot) {
-    box-shadow: 0 0 0 3px rgba(47, 143, 131, 0.25);
+  :global(umfrage-matrix .umfrage-matrix__option input:focus-visible) {
+    outline: 2px solid rgba(47, 143, 131, 0.45);
+    outline-offset: 2px;
   }
 
   @media (max-width: 720px) {

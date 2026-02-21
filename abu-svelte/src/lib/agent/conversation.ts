@@ -17,6 +17,7 @@ export interface AgentConversationLogPayload {
   context: string;
   source: string;
   error: boolean;
+  changeDecision?: string;
   modelIntent: AgentModelIntent | null;
   navigation?: Record<string, unknown> | null;
   action?: string;
@@ -147,6 +148,7 @@ export const createAgentConversation = (deps: AgentConversationDeps) => ({
       extra: {
         source?: string;
         action?: string;
+        changeDecision?: string;
         navigation?: Record<string, unknown> | null;
         agentResult?: Record<string, unknown> | null;
       } = {}
@@ -166,6 +168,7 @@ export const createAgentConversation = (deps: AgentConversationDeps) => ({
         context: request.context,
         source: extra.source || 'navigation',
         error: false,
+        changeDecision: (extra.changeDecision || 'none').toString(),
         modelIntent,
         navigation: extra.navigation ?? null,
         action: extra.action || '',
@@ -194,6 +197,7 @@ export const createAgentConversation = (deps: AgentConversationDeps) => ({
       extra: {
         source?: string;
         action?: string;
+        changeDecision?: string;
         navigation?: Record<string, unknown> | null;
         agentResult?: Record<string, unknown> | null;
       } = {}
@@ -213,6 +217,7 @@ export const createAgentConversation = (deps: AgentConversationDeps) => ({
         context: request.context,
         source: extra.source || 'agent_api',
         error: true,
+        changeDecision: (extra.changeDecision || 'none').toString(),
         modelIntent,
         navigation: extra.navigation ?? null,
         action: extra.action || '',
@@ -259,6 +264,7 @@ export const createAgentConversation = (deps: AgentConversationDeps) => ({
         return await finalizeError(turn.status || 'Agent-Aufruf fehlgeschlagen', {
           source: turn.source || 'agent_runtime',
           action: turn.action || 'error',
+          changeDecision: turn.changeDecision || 'none',
           navigation: turn.navigation ?? null,
           agentResult: turn.agentResult ?? null
         });
@@ -267,6 +273,7 @@ export const createAgentConversation = (deps: AgentConversationDeps) => ({
       return await finalizeSuccess(turn.status || 'Antwort erhalten.', turn.message || '', {
         source: turn.source || 'navigation',
         action: turn.action || '',
+        changeDecision: turn.changeDecision || 'none',
         navigation: turn.navigation ?? null,
         agentResult: turn.agentResult ?? null
       });

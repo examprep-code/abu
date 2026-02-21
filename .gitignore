@@ -39,6 +39,12 @@ abu-back/storage/agent-logs/
 *.swo
 *.log
 
+# Deploy secrets
+scripts/deploy/config.local.sh
+scripts/deploy/env.local.sh
+scripts/deploy/config.local.sh.bak*
+scripts/deploy/env.local.sh.bak*
+
 # Python
 __pycache__/
 *.pyc

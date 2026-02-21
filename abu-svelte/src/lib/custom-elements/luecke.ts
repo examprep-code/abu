@@ -11,6 +11,11 @@ export type LueckeRuntimeOptions = {
   user: string;
   classroom?: string | number | null;
   onProgress?: (progress: LueckeProgress) => void;
+  onSaveState?: (event: {
+    status: 'saving' | 'saved' | 'error';
+    message?: string;
+    at?: number;
+  }) => void;
 };
 
 const STOPWORTER_DE = new Set([
@@ -299,19 +304,29 @@ function setClasses(
 function updateProgress(root: HTMLElement, onProgress?: (progress: LueckeProgress) => void): LueckeProgress {
   const inputs = Array.from(root.querySelectorAll('input.luecke')) as HTMLInputElement[];
   const total = inputs.length;
-  let sum = 0;
   let answered = 0;
 
   inputs.forEach((input) => {
     if (input.value.trim()) answered++;
-    if (input.classList.contains('luecke--richtig')) sum += 1000;
-    else if (input.classList.contains('luecke--teilweise')) sum += 500;
   });
 
-  const percent = total ? Math.round((sum / (total * 1000)) * 100) : 0;
+  const percent = total ? Math.round((answered / total) * 100) : 0;
   const progress = { percent, answered, total };
   if (onProgress) onProgress(progress);
   return progress;
+}
+
+function notifySaveState(
+  options: LueckeRuntimeOptions,
+  status: 'saving' | 'saved' | 'error',
+  message = ''
+): void {
+  if (!options.onSaveState) return;
+  options.onSaveState({
+    status,
+    message,
+    at: status === 'saved' ? Date.now() : undefined
+  });
 }
 
 export function ensureLueckeElements(): void {
@@ -435,12 +450,14 @@ async function checkGap(
   const feedback = wrapper?.querySelector('.feedback') as HTMLElement | null;
 
   if (!input || !feedback) {
+    notifySaveState(options, 'error', 'Eingabefeld nicht gefunden.');
     button.dataset.lueckeBusy = '';
     return;
   }
 
   const answer = input.value.trim();
   if (!answer) {
+    notifySaveState(options, 'error', 'Bitte zuerst eine Antwort eingeben.');
     setClasses(input, button, feedback, null);
     showFeedback(feedback, 'Bitte zuerst eine Antwort in die Luecke schreiben.');
     button.dataset.lueckeBusy = '';
@@ -467,6 +484,7 @@ async function checkGap(
 
   const backendError = (backendResponse && (backendResponse.error || backendResponse.warning)) || null;
   if (backendError) {
+    notifySaveState(options, 'error', String(backendError));
     button.classList.remove('check-btn--loading');
     button.disabled = false;
     feedback.classList.remove('feedback--richtig', 'feedback--teilweise', 'feedback--falsch');
@@ -515,6 +533,7 @@ async function checkGap(
 
   setClasses(input, button, feedback, label);
   updateProgress(options.root, options.onProgress);
+  notifySaveState(options, 'saved');
   button.dataset.lueckeBusy = '';
 }
 
@@ -524,22 +543,41 @@ export function createLueckeRuntime(options: LueckeRuntimeOptions): {
 } {
   ensureLueckeElements();
   bindOutsideClickHide();
+  const buttonHandlers = new Map<HTMLButtonElement, EventListener>();
+  const inputHandlers = new Map<HTMLInputElement, EventListener>();
 
   const bindButtons = () => {
     const buttons = Array.from(options.root.querySelectorAll('button.check-btn')) as HTMLButtonElement[];
     buttons.forEach((btn) => {
-      if (btn.dataset.lueckeBound === '1') return;
-      btn.dataset.lueckeBound = '1';
-      btn.addEventListener('click', () => {
+      if (buttonHandlers.has(btn)) return;
+      const handler = () => {
+        notifySaveState(options, 'saving');
         void checkGap(btn, options);
-      });
+      };
+      buttonHandlers.set(btn, handler);
+      btn.addEventListener('click', handler);
+    });
+  };
+
+  const bindInputs = () => {
+    const inputs = Array.from(options.root.querySelectorAll('input.luecke')) as HTMLInputElement[];
+    inputs.forEach((input) => {
+      if (inputHandlers.has(input)) return;
+      const handler = () => {
+        updateProgress(options.root, options.onProgress);
+      };
+      inputHandlers.set(input, handler);
+      input.addEventListener('input', handler);
+      input.addEventListener('change', handler);
     });
   };
 
   options.root.dataset.lueckeRuntime = '1';
   bindButtons();
+  bindInputs();
   const observer = new MutationObserver(() => {
     bindButtons();
+    bindInputs();
   });
   observer.observe(options.root, { childList: true, subtree: true });
 
@@ -547,11 +585,21 @@ export function createLueckeRuntime(options: LueckeRuntimeOptions): {
     await prefillAnswers(options);
     updateProgress(options.root, options.onProgress);
     bindButtons();
+    bindInputs();
   };
 
   return {
     destroy: () => {
       observer.disconnect();
+      buttonHandlers.forEach((handler, btn) => {
+        btn.removeEventListener('click', handler);
+      });
+      inputHandlers.forEach((handler, input) => {
+        input.removeEventListener('input', handler);
+        input.removeEventListener('change', handler);
+      });
+      buttonHandlers.clear();
+      inputHandlers.clear();
       options.root.dataset.lueckeRuntime = '';
     },
     refresh

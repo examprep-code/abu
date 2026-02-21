@@ -17,7 +17,7 @@
   } from '$lib/agent/router';
   import { createAgentConversation } from '$lib/agent/conversation';
   import { createDefaultAgentProvider } from '$lib/agent/provider';
-  import { createAgentScopeState } from '$lib/agent/session';
+  import { createAgentScopeState, createEmptyAgentDraft } from '$lib/agent/session';
   import ListTable from '$lib/components/ListTable.svelte';
 
   const showLegacyImport = false;
@@ -162,6 +162,8 @@
   let visualPreviewEl = null;
   let visualBlockViews = [];
   let visualBlockHtmlInputs = [];
+  let visualBlockHtmlHighlights = [];
+  let visualBlockHtmlTokens = [];
   let visualBlockEditors = [];
   let visualBlockSelections = [];
   let blockDragImageEl = null;
@@ -193,6 +195,9 @@
   let agentContext = 'app';
   const agentScopeState = createAgentScopeState();
   let agentSidebarOpen = true;
+  let agentActiveScope = 'app';
+  let agentActiveDraft = createEmptyAgentDraft();
+  let agentDraftChangeItems = [];
 
   let answersEl = null;
   let answers = [];
@@ -216,6 +221,9 @@
   let answersRenderKey = 0;
   let answersLueckeRuntime = null;
   let answersUmfrageRuntime = null;
+  let answersCiCss = '';
+  let answersCiClassId = null;
+  let answersCiRequestId = 0;
 
   const PLAN_STATUS_OPTIONS = [
     { value: '', label: 'Nicht zugeordnet' },
@@ -259,6 +267,18 @@
     resizeAgentInput();
   }
   $: schoolMap = new Map(schools.map((entry) => [String(entry.id), entry]));
+  $: {
+    activeTab;
+    editorView;
+    answersUserFilter;
+    answersClassId;
+    answersCiClassId;
+    answersCiCss;
+    classes;
+    schoolMap;
+    adminCiCss;
+    applyEffectiveCi();
+  }
   $: sheetFilterValue = sheetFilter.trim().toLowerCase();
   $: filteredSheets = sheetFilterValue
     ? sheets.filter((sheet) => {
@@ -504,6 +524,7 @@
   $: schoolCssTokens = buildCssTokens(schoolCss);
   $: newSchoolCssTokens = buildCssTokens(newSchoolCss);
   $: sheetHtmlTokens = buildHtmlTokens(editorContent);
+  $: visualBlockHtmlTokens = visualBlocks.map((block) => buildHtmlTokens(block || ''));
   $: {
     selectedId;
     editorName;
@@ -688,7 +709,7 @@
       const saved = JSON.parse(raw);
       adminCiSchoolId = saved?.schoolId ? String(saved.schoolId) : '';
       adminCiCss = saved?.css ?? '';
-      applySchoolCiCss(adminCiCss);
+      applyEffectiveCi();
     } catch {
       // ignore
     }
@@ -706,7 +727,7 @@
         })
       );
     }
-    applySchoolCiCss(adminCiCss);
+    applyEffectiveCi();
   };
 
   const applyAdminCiSelection = (schoolId) => {
@@ -751,6 +772,86 @@
     const num = Number(value);
     if (!Number.isFinite(num) || num <= 0) return null;
     return num;
+  }
+
+  function buildLearnerPortalHref(learnerEntry) {
+    const code = (learnerEntry?.code ?? '').toString().trim();
+    if (!code) return '/lernende';
+    const params = new URLSearchParams();
+    params.set('code', code);
+    const classId = normalizeClassId(learnerEntry?.classroom ?? selectedClassId);
+    if (classId) {
+      params.set('classroom', String(classId));
+    }
+    return `/lernende?${params.toString()}`;
+  }
+
+  function isLearnerAnswersViewActive() {
+    return activeTab === 'editor' && editorView === 'answers' && !!(answersUserFilter || '').trim();
+  }
+
+  const fetchAnswersClassSchoolIdFromDb = async (classId) => {
+    const normalizedClassId = normalizeClassId(classId);
+    if (!normalizedClassId || !token) return null;
+    const classRes = await apiFetch(`classroom/${normalizedClassId}`);
+    const classPayload = await readPayload(classRes);
+    if (!classRes.ok) return null;
+    const schoolId = normalizeClassId(normalizeSchoolId(classPayload?.data?.school));
+    return schoolId || null;
+  };
+
+  const fetchSchoolCiCssByIdFromDb = async (schoolId) => {
+    const normalizedSchoolId = normalizeClassId(schoolId);
+    if (!normalizedSchoolId || !token) return '';
+    const schoolRes = await apiFetch(`school/${normalizedSchoolId}`);
+    const schoolPayload = await readPayload(schoolRes);
+    if (!schoolRes.ok) return '';
+    return typeof schoolPayload?.data?.ci_css === 'string' ? schoolPayload.data.ci_css : '';
+  };
+
+  const fetchAnswersCiCssFromDb = async (classId) => {
+    const schoolId = await fetchAnswersClassSchoolIdFromDb(classId);
+    if (!schoolId) return '';
+    return fetchSchoolCiCssByIdFromDb(schoolId);
+  };
+
+  const ensureAnswersCiCss = async (classId) => {
+    const normalizedClassId = normalizeClassId(classId);
+    if (!normalizedClassId) {
+      answersCiClassId = null;
+      answersCiCss = '';
+      return '';
+    }
+    if (answersCiClassId === normalizedClassId && answersCiCss) {
+      return answersCiCss;
+    }
+    const requestId = ++answersCiRequestId;
+    answersCiClassId = normalizedClassId;
+    answersCiCss = '';
+
+    try {
+      const ciCss = await fetchAnswersCiCssFromDb(normalizedClassId);
+      if (requestId !== answersCiRequestId) return '';
+      answersCiCss = ciCss;
+      return ciCss;
+    } catch {
+      if (requestId === answersCiRequestId) {
+        answersCiCss = '';
+      }
+      return '';
+    }
+  };
+
+  function applyEffectiveCi() {
+    if (isLearnerAnswersViewActive()) {
+      const activeClassId = normalizeClassId(answersClassId);
+      const loadedClassId = normalizeClassId(answersCiClassId);
+      const learnerClassCiCss =
+        activeClassId && loadedClassId === activeClassId ? answersCiCss : '';
+      applySchoolCiCss(learnerClassCiCss || adminCiCss);
+      return;
+    }
+    applySchoolCiCss(adminCiCss);
   }
 
   function formatClassLabel(entry) {
@@ -2967,6 +3068,10 @@
 
   const setAgentDraftForScope = (scope, draft) => agentScopeState.setDraft(scope, draft);
 
+  $: agentActiveScope = resolveAgentMemoryScope();
+  $: agentActiveDraft = getAgentDraftForScope(agentActiveScope);
+  $: agentDraftChangeItems = buildAgentDraftChangeItems(agentActiveDraft);
+
   const buildAgentVisibleItems = (context) => {
     if (context === 'visual') {
       return [
@@ -3039,6 +3144,7 @@
     context = 'app',
     source = 'navigation',
     error = false,
+    changeDecision = 'none',
     modelIntent = null,
     navigation = null,
     action = '',
@@ -3057,6 +3163,7 @@
           context: buildAgentContextDetails(context || 'app'),
           source: (source || 'navigation').toString(),
           error: Boolean(error),
+          change_decision: (changeDecision || 'none').toString(),
           outcome: error ? 'client_error' : 'client_success',
           model_intent:
             modelIntent && typeof modelIntent === 'object' ? modelIntent : null,
@@ -3263,9 +3370,14 @@
   };
 
   const isApplyDraftPrompt = (prompt = '') =>
-    /\b(anwenden|uebernehmen|apply|ausfuehren|ausfuhren|bestaetigen|bestaetige)\b/.test(
+    /\b(anwenden|uebernehmen|apply|ausfuehren|ausfuhren)\b/.test(
       normalizePrompt(prompt)
     );
+
+  const isConfirmDraftApplyPrompt = (prompt = '') =>
+    /\b(bestaetigen|bestaetige|bestatigen|bestatige|freigeben|freigabe|genehmigen|genehmige)\b/.test(
+      normalizePrompt(prompt)
+    ) || /\b(ja|ok|okay)\s+anwenden\b/.test(normalizePrompt(prompt));
 
   const isDiscardDraftPrompt = (prompt = '') =>
     /\b(verwerfen|verwerfe|discard|loeschen|loesche|zuruecksetzen|zurucksetzen)\b/.test(
@@ -3327,6 +3439,78 @@
     };
   };
 
+  const hasOpenAgentDraft = (draft) =>
+    Boolean(draft?.mode && typeof draft?.html === 'string' && draft.html.length);
+
+  const buildAgentDraftPreview = (html, maxChars = 200) => {
+    const text = stripHtml(html || '').replace(/\s+/g, ' ').trim();
+    if (!text) return 'Kein Textinhalt (nur Struktur/HTML).';
+    if (text.length <= maxChars) return text;
+    return `${text.slice(0, maxChars)}…`;
+  };
+
+  const resolveAgentDraftTargetLabel = (draft) => {
+    const draftContext = draft?.context === 'visual' ? 'visual' : 'html';
+    if (draft?.mode === 'insert') {
+      if (draftContext === 'visual') {
+        if (!visualBlocks.length || draft?.blockLevel) return 'Neuer Block im visuellen Editor';
+        const index = Math.min(Math.max(0, visualActiveBlock), Math.max(visualBlocks.length - 1, 0));
+        return `Aktiver visueller Block #${index + 1}`;
+      }
+      return 'Cursorposition im HTML-Editor';
+    }
+
+    if (draftContext === 'visual') {
+      const index = Math.min(Math.max(0, visualActiveBlock), Math.max(visualBlocks.length - 1, 0));
+      return `Aktiver Block #${index + 1}`;
+    }
+    return 'Gesamtes Dokument im HTML-Editor';
+  };
+
+  const resolveAgentDraftCurrentHtml = (draft) => {
+    if (!draft || draft.mode !== 'replace') return '';
+    const draftContext = draft.context === 'visual' ? 'visual' : 'html';
+    if (draftContext === 'visual') {
+      const index = Math.min(Math.max(0, visualActiveBlock), Math.max(visualBlocks.length - 1, 0));
+      return visualBlocks[index] ?? '';
+    }
+    return editorContent ?? '';
+  };
+
+  const buildAgentDraftChangeItems = (draft) => {
+    if (!hasOpenAgentDraft(draft)) return [];
+
+    const items = [];
+    items.push(`Aktion: ${draft.mode === 'insert' ? 'Einfuegen' : 'Ersetzen'}`);
+    items.push(`Ziel: ${resolveAgentDraftTargetLabel(draft)}`);
+
+    const nextLength = (draft.html || '').length;
+    if (draft.mode === 'replace') {
+      const currentHtml = resolveAgentDraftCurrentHtml(draft);
+      const currentLength = (currentHtml || '').length;
+      const delta = nextLength - currentLength;
+      const deltaLabel = delta === 0 ? '0' : delta > 0 ? `+${delta}` : `${delta}`;
+      items.push(`Umfang: ${currentLength} -> ${nextLength} Zeichen (${deltaLabel})`);
+      if (currentHtml === draft.html) {
+        items.push('Hinweis: Vorschlag entspricht bereits dem aktuellen Inhalt.');
+      }
+    } else {
+      items.push(`Umfang: +${nextLength} Zeichen`);
+    }
+
+    if (draft.message) {
+      const compactMessage = draft.message.replace(/\s+/g, ' ').trim();
+      if (compactMessage) {
+        const messagePreview =
+          compactMessage.length > 220 ? `${compactMessage.slice(0, 220)}…` : compactMessage;
+        items.push(`Agent-Hinweis: ${messagePreview}`);
+      }
+    }
+
+    items.push(`Vorschau: ${buildAgentDraftPreview(draft.html, 200)}`);
+    return items;
+  };
+
   const agentProvider = createDefaultAgentProvider({
     apiFetch: (path, options = {}) => apiFetch(path, options),
     readPayload: (res) => readPayload(res),
@@ -3335,6 +3519,7 @@
     buildContextDetails: (context) => buildAgentContextDetails(context),
     buildAgentContextPayload: (context) => buildAgentContext(context),
     isApplyDraftPrompt,
+    isConfirmDraftApplyPrompt,
     isDiscardDraftPrompt,
     canEditContext: (context) => isAgentHtmlEditableContext(context),
     applyDraft: ({ draft, context }) => applyAgentDraft({ draft, context })
@@ -3355,8 +3540,12 @@
     setDraftForScope: (scope, draft) => setAgentDraftForScope(scope, draft)
   });
 
-  const applyAgentPrompt = async (context = agentContext) => {
-    const prompt = agentPrompt.trim();
+  const applyAgentPrompt = async (
+    context = agentContext,
+    promptOverride = '',
+    pendingStatus = 'Agent arbeitet…'
+  ) => {
+    const prompt = (promptOverride || agentPrompt || '').trim();
     agentStatus = '';
     if (!prompt) {
       agentStatus = 'Bitte einen Prompt eingeben.';
@@ -3376,10 +3565,12 @@
 
     const promptText = prompt;
     const currentContext = context || agentContext;
-    agentPrompt = '';
-    resizeAgentInput();
+    if (!promptOverride) {
+      agentPrompt = '';
+      resizeAgentInput();
+    }
     agentPending = true;
-    agentStatus = 'Agent arbeitet…';
+    agentStatus = pendingStatus || 'Agent arbeitet…';
 
     try {
       const result = await agentConversation.runPrompt({
@@ -3393,6 +3584,23 @@
     } finally {
       agentPending = false;
     }
+  };
+
+  const triggerAgentDraftAction = async (action, context = agentContext) => {
+    if (agentPending) return;
+    if (!hasOpenAgentDraft(agentActiveDraft)) {
+      agentStatus = 'Kein offener Vorschlag vorhanden.';
+      return;
+    }
+    if (action === 'apply') {
+      await applyAgentPrompt(
+        context,
+        'bestaetige anwenden',
+        'Vorschlag wird angewendet…'
+      );
+      return;
+    }
+    await applyAgentPrompt(context, 'verwerfen', 'Vorschlag wird verworfen…');
   };
 
   const handleAgentKeydown = (event, context) => {
@@ -4050,6 +4258,7 @@
     answersMeta = `Sheet: ${key} · ${classLabel} · ${userLabel} · Lernendenansicht`;
 
     try {
+      await ensureAnswersCiCss(classId);
       ensureLueckeElements();
       ensureUmfrageElements();
       destroyAnswersRuntime();
@@ -4574,29 +4783,31 @@
         >
           <svg class="agent-topbar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path
-              d="M12 4.3c-1.8-1.7-4.8-1.5-6.2.6-1 1.6-.9 3.7.4 5-.9 1.9-.2 4.1 1.7 5.2 1.4.8 3.1.8 4.1-.1"
+              d="M12 4v2.4"
               fill="none"
               stroke="currentColor"
-              stroke-width="1.35"
+              stroke-width="1.4"
               stroke-linecap="round"
               stroke-linejoin="round"
             />
             <path
-              d="M12 4.3c1.8-1.7 4.8-1.5 6.2.6 1 1.6.9 3.7-.4 5 .9 1.9.2 4.1-1.7 5.2-1.4.8-3.1.8-4.1-.1"
+              d="M7.2 8h9.6a2.8 2.8 0 0 1 2.8 2.8v5a2.8 2.8 0 0 1-2.8 2.8H7.2a2.8 2.8 0 0 1-2.8-2.8v-5A2.8 2.8 0 0 1 7.2 8Z"
               fill="none"
               stroke="currentColor"
-              stroke-width="1.35"
+              stroke-width="1.4"
               stroke-linecap="round"
               stroke-linejoin="round"
             />
             <path
-              d="M12 7.1v8.7M9.6 9.3c1.2 1 1.2 3.7 0 4.7M14.4 9.3c-1.2 1-1.2 3.7 0 4.7"
+              d="M4.4 11.7H3M21 11.7h-1.4M9.4 15.3h5.2M9 18.6v1.4M15 18.6v1.4"
               fill="none"
               stroke="currentColor"
-              stroke-width="1.25"
+              stroke-width="1.3"
               stroke-linecap="round"
               stroke-linejoin="round"
             />
+            <circle cx="9.3" cy="12" r="1" fill="currentColor" />
+            <circle cx="14.7" cy="12" r="1" fill="currentColor" />
           </svg>
         </button>
       {:else}
@@ -5091,13 +5302,22 @@
                                   {@html block}
                                 </div>
                               {:else}
-                                <textarea
-                                  spellcheck="false"
-                                  value={block}
-                                  bind:this={visualBlockHtmlInputs[idx]}
-                                  on:focus={() => (visualActiveBlock = idx)}
-                                  on:input={(event) => handleVisualHtmlInput(idx, event)}
-                                ></textarea>
+                                <div class="code-editor visual-block-code-editor" aria-label="HTML-Block Editor">
+                                  <pre class="code-highlight" aria-hidden="true" bind:this={visualBlockHtmlHighlights[idx]}>{#each visualBlockHtmlTokens[idx] || [] as token}<span class={`token token-${token.type}`}>{token.value}</span>{/each}</pre>
+                                  <textarea
+                                    class="code-input code-input--overlay"
+                                    spellcheck="false"
+                                    value={block}
+                                    bind:this={visualBlockHtmlInputs[idx]}
+                                    on:focus={() => (visualActiveBlock = idx)}
+                                    on:input={(event) => handleVisualHtmlInput(idx, event)}
+                                    on:scroll={() =>
+                                      syncCodeScroll(
+                                        visualBlockHtmlInputs[idx],
+                                        visualBlockHtmlHighlights[idx]
+                                      )}
+                                  ></textarea>
+                                </div>
                               {/if}
                             </div>
                           <div
@@ -5592,15 +5812,29 @@
                         {entry.notes ? ` ${entry.notes}` : ''}
                       </div>
                     </button>
-                    <button
-                      class="icon-btn ci-btn-outline"
-                      title="Lernende loeschen"
-                      on:click={() => deleteLearnerById(entry.id)}
-                      disabled={deletingLearner}
-                      type="button"
-                    >
-                      Loeschen
-                    </button>
+                    <div class="list-row-actions">
+                      {#if entry.code}
+                        <a
+                          class="learner-direct-link ci-btn-outline"
+                          href={buildLearnerPortalHref(entry)}
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Lernendenportal oeffnen"
+                          aria-label="Lernendenportal oeffnen"
+                        >
+                          Portal
+                        </a>
+                      {/if}
+                      <button
+                        class="icon-btn ci-btn-outline"
+                        title="Lernende loeschen"
+                        on:click={() => deleteLearnerById(entry.id)}
+                        disabled={deletingLearner}
+                        type="button"
+                      >
+                        Loeschen
+                      </button>
+                    </div>
                   </div>
                 {/each}
               </div>
@@ -5982,6 +6216,34 @@
           </div>
           {#if agentStatus}
             <div class="agent-status" role="status">{agentStatus}</div>
+          {/if}
+          {#if hasOpenAgentDraft(agentActiveDraft)}
+            <section class="agent-draft-card" aria-label="Vorgeschlagene Aenderung">
+              <div class="agent-draft-title">Vorgeschlagene Aenderung</div>
+              <ul class="agent-draft-list">
+                {#each agentDraftChangeItems as item}
+                  <li class="agent-draft-item">{item}</li>
+                {/each}
+              </ul>
+              <div class="agent-draft-actions">
+                <button
+                  type="button"
+                  class="ci-btn-secondary agent-draft-btn"
+                  disabled={agentPending}
+                  on:click={() => triggerAgentDraftAction('apply')}
+                >
+                  Anwenden
+                </button>
+                <button
+                  type="button"
+                  class="ghost ci-btn-outline agent-draft-btn"
+                  disabled={agentPending}
+                  on:click={() => triggerAgentDraftAction('discard')}
+                >
+                  Verwerfen
+                </button>
+              </div>
+            </section>
           {/if}
           <div class="agent-context">{describeAgentContext(agentContext)}</div>
           <div class="agent-row agent-row--composer">
@@ -6960,6 +7222,25 @@
     align-items: center;
   }
 
+  .list-row-actions {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .learner-direct-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1;
+  }
+
   .icon-btn {
     padding: 8px 10px;
     border-radius: 10px;
@@ -7301,6 +7582,47 @@
     min-height: 18px;
   }
 
+  .agent-draft-card {
+    display: grid;
+    gap: 8px;
+    border-radius: 12px;
+    border: 1px solid #cfe5df;
+    background: #f3fbf8;
+    padding: 10px;
+  }
+
+  .agent-draft-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #0f766e;
+    font-weight: 700;
+  }
+
+  .agent-draft-list {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+  }
+
+  .agent-draft-item {
+    font-size: 12px;
+    line-height: 1.4;
+    color: #1f2937;
+    overflow-wrap: anywhere;
+  }
+
+  .agent-draft-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .agent-draft-btn {
+    min-height: 34px;
+  }
+
   .agent-context {
     font-size: 11px;
     font-weight: 700;
@@ -7593,7 +7915,12 @@
   :global(umfrage-matrix .umfrage-matrix__table) {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
     min-width: 520px;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__col-statement) {
+    min-width: 220px;
   }
 
   :global(umfrage-matrix th),
@@ -7622,8 +7949,98 @@
     border: 1px solid #cbd5e1;
     padding: 6px 8px;
     font-size: 13px;
+    line-height: 1.35;
     background: #fff;
     color: #1f2937;
+    resize: vertical;
+    min-height: 2.8rem;
+    white-space: pre-wrap;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-editor) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-controls) {
+    display: grid;
+    grid-auto-rows: minmax(0, 1fr);
+    gap: 6px;
+    align-content: center;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-insert-cell) {
+    padding: 0;
+    height: 0;
+    line-height: 0;
+    background: transparent;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-insert-fill) {
+    padding: 0;
+    height: 0;
+    line-height: 0;
+    background: transparent;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-insert-btn) {
+    width: 24px;
+    height: 24px;
+    margin: -12px 0;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #2f8f83;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    z-index: 1;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-insert-btn:hover:enabled) {
+    background: #eef9f7;
+    border-color: #2f8f83;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-btn) {
+    width: 24px;
+    min-height: 24px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #2f8f83;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-btn:hover:enabled) {
+    background: #eef9f7;
+    border-color: #2f8f83;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-btn--remove) {
+    color: #c33b3b;
+    border-color: #e2c8c8;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-btn--remove:hover:enabled) {
+    background: #fde7e7;
+    border-color: #c33b3b;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__statement-btn:disabled) {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   :global(umfrage-matrix .umfrage-matrix__statement-input:focus-visible) {
@@ -7741,37 +8158,20 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 999px;
-    border: 1px solid #cbd5e1;
-    background: #fff;
     cursor: pointer;
-    position: relative;
+    margin: 0;
   }
 
   :global(umfrage-matrix .umfrage-matrix__option input) {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: #2f8f83;
   }
 
-  :global(umfrage-matrix .umfrage-matrix__dot) {
-    width: 10px;
-    height: 10px;
-    border-radius: 999px;
-    border: 2px solid #8793a1;
-    background: transparent;
-    transition: all 0.15s ease;
-  }
-
-  :global(umfrage-matrix .umfrage-matrix__option input:checked + .umfrage-matrix__dot) {
-    background: #2f8f83;
-    border-color: #2f8f83;
-  }
-
-  :global(umfrage-matrix .umfrage-matrix__option input:focus-visible + .umfrage-matrix__dot) {
-    box-shadow: 0 0 0 3px rgba(47, 143, 131, 0.25);
+  :global(umfrage-matrix .umfrage-matrix__option input:focus-visible) {
+    outline: 2px solid rgba(47, 143, 131, 0.45);
+    outline-offset: 2px;
   }
 
   @media (max-width: 720px) {
@@ -7862,28 +8262,6 @@
     animation: block-caret-blink 1s steps(1, end) infinite;
   }
 
-  .block-editor__visual :global(button:not(.check-btn))::before,
-  .block-editor__visual :global(select)::before,
-  .block-editor__visual :global(input[type='checkbox'])::before,
-  .block-editor__visual :global(input[type='radio'])::before,
-  .block-editor__visual :global(input[type='button'])::before,
-  .block-editor__visual :global(input[type='submit'])::before,
-  .preview-body :global(button:not(.gap-action-btn):not(.check-btn))::before,
-  .preview-body :global(select)::before,
-  .preview-body :global(input[type='checkbox'])::before,
-  .preview-body :global(input[type='radio'])::before,
-  .preview-body :global(input[type='button'])::before,
-  .preview-body :global(input[type='submit'])::before {
-    content: '☝';
-    position: absolute;
-    top: -16px;
-    left: 0;
-    line-height: 1;
-    font-size: 15px;
-    color: #0f172a;
-    pointer-events: none;
-  }
-
   .block-editor__visual :global(button),
   .block-editor__visual :global(select),
   .block-editor__visual :global(input[type='checkbox']),
@@ -7911,6 +8289,15 @@
   }
 
   .block-editor textarea {
+    min-height: 140px;
+  }
+
+  .visual-block-code-editor {
+    border-radius: 10px;
+  }
+
+  .visual-block-code-editor .code-highlight,
+  .visual-block-code-editor .code-input--overlay {
     min-height: 140px;
   }
 

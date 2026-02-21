@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
   --ci-font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --ci-font-title: 'Fraunces', 'Georgia', serif;
+  --ci-font-title: 'Arial Black', Arial, sans-serif;
   --ci-button-primary: #0f172a;
   --ci-button-accent: #1f2937;
   --ci-button-secondary: var(--ci-secondary, #ec5a8f);

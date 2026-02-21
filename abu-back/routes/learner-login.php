@@ -17,31 +17,29 @@ if ($code === '') {
     return;
 }
 
-$learnerConfig = [
-    'learner' => [
-        'id' => [],
-        'name' => [],
-        'code' => [],
-        'classroom' => [
-            'id' => [],
-            'school' => [
-                'id' => [],
-                'name' => [],
-                'ci_css' => [],
-            ],
-        ],
-        '_snippets' => ['transform/learner_login' => true],
-    ],
-];
+$rows = sql_get(
+    'SELECT
+        l.id,
+        l.name,
+        l.code,
+        l.classroom,
+        c.school,
+        s.name AS school_name,
+        s.ci_css AS school_css
+     FROM `learner` l
+     LEFT JOIN `classroom` c ON c.id = l.classroom
+     LEFT JOIN `school` s ON s.id = c.school
+     WHERE l.code = "' . sql_escape($code) . '"
+     LIMIT 1;'
+);
 
-$learnerConfig['learner']['_where'] = [
-    'code = "' . sql_escape($code) . '"',
-];
-
-$result = get($learnerConfig);
-$learner = $result['learner'][0] ?? null;
+$learner = $rows[0] ?? null;
 
 if (!empty($learner)) {
+    $learner['classroom'] = isset($learner['classroom']) ? intval($learner['classroom']) : null;
+    $learner['school'] = isset($learner['school']) ? intval($learner['school']) : null;
+    $learner['school_name'] = $learner['school_name'] ?? null;
+    $learner['school_css'] = (string) ($learner['school_css'] ?? '');
     $return['data']['learner'] = $learner;
     $return['data']['valid'] = true;
 } else {

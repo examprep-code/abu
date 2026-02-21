@@ -19,7 +19,8 @@ export const createEmptyAgentDraft = (): AgentDraftState => ({
   context: '',
   sourceAction: '',
   selectedSheetId: null,
-  createdAt: ''
+  createdAt: '',
+  awaitingConfirmation: false
 });
 
 const normalizeMemory = (memory: AgentMemory | null | undefined): AgentMemory => ({
@@ -48,7 +49,8 @@ const normalizeDraft = (draft: AgentDraftState | null | undefined): AgentDraftSt
     draft?.selectedSheetId === null || draft?.selectedSheetId === undefined
       ? null
       : draft.selectedSheetId,
-  createdAt: typeof draft?.createdAt === 'string' ? draft.createdAt : ''
+  createdAt: typeof draft?.createdAt === 'string' ? draft.createdAt : '',
+  awaitingConfirmation: Boolean(draft?.awaitingConfirmation)
 });
 
 export const createAgentScopeState = () => {

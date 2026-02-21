@@ -191,7 +191,7 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     description: 'Login mit 12-stelligem Lernenden-Code.',
     shows: ['Logincode Feld', 'Persoenliche Sheet-Liste'],
     editable: [],
-    actions: ['Einloggen', 'Abmelden', 'Sheet oeffnen'],
+    actions: ['Einloggen', 'Sheet oeffnen'],
     apiCalls: ['POST learner-login', 'GET sheet/public-list?code=...'],
     keywords: ['lernenden login', 'code login', 'lernende portal']
   },

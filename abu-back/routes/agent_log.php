@@ -151,6 +151,10 @@ if ($method === 'POST') {
     $navigation = is_array($data['navigation'] ?? null) ? $data['navigation'] : null;
     $action = trim((string)($data['action'] ?? ''));
     $agentResult = is_array($data['agent_result'] ?? null) ? $data['agent_result'] : null;
+    $changeDecision = strtolower(trim((string)($data['change_decision'] ?? 'none')));
+    if (!in_array($changeDecision, ['none', 'pending', 'accepted', 'rejected'], true)) {
+        $changeDecision = 'none';
+    }
 
     $agentFlowInput = $data['agent_flow'] ?? null;
     $agentFlow = null;
@@ -191,6 +195,38 @@ if ($method === 'POST') {
             $agentFlow['steps'][] = [
                 'type' => 'agent_result',
                 'data' => $agentResult,
+            ];
+        }
+    }
+
+    if (!isset($agentFlow['steps']) || !is_array($agentFlow['steps'])) {
+        $agentFlow['steps'] = [];
+    }
+    $agentFlow['change_decision'] = $changeDecision;
+    if ($changeDecision !== 'none') {
+        $hasChangeDecisionStep = false;
+        foreach ($agentFlow['steps'] as $step) {
+            if (!is_array($step)) {
+                continue;
+            }
+            if (($step['type'] ?? '') !== 'change_decision') {
+                continue;
+            }
+            $decision = '';
+            if (is_array($step['data'] ?? null)) {
+                $decision = strtolower(trim((string)($step['data']['decision'] ?? '')));
+            } else {
+                $decision = strtolower(trim((string)($step['data'] ?? '')));
+            }
+            if ($decision === $changeDecision) {
+                $hasChangeDecisionStep = true;
+                break;
+            }
+        }
+        if (!$hasChangeDecisionStep) {
+            $agentFlow['steps'][] = [
+                'type' => 'change_decision',
+                'data' => ['decision' => $changeDecision],
             ];
         }
     }
@@ -255,6 +291,7 @@ if ($method === 'POST') {
                 'status' => $statusText,
                 'source' => $source,
                 'action' => $action,
+                'change_decision' => $changeDecision,
                 'error' => $error,
             ],
             'model_intent' => $modelIntent,

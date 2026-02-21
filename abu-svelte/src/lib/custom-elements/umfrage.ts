@@ -1,9 +1,16 @@
+import { createSyncIconElement, ensureSyncIconElement } from '$lib/components/icons/sync-icon';
+
 export type UmfrageRuntimeOptions = {
   root: HTMLElement;
   apiBaseUrl: string;
   sheetKey: string;
   user: string;
   classroom?: string | number | null;
+  onSaveState?: (event: {
+    status: 'saving' | 'saved' | 'error';
+    message?: string;
+    at?: number;
+  }) => void;
 };
 
 type UmfrageScaleEntry = {
@@ -20,6 +27,7 @@ const DEFAULT_SCALE: UmfrageScaleEntry[] = [
 ];
 
 const DEFAULT_STATEMENTS = ['Aussage 1', 'Aussage 2', 'Aussage 3'];
+const DEFAULT_NEW_STATEMENT = 'Neue Aussage';
 const SCALE_OFF_VALUES = new Set(['-', 'none', 'off', 'ohne', 'keine', 'leer']);
 const DEFAULT_NEW_LABEL = 'Neue Kategorie';
 
@@ -120,8 +128,8 @@ const parseStatementsFromTable = (table: Element | null): string[] => {
   const rows = Array.from(table.querySelectorAll('tbody th.umfrage-matrix__statement'));
   return rows.map((cell) => {
     const input = cell.querySelector(
-      'input.umfrage-matrix__statement-input'
-    ) as HTMLInputElement | null;
+      'input.umfrage-matrix__statement-input, textarea.umfrage-matrix__statement-input'
+    ) as HTMLInputElement | HTMLTextAreaElement | null;
     if (input) return input.value || '';
     return (cell.textContent || '').trim();
   });
@@ -191,18 +199,120 @@ const buildAriaLabel = (statement: string, entry: UmfrageScaleEntry): string => 
 async function sendAnswerToBackend(
   apiBaseUrl: string,
   payload: Record<string, string>
-): Promise<void> {
+): Promise<{ ok: boolean; warning?: string }> {
   try {
-    await fetch(`${apiBaseUrl}answer`, {
+    const response = await fetch(`${apiBaseUrl}answer`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
     });
+    const text = await response.text();
+    let parsed: Record<string, any> = {};
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      parsed = {};
+    }
+    if (!response.ok) {
+      const warning =
+        parsed.warning ||
+        (parsed.data && parsed.data.chatgpt && parsed.data.chatgpt.error) ||
+        parsed.error ||
+        `Fehler im Backend (${response.status})`;
+      return { ok: false, warning: String(warning) };
+    }
+    if (parsed.warning) {
+      return { ok: false, warning: String(parsed.warning) };
+    }
+    return { ok: true };
   } catch {
-    // ignore submit errors
+    return { ok: false, warning: 'Antwort konnte nicht gespeichert werden.' };
   }
+}
+
+function notifySaveState(
+  options: UmfrageRuntimeOptions,
+  status: 'saving' | 'saved' | 'error',
+  message = ''
+): void {
+  if (!options.onSaveState) return;
+  options.onSaveState({
+    status,
+    message,
+    at: status === 'saved' ? Date.now() : undefined
+  });
+}
+
+type RowSaveState = 'saving' | 'saved' | 'error';
+
+function rowIndicatorForInput(input: HTMLInputElement): HTMLElement | null {
+  const row = input.closest('tr');
+  if (!(row instanceof HTMLElement)) return null;
+  const existing = row.querySelector('.umfrage-save-indicator');
+  if (existing instanceof HTMLElement) return existing;
+  const anchorCell = row.querySelector('td:last-child, th:last-child');
+  if (!(anchorCell instanceof HTMLElement)) return null;
+
+  const indicator = document.createElement('button');
+  indicator.type = 'button';
+  indicator.className = 'umfrage-save-indicator';
+  indicator.setAttribute('aria-live', 'polite');
+  indicator.tabIndex = -1;
+  indicator.disabled = true;
+  anchorCell.appendChild(indicator);
+  return indicator;
+}
+
+function setRowIndicator(
+  input: HTMLInputElement,
+  state: RowSaveState,
+  message = ''
+): void {
+  const indicator = rowIndicatorForInput(input);
+  if (!indicator) return;
+
+  indicator.classList.remove(
+    'umfrage-save-indicator--saving',
+    'umfrage-save-indicator--saved',
+    'umfrage-save-indicator--error',
+    'umfrage-save-indicator--retry',
+    'umfrage-save-indicator--visible'
+  );
+
+  if (state === 'saving') {
+    indicator.replaceChildren(createSyncIconElement());
+    indicator.title = 'Wird gespeichert';
+    indicator.setAttribute('aria-label', 'Wird gespeichert');
+    indicator.tabIndex = -1;
+    (indicator as HTMLButtonElement).disabled = true;
+    indicator.classList.add('umfrage-save-indicator--saving', 'umfrage-save-indicator--visible');
+    return;
+  }
+
+  if (state === 'saved') {
+    indicator.textContent = '✓';
+    indicator.title = 'Gespeichert';
+    indicator.setAttribute('aria-label', 'Gespeichert');
+    indicator.tabIndex = -1;
+    (indicator as HTMLButtonElement).disabled = true;
+    indicator.classList.add('umfrage-save-indicator--saved', 'umfrage-save-indicator--visible');
+    return;
+  }
+
+  indicator.textContent = '!';
+  indicator.title = message
+    ? `${message} Klick zum erneut senden.`
+    : 'Speichern fehlgeschlagen. Klick zum erneut senden.';
+  indicator.setAttribute('aria-label', 'Speichern fehlgeschlagen. Erneut senden');
+  indicator.tabIndex = 0;
+  (indicator as HTMLButtonElement).disabled = false;
+  indicator.classList.add(
+    'umfrage-save-indicator--error',
+    'umfrage-save-indicator--retry',
+    'umfrage-save-indicator--visible'
+  );
 }
 
 function collectLatestByKey(entries: Array<Record<string, any>>): Record<string, Record<string, any>> {
@@ -341,7 +451,7 @@ export function ensureUmfrageElements(): void {
       this.updateScaleAttribute();
     }
 
-    private handleStatementInput(index: number, input: HTMLInputElement) {
+    private handleStatementInput(index: number, input: HTMLInputElement | HTMLTextAreaElement) {
       if (index < 0 || index >= this.statements.length) return;
       input.setAttribute('value', input.value);
       this.statements[index] = input.value;
@@ -376,6 +486,66 @@ export function ensureUmfrageElements(): void {
       this.notifyEditor();
     }
 
+    private insertStatementAt(index: number) {
+      const insertIndex = Math.max(0, Math.min(index, this.statements.length));
+      this.statements.splice(insertIndex, 0, DEFAULT_NEW_STATEMENT);
+      this.updateStatementsAttribute();
+      this.render();
+      const input = this.querySelectorAll<HTMLTextAreaElement>('.umfrage-matrix__statement-input')[
+        insertIndex
+      ];
+      input?.focus();
+      input?.select();
+      this.notifyEditor();
+    }
+
+    private removeStatementAt(index: number) {
+      if (this.statements.length <= 1) return;
+      if (index < 0 || index >= this.statements.length) return;
+      this.statements.splice(index, 1);
+      this.updateStatementsAttribute();
+      this.render();
+      const focusIndex = Math.max(0, Math.min(index, this.statements.length - 1));
+      const input = this.querySelectorAll<HTMLTextAreaElement>('.umfrage-matrix__statement-input')[
+        focusIndex
+      ];
+      input?.focus();
+      this.notifyEditor();
+    }
+
+    private appendStatementInsertRow(
+      tbody: HTMLTableSectionElement,
+      insertIndex: number,
+      scaleColSpan: number
+    ) {
+      const insertRow = document.createElement('tr');
+      insertRow.className = 'umfrage-matrix__statement-insert-row';
+
+      const insertCell = document.createElement('th');
+      insertCell.className = 'umfrage-matrix__statement-insert-cell';
+      insertCell.scope = 'row';
+
+      const insertBtn = document.createElement('button');
+      insertBtn.type = 'button';
+      insertBtn.className = 'umfrage-matrix__statement-insert-btn';
+      insertBtn.textContent = '+';
+      insertBtn.setAttribute('aria-label', 'Aussage einfuegen');
+      insertBtn.addEventListener('click', () => this.insertStatementAt(insertIndex));
+
+      insertCell.appendChild(insertBtn);
+      insertRow.appendChild(insertCell);
+
+      if (scaleColSpan > 0) {
+        const fillCell = document.createElement('td');
+        fillCell.className = 'umfrage-matrix__statement-insert-fill';
+        fillCell.colSpan = scaleColSpan;
+        fillCell.setAttribute('aria-hidden', 'true');
+        insertRow.appendChild(fillCell);
+      }
+
+      tbody.appendChild(insertRow);
+    }
+
     private render(labelOverride?: string, nameOverride?: string) {
       const label = labelOverride || this.getAttribute('label') || this.getAttribute('data-label') || 'Aussage';
       const nameAttr = nameOverride || this.getAttribute('name') || '';
@@ -387,6 +557,21 @@ export function ensureUmfrageElements(): void {
 
       const table = document.createElement('table');
       table.className = 'umfrage-matrix__table';
+      const colgroup = document.createElement('colgroup');
+      const statementCol = document.createElement('col');
+      statementCol.className = 'umfrage-matrix__col-statement';
+      statementCol.style.width = this.scaleEntries.length ? '44%' : '100%';
+      colgroup.appendChild(statementCol);
+      if (this.scaleEntries.length) {
+        const perScaleWidth = `${(56 / this.scaleEntries.length).toFixed(4)}%`;
+        this.scaleEntries.forEach(() => {
+          const col = document.createElement('col');
+          col.className = 'umfrage-matrix__col-scale';
+          col.style.width = perScaleWidth;
+          colgroup.appendChild(col);
+        });
+      }
+      table.appendChild(colgroup);
 
       const thead = document.createElement('thead');
       const headRow = document.createElement('tr');
@@ -493,16 +678,23 @@ export function ensureUmfrageElements(): void {
       table.appendChild(thead);
 
       const tbody = document.createElement('tbody');
+      const scaleColSpan = Math.max(0, this.scaleEntries.length);
+      if (this.editable) {
+        this.appendStatementInsertRow(tbody, 0, scaleColSpan);
+      }
       this.statements.forEach((statement, rowIndex) => {
         const row = document.createElement('tr');
         const rowHeader = document.createElement('th');
         rowHeader.className = 'umfrage-matrix__statement';
         rowHeader.scope = 'row';
         if (this.editable) {
-          const input = document.createElement('input');
-          input.type = 'text';
+          const editor = document.createElement('div');
+          editor.className = 'umfrage-matrix__statement-editor';
+
+          const input = document.createElement('textarea');
           input.className = 'umfrage-matrix__statement-input';
           input.value = statement;
+          input.setAttribute('rows', '2');
           input.setAttribute('value', statement);
           input.addEventListener('input', (event) => {
             event.stopPropagation();
@@ -512,7 +704,23 @@ export function ensureUmfrageElements(): void {
             event.stopPropagation();
             this.commitStatementEdit();
           });
-          rowHeader.appendChild(input);
+
+          const controls = document.createElement('div');
+          controls.className = 'umfrage-matrix__statement-controls';
+
+          const removeBtn = document.createElement('button');
+          removeBtn.type = 'button';
+          removeBtn.className =
+            'umfrage-matrix__statement-btn umfrage-matrix__statement-btn--remove';
+          removeBtn.textContent = '-';
+          removeBtn.setAttribute('aria-label', 'Aussage entfernen');
+          removeBtn.disabled = this.statements.length <= 1;
+          removeBtn.addEventListener('click', () => this.removeStatementAt(rowIndex));
+
+          controls.appendChild(removeBtn);
+          editor.appendChild(input);
+          editor.appendChild(controls);
+          rowHeader.appendChild(editor);
         } else {
           rowHeader.textContent = statement;
         }
@@ -539,16 +747,15 @@ export function ensureUmfrageElements(): void {
           input.dataset.scaleValue = entry.value;
           input.setAttribute('aria-label', buildAriaLabel(statement, entry));
 
-          const dot = document.createElement('span');
-          dot.className = 'umfrage-matrix__dot';
-
           labelEl.appendChild(input);
-          labelEl.appendChild(dot);
           cell.appendChild(labelEl);
           row.appendChild(cell);
         });
 
         tbody.appendChild(row);
+        if (this.editable) {
+          this.appendStatementInsertRow(tbody, rowIndex + 1, scaleColSpan);
+        }
       });
 
       table.appendChild(tbody);
@@ -564,29 +771,104 @@ export function createUmfrageRuntime(options: UmfrageRuntimeOptions): {
   destroy: () => void;
   refresh: () => Promise<void>;
 } {
+  ensureSyncIconElement();
   ensureUmfrageElements();
+  const inputHandlers = new Map<HTMLInputElement, EventListener>();
+  const retryHandlers = new Map<HTMLElement, EventListener>();
+  const busyKeys = new Set<string>();
+  const isEditorInput = (input: HTMLInputElement): boolean =>
+    Boolean(input.closest('.block-editor__visual, [contenteditable="true"]'));
+  const inputKeyFor = (input: HTMLInputElement): string => input.dataset.key || input.name || '';
+
+  const findCheckedInputForKey = (key: string): HTMLInputElement | null => {
+    if (!key) return null;
+    const inputs = Array.from(options.root.querySelectorAll('input.umfrage-input')) as HTMLInputElement[];
+    return (
+      inputs.find((candidate) => inputKeyFor(candidate) === key && candidate.checked) || null
+    );
+  };
+
+  const clearRetryHandler = (indicator: HTMLElement | null): void => {
+    if (!indicator) return;
+    const existing = retryHandlers.get(indicator);
+    if (existing) {
+      indicator.removeEventListener('click', existing);
+      retryHandlers.delete(indicator);
+    }
+    indicator.classList.remove('umfrage-save-indicator--retry');
+  };
+
+  const setRetryHandler = (
+    indicator: HTMLElement | null,
+    key: string,
+    fallbackInput: HTMLInputElement
+  ): void => {
+    if (!indicator || !key) return;
+    clearRetryHandler(indicator);
+    const retry = () => {
+      if (busyKeys.has(key)) return;
+      const selected = findCheckedInputForKey(key) || fallbackInput;
+      if (!selected || !selected.checked) return;
+      void submitInput(selected);
+    };
+    retryHandlers.set(indicator, retry);
+    indicator.addEventListener('click', retry);
+    indicator.classList.add('umfrage-save-indicator--retry');
+  };
+
+  const submitInput = async (input: HTMLInputElement): Promise<void> => {
+    if (!input.checked) return;
+    if (!options.user) return;
+    const key = inputKeyFor(input);
+    if (!key) return;
+    if (busyKeys.has(key)) return;
+    busyKeys.add(key);
+
+    const indicator = rowIndicatorForInput(input);
+    clearRetryHandler(indicator);
+    setRowIndicator(input, 'saving');
+    notifySaveState(options, 'saving');
+
+    const payload: Record<string, string> = {
+      key,
+      sheet: options.sheetKey,
+      user: options.user,
+      value: input.value
+    };
+    if (options.classroom) {
+      payload.classroom = String(options.classroom);
+    }
+
+    try {
+      const result = await sendAnswerToBackend(options.apiBaseUrl, payload);
+      if (!result.ok) {
+        setRowIndicator(input, 'error', result.warning || 'Antwort konnte nicht gespeichert werden.');
+        setRetryHandler(indicator, key, input);
+        notifySaveState(options, 'error', result.warning || 'Antwort konnte nicht gespeichert werden.');
+        return;
+      }
+
+      setRowIndicator(input, 'saved');
+      clearRetryHandler(indicator);
+      notifySaveState(options, 'saved');
+    } finally {
+      busyKeys.delete(key);
+    }
+  };
 
   const bindInputs = () => {
     const inputs = Array.from(options.root.querySelectorAll('input.umfrage-input')) as HTMLInputElement[];
     inputs.forEach((input) => {
-      if (input.dataset.umfrageBound === '1') return;
-      input.dataset.umfrageBound = '1';
-      input.addEventListener('change', () => {
-        if (!input.checked) return;
-        if (!options.user) return;
-        const key = input.dataset.key || input.name;
-        if (!key) return;
-        const payload: Record<string, string> = {
-          key,
-          sheet: options.sheetKey,
-          user: options.user,
-          value: input.value
-        };
-        if (options.classroom) {
-          payload.classroom = String(options.classroom);
-        }
-        sendAnswerToBackend(options.apiBaseUrl, payload);
-      });
+      // Defensive fallback: persisted editor markup may contain disabled radios.
+      if (input.disabled && !isEditorInput(input)) {
+        input.disabled = false;
+      }
+      if (inputHandlers.has(input)) return;
+      const handler = () => {
+        void submitInput(input);
+      };
+      inputHandlers.set(input, handler);
+      input.addEventListener('change', handler);
     });
   };
 
@@ -605,6 +887,15 @@ export function createUmfrageRuntime(options: UmfrageRuntimeOptions): {
   return {
     destroy: () => {
       observer.disconnect();
+      inputHandlers.forEach((handler, input) => {
+        input.removeEventListener('change', handler);
+      });
+      inputHandlers.clear();
+      retryHandlers.forEach((handler, indicator) => {
+        indicator.removeEventListener('click', handler);
+      });
+      retryHandlers.clear();
+      busyKeys.clear();
       options.root.dataset.umfrageRuntime = '';
     },
     refresh

@@ -10,7 +10,6 @@ export const applySchoolCiCss = (css?: string | null) => {
   const styleEl = existing ?? document.createElement('style');
   styleEl.id = id;
   styleEl.textContent = next;
-  if (!existing) {
-    document.head.appendChild(styleEl);
-  }
+  // Re-append to keep CI rules last in <head>, so page defaults don't override them.
+  document.head.appendChild(styleEl);
 };

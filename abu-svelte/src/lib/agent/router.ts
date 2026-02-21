@@ -251,6 +251,25 @@ const MODEL_INTENT_KIND_ALIASES: Record<string, string> = {
   none: 'none'
 };
 
+const SUPPORTED_MODEL_INTENT_KINDS = new Set([
+  'navigate_tab',
+  'navigate_view',
+  'open_sheet_by_topic',
+  'list_sheets_by_topic',
+  'open_sheet_by_reference',
+  'audit_empty_sheets',
+  'audit_name_sheets',
+  'show_context',
+  'capability_search',
+  'show_sitemap',
+  'explain_data_model',
+  'suggest_data_fetch',
+  'analyze_exercises',
+  'analyze_assignment_completion',
+  'identify_struggling_learners',
+  'open_largest_class_by_learners'
+]);
+
 const PROMPT_SYNONYM_RULES: Array<{ pattern: RegExp; canonical: string }> = [
   {
     pattern: /\b(schueler|schuelern|schuelerin|schuelerinnen|studierende|studierenden|student|studenten)\b/g,
@@ -1350,46 +1369,16 @@ export const resolveAgentNavigationIntent = async (
   const modelIntent = options.modelIntent ?? null;
   const modelIntentKind = normalizeModelIntentKind(modelIntent?.kind ?? '');
   const modelIntentConfidence = clampConfidence(modelIntent?.confidence);
-  const useModelIntent = modelIntentKind !== '' && modelIntentKind !== 'none' && modelIntentConfidence >= 0.55;
+  const useModelIntent =
+    modelIntentKind !== '' &&
+    modelIntentKind !== 'none' &&
+    modelIntentConfidence >= 0.55 &&
+    SUPPORTED_MODEL_INTENT_KINDS.has(modelIntentKind);
 
-  let navigational = hasNavigationKeyword(normalizedPrompt);
-  let wantsOpen =
-    OPEN_OR_NAV_VERB_PATTERN.test(normalizedPrompt) || /\bdiese[srn]?\s+oeffnen\b/.test(normalizedPrompt);
-  let requestedTab = mapPromptToTab(normalizedPrompt);
-  let requestedView = mapPromptToEditorView(normalizedPrompt);
-  let asksForSheetListing = /\b(zeige|liste|list|auflisten|nenn|nenne)\b/.test(normalizedPrompt);
-  let asksForTopicSearch = /\b(welche|welcher|welches|finde|suche|such|gibt)\b/.test(normalizedPrompt);
   const hasExerciseKeyword =
     /\b(uebung|uebungen|aufgabe|aufgaben|arbeitsblatt|arbeitsblaetter|sheet|sheets|blatt|blaetter|dokument|dokumente|datei|dateien)\b/.test(
       normalizedPrompt
     );
-
-  let topic = extractExerciseTopic(options.prompt || '');
-  let asksForVisibleContext =
-    /\b(wo\s+bin\s+ich|welcher\s+kontext|aktueller\s+kontext|in\s+welchem\s+bereich)\b/.test(
-      normalizedPrompt
-    ) ||
-    /\b(was\s+siehst\s+du\s+hier|was\s+ist\s+hier\s+sichtbar|welche\s+elemente\s+sind\s+sichtbar|was\s+kannst\s+du\s+hier)\b/.test(
-      normalizedPrompt
-    );
-
-  let asksForSitemap =
-    /\b(sitemap|seitenstruktur|seitenplan|wo\s+kann\s+ich|wo\s+finde\s+ich|wo\s+wird\s+.*(gezeigt|bearbeitet))\b/.test(
-      normalizedPrompt
-    );
-  let asksForDataModel =
-    /\b(datenbank|datenmodell|db\s*modell|schema|tabellenstruktur|datenstruktur)\b/.test(
-      normalizedPrompt
-    );
-  let asksForQueryRecipe =
-    /\b(welche\s+api|welcher\s+api|wie\s+holst\s+du\s+daten|woher\s+holst\s+du|daten\s+holen|endpoint)\b/.test(
-      normalizedPrompt
-    );
-
-  let asksForExerciseAnalysis =
-    /\b(analyse|analysiere|auswertung|uebersicht|ueberblick)\b/.test(normalizedPrompt) &&
-    hasExerciseKeyword;
-
   const hasClassKeyword = /\b(klasse|klassen|class|classroom)\b/.test(normalizedPrompt);
   const hasLearnerKeyword = /\b(lernende|lernenden|schueler|schuelern|studierende|studierenden)\b/.test(
     normalizedPrompt
@@ -1397,27 +1386,79 @@ export const resolveAgentNavigationIntent = async (
   const hasLargestKeyword = /\b(meisten|meiste|groesste|groessten|max|mehrsten)\b/.test(
     normalizedPrompt
   );
+  const hasOpenVerb =
+    OPEN_OR_NAV_VERB_PATTERN.test(normalizedPrompt) || /\bdiese[srn]?\s+oeffnen\b/.test(normalizedPrompt);
 
-  const hasCompletionKeyword =
-    /\b(ausgefuellt|ausfuellen|ausfuellt|bearbeitet|gemacht|fertig|abgeschlossen|erledigt|offen|fortschritt|stecken)\b/.test(
-      normalizedPrompt
-    );
-  const hasAssignmentKeyword =
-    /\b(zugewiesen|zugeteilt|zuordnung|zuordnungen|assignment|assignments)\b/.test(normalizedPrompt);
-  let asksForAssignmentCompletion =
-    hasExerciseKeyword &&
-    (hasCompletionKeyword || hasAssignmentKeyword) &&
-    (hasLearnerKeyword || hasClassKeyword || /\b(wer|welche|haben|hat|ob)\b/.test(normalizedPrompt));
+  let navigational = false;
+  let wantsOpen = false;
+  let requestedTab = '';
+  let requestedView = '';
+  let asksForSheetListing = false;
+  let asksForTopicSearch = false;
+  let topic = '';
+  let asksForVisibleContext = false;
+  let asksForSitemap = false;
+  let asksForDataModel = false;
+  let asksForQueryRecipe = false;
+  let asksForExerciseAnalysis = false;
+  let asksForAssignmentCompletion = false;
+  let asksToOpenLargestClassByLearners = false;
+  let asksForStrugglingLearners = false;
 
-  let asksToOpenLargestClassByLearners =
-    wantsOpen && hasClassKeyword && hasLearnerKeyword && hasLargestKeyword;
+  if (!useModelIntent) {
+    navigational = hasNavigationKeyword(normalizedPrompt);
+    wantsOpen = hasOpenVerb;
+    requestedTab = mapPromptToTab(normalizedPrompt);
+    requestedView = mapPromptToEditorView(normalizedPrompt);
+    asksForSheetListing =
+      hasExerciseKeyword && /\b(zeige|liste|list|auflisten|nenn|nenne)\b/.test(normalizedPrompt);
+    asksForTopicSearch =
+      hasExerciseKeyword && /\b(welche|welcher|welches|finde|finden|suche|such|gibt)\b/.test(normalizedPrompt);
+    topic = extractExerciseTopic(options.prompt || '');
+    asksForVisibleContext =
+      /\b(wo\s+bin\s+ich|welcher\s+kontext|aktueller\s+kontext|in\s+welchem\s+bereich)\b/.test(
+        normalizedPrompt
+      ) ||
+      /\b(was\s+siehst\s+du\s+hier|was\s+ist\s+hier\s+sichtbar|welche\s+elemente\s+sind\s+sichtbar|was\s+kannst\s+du\s+hier)\b/.test(
+        normalizedPrompt
+      );
+    asksForSitemap =
+      /\b(sitemap|seitenstruktur|seitenplan|wo\s+kann\s+ich|wo\s+finde\s+ich|wo\s+wird\s+.*(gezeigt|bearbeitet))\b/.test(
+        normalizedPrompt
+      );
+    asksForDataModel =
+      /\b(datenbank|datenmodell|db\s*modell|schema|tabellenstruktur|datenstruktur)\b/.test(
+        normalizedPrompt
+      );
+    asksForQueryRecipe =
+      /\b(welche\s+api|welcher\s+api|wie\s+holst\s+du\s+daten|woher\s+holst\s+du|daten\s+holen|endpoint)\b/.test(
+        normalizedPrompt
+      );
+    asksForExerciseAnalysis =
+      /\b(analyse|analysiere|auswertung|uebersicht|ueberblick)\b/.test(normalizedPrompt) &&
+      hasExerciseKeyword;
 
-  let asksForStrugglingLearners =
-    /\b(wer|welche|welcher)\b/.test(normalizedPrompt) &&
-    /\b(lernende|lernenden|schueler|schuelern|studierende|studierenden)\b/.test(normalizedPrompt) &&
-    /\b(muehe|schwierig|probleme|am\s+schwaechsten|am\s+meisten\s+muehe|risiko)\b/.test(
-      normalizedPrompt
-    );
+    const hasCompletionKeyword =
+      /\b(ausgefuellt|ausfuellen|ausfuellt|bearbeitet|gemacht|fertig|abgeschlossen|erledigt|offen|fortschritt|stecken)\b/.test(
+        normalizedPrompt
+      );
+    const hasAssignmentKeyword =
+      /\b(zugewiesen|zugeteilt|zuordnung|zuordnungen|assignment|assignments)\b/.test(normalizedPrompt);
+    asksForAssignmentCompletion =
+      hasExerciseKeyword &&
+      (hasCompletionKeyword || hasAssignmentKeyword) &&
+      (hasLearnerKeyword || hasClassKeyword || /\b(wer|welche|haben|hat|ob)\b/.test(normalizedPrompt));
+
+    asksToOpenLargestClassByLearners =
+      wantsOpen && hasClassKeyword && hasLearnerKeyword && hasLargestKeyword;
+
+    asksForStrugglingLearners =
+      /\b(wer|welche|welcher)\b/.test(normalizedPrompt) &&
+      /\b(lernende|lernenden|schueler|schuelern|studierende|studierenden)\b/.test(normalizedPrompt) &&
+      /\b(muehe|schwierig|probleme|am\s+schwaechsten|am\s+meisten\s+muehe|risiko)\b/.test(
+        normalizedPrompt
+      );
+  }
 
   let forceEmptyAudit = false;
   let forceNameAudit = false;
@@ -1425,7 +1466,7 @@ export const resolveAgentNavigationIntent = async (
   let forcedSheetReference = '';
 
   if (useModelIntent) {
-    const intentTopic = cleanExerciseTopicText(modelIntent?.topic ?? '');
+    const intentTopic = normalizeLookupValue(modelIntent?.topic ?? '');
     const intentReference = (modelIntent?.reference ?? '').toString().trim();
 
     switch (modelIntentKind) {
@@ -1442,7 +1483,7 @@ export const resolveAgentNavigationIntent = async (
             : intentTab === 'settings' || intentTab === 'einstellungen'
             ? 'settings'
             : requestedTab;
-        if (requestedTab === 'classes' && wantsOpen && hasLearnerKeyword && hasLargestKeyword) {
+        if (requestedTab === 'classes' && hasOpenVerb && hasLearnerKeyword && hasLargestKeyword) {
           asksToOpenLargestClassByLearners = true;
         }
         break;
@@ -1530,12 +1571,7 @@ export const resolveAgentNavigationIntent = async (
         break;
       }
       default:
-        return done({
-          handled: true,
-          status: 'Intent nicht lokal abbildbar.',
-          message:
-            'Bitte formuliere die Anfrage genauer. Der erkannte Intent passt nicht zu einer lokalen Aktion.'
-        });
+        break;
     }
   }
 
@@ -1682,7 +1718,6 @@ export const resolveAgentNavigationIntent = async (
   }
 
   const referencesExercise =
-    hasExerciseKeyword ||
     asksForTopicSearch ||
     asksForSheetListing ||
     (wantsOpen && (requestedTab === 'editor' || hasExerciseKeyword));
