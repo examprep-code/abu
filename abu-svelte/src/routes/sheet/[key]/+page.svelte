@@ -978,8 +978,16 @@
   }
 
   :global(umfrage-matrix .umfrage-matrix__scroll) {
+    position: relative;
     overflow-x: auto;
-    padding-right: 2.4rem;
+  }
+
+  :global(umfrage-matrix .umfrage-matrix__frame) {
+    position: relative;
+    display: inline-block;
+    min-width: 100%;
+    padding-right: 2.2rem;
+    box-sizing: border-box;
   }
 
   :global(umfrage-matrix .umfrage-matrix__table) {
@@ -1021,7 +1029,7 @@
   :global(umfrage-matrix .umfrage-save-indicator) {
     position: absolute;
     top: 50%;
-    right: -1.05rem;
+    right: -1.25rem;
     min-width: 0.9rem;
     padding: 0;
     border: 0;

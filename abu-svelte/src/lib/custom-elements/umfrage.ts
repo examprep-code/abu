@@ -554,6 +554,8 @@ export function ensureUmfrageElements(): void {
 
       const scroll = document.createElement('div');
       scroll.className = 'umfrage-matrix__scroll';
+      const frame = document.createElement('div');
+      frame.className = 'umfrage-matrix__frame';
 
       const table = document.createElement('table');
       table.className = 'umfrage-matrix__table';
@@ -759,7 +761,8 @@ export function ensureUmfrageElements(): void {
       });
 
       table.appendChild(tbody);
-      scroll.appendChild(table);
+      frame.appendChild(table);
+      scroll.appendChild(frame);
       this.appendChild(scroll);
     }
   }

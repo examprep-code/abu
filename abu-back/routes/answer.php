@@ -3,6 +3,7 @@
 $answerConfig = [
     'answer' => answer_payload_fields(),
 ];
+$learnerSession = get_learner_session();
 $modelPolicyModule = dirname(__DIR__) . '/snippets/agent/model_policy.php';
 if (is_readable($modelPolicyModule)) {
     include_once $modelPolicyModule;
@@ -11,12 +12,24 @@ if (is_readable($modelPolicyModule)) {
 // POST: speichern und KI-Bewertung zurückgeben
 if ($method === 'POST') {
     $chatgpt = bewerteAntwortMitKI($data);
+    $submittedUser = trim((string)($data['user'] ?? ''));
+    $isAnonymousRuntimeUser = strpos($submittedUser, 'anon_') === 0;
 
-    if (empty($data['user'])) {
+    if (!$isAnonymousRuntimeUser && !empty($learnerSession['code'])) {
+        $data['user'] = $learnerSession['code'];
+    } elseif (empty($data['user'])) {
         $data['user'] = 'testnutzer';
     }
-    if (array_key_exists('classroom', $data) && answer_table_has_column('classroom')) {
-        $classroomId = intval($data['classroom']);
+
+    if (answer_table_has_column('classroom')) {
+        if (!$isAnonymousRuntimeUser && !empty($learnerSession['classroom'])) {
+            $classroomId = intval($learnerSession['classroom']);
+        } elseif (array_key_exists('classroom', $data)) {
+            $classroomId = intval($data['classroom']);
+        } else {
+            $classroomId = 0;
+        }
+
         if ($classroomId > 0) {
             $data['classroom'] = $classroomId;
         } else {
@@ -117,14 +130,21 @@ if ($method === 'GET') {
     $userId = intval($user['id'] ?? 0);
 
     $sheet = $paras[0] ?? ($_GET['sheet'] ?? null);
-    $user = $paras[1] ?? ($_GET['user'] ?? null);
+    $answerUser = $paras[1] ?? ($_GET['user'] ?? null);
     $classroom = $_GET['classroom'] ?? null;
+
+    if (empty($answerUser) && !empty($learnerSession['code'])) {
+        $answerUser = $learnerSession['code'];
+    }
+    if (empty($classroom) && !empty($learnerSession['classroom'])) {
+        $classroom = $learnerSession['classroom'];
+    }
 
     if (!empty($sheet)) {
         $where[] = '`sheet` = "' . sql_escape($sheet) . '"';
     }
-    if (!empty($user)) {
-        $where[] = '`user` = "' . sql_escape($user) . '"';
+    if (!empty($answerUser)) {
+        $where[] = '`user` = "' . sql_escape($answerUser) . '"';
     }
     if (!empty($classroom) && answer_table_has_column('classroom')) {
         $where[] = '`classroom` = ' . intval($classroom);
@@ -132,6 +152,8 @@ if ($method === 'GET') {
 
     if ($userId > 0) {
         $where[] = answer_scope_clause_for_user($userId);
+    } elseif (!empty($learnerSession['code'])) {
+        // Learner sees only own entries, resolved above via answerUser.
     } elseif (empty($sheet)) {
         $return['status'] = 400;
         $return['warning'] = 'sheet fehlt';
