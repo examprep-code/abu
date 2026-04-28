@@ -7,6 +7,7 @@ $m['classroom']=[
     'year' => ['word'],
     'profession' => ['word'],
     'notes' => ['text'],
+    'prompt' => ['text'],
     'created_at' => ['timestamp'],
     'updated_at' => ['timestamp'],
     'learners' => ['rkey', 'table'=>'learner', 'key'=>'classroom'],

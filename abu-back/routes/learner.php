@@ -9,6 +9,7 @@ $learnerConfig = [
         'email' => [],
         'code' => [],
         'notes' => [],
+        'prompt' => [],
         'created_at' => [],
         'updated_at' => [],
     ],
@@ -79,6 +80,7 @@ if ($method === 'POST') {
         'name' => $name,
         'code' => $code,
         'notes' => trim($data['notes'] ?? ''),
+        'prompt' => trim((string)($data['prompt'] ?? '')),
         'created_at' => $now,
         'updated_at' => $now,
     ];
@@ -95,6 +97,7 @@ if ($method === 'POST') {
             'email' => [],
             'code' => [],
             'notes' => [],
+            'prompt' => [],
             'created_at' => [],
             'updated_at' => [],
         ],
@@ -141,6 +144,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
         }
     }
     if (array_key_exists('notes', $data)) $update['notes'] = trim($data['notes']);
+    if (array_key_exists('prompt', $data)) $update['prompt'] = trim((string)($data['prompt'] ?? ''));
 
     if (array_key_exists('classroom', $data)) {
         $classId = intval($data['classroom']);

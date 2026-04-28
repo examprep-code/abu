@@ -1,14 +1,14 @@
-:global(luecke-gap-wide .check-btn) {
+:global(luecke-gap[width='100%'] .check-btn) {
   margin-left: 0;
-  margin-top: 0.4rem;
+  margin-top: 0.34rem;
 }
 
 :global(.check-btn) {
-  margin-left: 0.35rem;
-  width: 2rem;
-  height: 2rem;
+  margin-left: 0.3rem;
+  width: 1.7rem;
+  height: 1.7rem;
   padding: 0;
-  font-size: 0.9rem;
+  font-size: 0.77rem;
   border-radius: 999px;
   border: 1px solid var(--ci-button-secondary);
   background-color: var(--ci-button-secondary);
@@ -24,7 +24,7 @@
 :global(.check-btn::before) {
   content: '?';
   display: inline-block;
-  font-size: 1rem;
+  font-size: 0.85rem;
   line-height: 1;
   opacity: 1;
 }
@@ -107,8 +107,8 @@
 
 :global(.check-btn--loading::before) {
   content: '';
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border: 2px solid currentColor;
   border-top-color: transparent;
   border-radius: 50%;

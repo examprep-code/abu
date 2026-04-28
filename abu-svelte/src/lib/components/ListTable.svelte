@@ -1,4 +1,6 @@
 <script>
+  import { onMount } from 'svelte';
+
   export let columns = [];
   export let rows = [];
   export let columnsTemplate = '';
@@ -13,9 +15,12 @@
   export let headerButtonClass = 'sheet-head-btn';
   export let headerStaticClass = 'sheet-head-static';
   export let actionsClass = 'sheet-cell--actions';
+  export let compactBreakpoint = null;
 
   const hasActionsSlot = !!$$slots.actions;
   const isClickable = typeof onRowClick === 'function';
+  let tableEl = null;
+  let isWidthCompact = false;
 
   const resolveHint = (hint) => (typeof hint === 'function' ? hint() : hint);
   const resolveValue = (column, row) => {
@@ -65,10 +70,39 @@
     if (!isClickable) return;
     onRowClick(row);
   };
+
+  const resolveCompactBreakpoint = () => {
+    const value = Number(compactBreakpoint);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  };
+
+  const updateWidthCompactState = () => {
+    if (!tableEl) {
+      isWidthCompact = false;
+      return;
+    }
+    const breakpoint = resolveCompactBreakpoint();
+    isWidthCompact =
+      breakpoint > 0 && tableEl.getBoundingClientRect().width <= breakpoint;
+  };
+
+  onMount(() => {
+    updateWidthCompactState();
+    if (typeof ResizeObserver === 'undefined' || !tableEl) return undefined;
+    const observer = new ResizeObserver(() => {
+      updateWidthCompactState();
+    });
+    observer.observe(tableEl);
+    return () => observer.disconnect();
+  });
+
+  $: compactBreakpoint, updateWidthCompactState();
 </script>
 
 <div
+  bind:this={tableEl}
   class={tableClass}
+  class:sheet-table--width-compact={isWidthCompact}
   style={columnsTemplate ? `--table-columns: ${columnsTemplate};` : ''}
 >
   <div class={resolveClassName(headRowClass, hasActions() ? 'sheet-row--with-actions' : '')}>
@@ -118,7 +152,7 @@
           class={resolveClassName(cellClass, column?.className, compactClass(column))}
           data-label={column.label}
         >
-          {resolveValue(column, row)}
+          <span class="sheet-cell__value">{resolveValue(column, row)}</span>
         </div>
       {/each}
       {#if actionsLabel || hasActionsSlot}
@@ -137,23 +171,23 @@
   }
 
   .sheet-row:not(.sheet-row--head) + .sheet-row:not(.sheet-row--head) {
-    margin-top: 8px;
+    margin-top: 7px;
   }
 
   .sheet-row {
     display: grid;
     grid-template-columns: var(
       --table-columns,
-      minmax(120px, 0.9fr) minmax(180px, 1.1fr) minmax(220px, 2fr) minmax(
-          160px,
+      minmax(102px, 0.9fr) minmax(153px, 1.1fr) minmax(187px, 2fr) minmax(
+          136px,
           0.9fr
         )
-        minmax(160px, 0.9fr) auto
+        minmax(136px, 0.9fr) auto
     );
-    gap: 12px;
+    gap: 10px;
     align-items: center;
     padding: 0;
-    border-radius: 14px;
+    border-radius: 12px;
     border: 1px solid #d9dee7;
     background: #ffffff;
     cursor: pointer;
@@ -168,7 +202,7 @@
     background: #f5f7fa;
     text-transform: uppercase;
     letter-spacing: 0.14em;
-    font-size: 12px;
+    font-size: 10px;
     color: #6f7682;
     cursor: default;
     padding: 0;
@@ -186,21 +220,45 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    padding: 10px 12px;
+    padding: 9px 10px;
+  }
+
+  .sheet-cell__value {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .sheet-cell--name {
     font-weight: 700;
   }
 
+  .sheet-cell--text-preview {
+    white-space: normal;
+  }
+
+  .sheet-cell--text-preview .sheet-cell__value {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    color: #475569;
+    font-size: 12px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
   .sheet-cell--actions {
     display: flex;
     justify-content: flex-end;
     overflow: visible;
-    gap: 8px;
+    gap: 7px;
     flex-wrap: wrap;
     align-items: center;
-    row-gap: 8px;
+    row-gap: 7px;
   }
 
   .sheet-cell--actions .icon-btn {
@@ -212,7 +270,7 @@
   .sheet-table--classes .sheet-cell--actions {
     justify-content: flex-start;
     flex-wrap: nowrap;
-    gap: 6px;
+    gap: 5px;
     row-gap: 0;
     overflow-x: auto;
     overflow-y: hidden;
@@ -230,7 +288,7 @@
       grid-template-columns: minmax(0, 1.26fr) minmax(0, 0.45fr) minmax(0, 0.75fr) minmax(
           0,
           0.86fr
-        ) minmax(260px, 1.4fr);
+        ) minmax(221px, 1.4fr);
     }
 
     .sheet-table--classes .sheet-cell--class-notes {
@@ -241,7 +299,7 @@
   @media (max-width: 1320px) {
     .sheet-table--classes .sheet-row {
       grid-template-columns: minmax(0, 1.32fr) minmax(0, 0.46fr) minmax(0, 0.78fr) minmax(
-          244px,
+          207px,
           1.36fr
         );
     }
@@ -253,7 +311,7 @@
 
   @media (max-width: 1140px) {
     .sheet-table--classes .sheet-row {
-      grid-template-columns: minmax(0, 1.36fr) minmax(0, 0.55fr) minmax(228px, 1.32fr);
+      grid-template-columns: minmax(0, 1.36fr) minmax(0, 0.55fr) minmax(194px, 1.32fr);
     }
 
     .sheet-table--classes .sheet-cell--class-profession {
@@ -263,7 +321,7 @@
 
   @media (max-width: 1000px) {
     .sheet-table--classes .sheet-row {
-      grid-template-columns: minmax(0, 1fr) minmax(220px, 1.24fr);
+      grid-template-columns: minmax(0, 1fr) minmax(187px, 1.24fr);
     }
 
     .sheet-table--classes .sheet-cell--class-year {
@@ -277,10 +335,10 @@
     height: 100%;
     align-self: stretch;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     background: transparent;
     border: 0;
-    border-radius: 12px;
+    border-radius: 10px;
     text-align: left;
     font: inherit;
     color: inherit;
@@ -307,8 +365,8 @@
   @media (max-width: 900px) {
     .sheet-row {
       grid-template-columns: minmax(0, 1fr);
-      gap: 6px;
-      padding: 12px;
+      gap: 5px;
+      padding: 10px;
       align-items: start;
     }
 
@@ -318,9 +376,9 @@
 
     .sheet-cell {
       display: grid;
-      grid-template-columns: minmax(110px, 0.5fr) minmax(0, 1fr);
+      grid-template-columns: minmax(94px, 0.5fr) minmax(0, 1fr);
       align-items: baseline;
-      gap: 10px;
+      gap: 9px;
       white-space: normal;
       padding: 0;
     }
@@ -329,7 +387,7 @@
       content: attr(data-label);
       text-transform: uppercase;
       letter-spacing: 0.12em;
-      font-size: 11px;
+      font-size: 10px;
       color: #6f7682;
     }
 
@@ -348,6 +406,10 @@
       text-overflow: ellipsis;
     }
 
+    .sheet-cell--text-preview.sheet-cell--compact-visible {
+      white-space: normal;
+    }
+
     .sheet-cell--compact-visible::before {
       display: none;
     }
@@ -356,5 +418,60 @@
       display: none;
     }
 
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-row--with-actions {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(41px, auto);
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-row:not(.sheet-row--with-actions) {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-row {
+    gap: 10px;
+    align-items: center;
+    padding: 0;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-row--head {
+    display: grid;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-cell {
+    display: block;
+    padding: 9px 10px;
+    white-space: nowrap;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-cell::before {
+    display: none;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-cell--compact-hidden {
+    display: none;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-cell--compact-visible {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact
+    .sheet-cell--text-preview.sheet-cell--compact-visible {
+    white-space: normal;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-cell--actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-inline-start: 0;
+  }
+
+  .sheet-table--sheet-list.sheet-table--width-compact .sheet-row--head .sheet-cell--actions {
+    visibility: hidden;
   }
 </style>

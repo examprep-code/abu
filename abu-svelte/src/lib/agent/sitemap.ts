@@ -138,7 +138,7 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     kind: 'view',
     description: 'Sheets Klassen zuweisen mit Status und Zuordnungsform.',
     shows: ['Sheet-Status pro Klasse', 'Zuordnungsform'],
-    editable: ['Zuordnung aktiv/freiwillig/archiviert', 'personal/anonym'],
+    editable: ['Zuordnung aktiv/freiwillig/vergangen/archiviert', 'personal/anonym'],
     actions: ['Zuordnung setzen', 'Zuordnung entfernen'],
     apiCalls: ['GET plan?classroom=...', 'POST plan', 'PATCH plan', 'DELETE plan', 'GET sheet'],
     keywords: ['zuordnung', 'arbeitsblaetter zuweisen', 'plan', 'assignment']
@@ -168,6 +168,19 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     actions: ['Speichern'],
     apiCalls: ['PATCH school'],
     keywords: ['schule bearbeiten', 'ci css']
+  },
+  {
+    id: 'admin.shop.overview',
+    label: 'Shop / Braintrade',
+    route: '/ (Tab: shop)',
+    area: 'admin',
+    kind: 'tab',
+    description: 'Mockup eines ABU Materialshops auf Basis bestehender Sheets.',
+    shows: ['Shop-Karten', 'Didaktische Filter', 'Preis- und Lizenzmodelle'],
+    editable: [],
+    actions: ['Nach Material filtern', 'Preview oeffnen', 'Sheet im Editor oeffnen'],
+    apiCalls: ['GET sheet'],
+    keywords: ['shop', 'braintrade', 'materialtausch', 'materialportal', 'katalog']
   },
   {
     id: 'admin.settings.ci',

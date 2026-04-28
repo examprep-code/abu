@@ -8,6 +8,7 @@ $modelPolicyModule = dirname(__DIR__) . '/snippets/agent/model_policy.php';
 if (is_readable($modelPolicyModule)) {
     include_once $modelPolicyModule;
 }
+include_once dirname(__DIR__) . '/datian-core/agent_openai_json.php';
 
 $agentLogConfig = function_exists('agent_logger_config')
     ? agent_logger_config()
@@ -205,178 +206,101 @@ $agentLogRecord['openai_request'] = [
     'messages' => $modelMessages,
 ];
 
-$result = false;
-$status = 0;
-$curlErrno = 0;
-$curlError = '';
-$selectedModel = '';
-$modelAttempts = [];
-$decoded = null;
-$raw = '';
-$parsed = null;
-$jsonErrorMessage = '';
+$openaiResult = function_exists('agent_openai_chat_json')
+    ? agent_openai_chat_json($apiKey, $modelCandidates, $requestPayload)
+    : ['ok' => false, 'error_kind' => 'missing_openai_helper'];
 
-foreach ($modelCandidates as $index => $modelName) {
-    $body = json_encode(array_merge($requestPayload, ['model' => $modelName]));
-    if (!is_string($body) || $body === '') {
-        $curlErrno = 0;
-        $curlError = 'OpenAI-Request konnte nicht serialisiert werden.';
-        $status = 500;
-        break;
-    }
-
-    $ch = curl_init('https://api.openai.com/v1/chat/completions');
-    curl_setopt_array($ch, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_POST => true,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . $apiKey,
-        ],
-        CURLOPT_POSTFIELDS => $body,
-        CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_TIMEOUT => 90,
-    ]);
-
-    $tryResult = curl_exec($ch);
-    $tryStatus = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $tryCurlErrno = curl_errno($ch);
-    $tryCurlError = curl_error($ch);
-    curl_close($ch);
-
-    $modelAttempts[] = [
-        'model' => (string)$modelName,
-        'http_status' => (int)$tryStatus,
-        'curl_errno' => (int)$tryCurlErrno,
-        'curl_error' => (string)$tryCurlError,
-    ];
-
-    $status = $tryStatus;
-    $curlErrno = $tryCurlErrno;
-    $curlError = $tryCurlError;
-    $result = $tryResult;
-    $hasMoreCandidates = $index < count($modelCandidates) - 1;
-
-    $shouldRetry = $hasMoreCandidates
-        && (
-            function_exists('agent_model_should_retry')
-                ? agent_model_should_retry($tryStatus, (string)$tryResult, $tryCurlErrno)
-                : ($tryCurlErrno !== 0 || $tryStatus === 429 || $tryStatus >= 500)
-        );
-
-    if ($tryResult === false || $tryStatus < 200 || $tryStatus >= 300) {
-        if ($shouldRetry) {
-            continue;
-        }
-        break;
-    }
-
-    $tryDecoded = json_decode((string)$tryResult, true);
-    if ($tryDecoded === null && json_last_error() !== JSON_ERROR_NONE) {
-        $jsonErrorMessage = json_last_error_msg();
-        if ($hasMoreCandidates) {
-            continue;
-        }
-        break;
-    }
-
-    $tryRaw = trim((string)($tryDecoded['choices'][0]['message']['content'] ?? ''));
-    if ($tryRaw === '') {
-        if ($hasMoreCandidates) {
-            continue;
-        }
-        break;
-    }
-
-    if (strpos($tryRaw, '```') === 0) {
-        $tryRaw = preg_replace('/^```[a-zA-Z]*\s*/', '', $tryRaw);
-        $tryRaw = preg_replace('/```$/', '', $tryRaw);
-        $tryRaw = trim((string)$tryRaw);
-    }
-
-    $tryParsed = json_decode((string)$tryRaw, true);
-    if ($tryParsed === null && json_last_error() !== JSON_ERROR_NONE) {
-        $start = strpos($tryRaw, '{');
-        $end = strrpos($tryRaw, '}');
-        if ($start !== false && $end !== false && $end > $start) {
-            $slice = substr($tryRaw, $start, $end - $start + 1);
-            $tryParsed = json_decode((string)$slice, true);
-        }
-    }
-    if ($tryParsed === null || !is_array($tryParsed)) {
-        if ($hasMoreCandidates) {
-            continue;
-        }
-        break;
-    }
-
-    $selectedModel = (string)$modelName;
-    $decoded = $tryDecoded;
-    $raw = $tryRaw;
-    $parsed = $tryParsed;
-    break;
-}
+$selectedModel = (string)($openaiResult['selected_model'] ?? '');
+$modelAttempts = is_array($openaiResult['attempts'] ?? null) ? $openaiResult['attempts'] : [];
+$status = (int)($openaiResult['http_status'] ?? 0);
+$decoded = is_array($openaiResult['openai_response'] ?? null) ? $openaiResult['openai_response'] : null;
+$raw = (string)($openaiResult['assistant_raw'] ?? '');
+$parsed = is_array($openaiResult['assistant_parsed'] ?? null) ? $openaiResult['assistant_parsed'] : null;
 
 $agentLogRecord['openai_request']['selected_model'] = $selectedModel;
 $agentLogRecord['openai_request']['attempts'] = $modelAttempts;
 
-if ($result === false) {
-    $return['status'] = $curlErrno === CURLE_OPERATION_TIMEDOUT ? 504 : 500;
-    warning('Fehler beim Aufruf der OpenAI-API: ' . $curlError);
-    $agentFinalizeLog('openai_transport_error', [
-        'http_status' => $return['status'],
-        'curl_errno' => $curlErrno,
-        'curl_error' => $curlError,
-        'openai_attempts' => $modelAttempts,
-    ]);
-    return;
-}
+if (empty($openaiResult['ok'])) {
+    $kind = (string)($openaiResult['error_kind'] ?? 'openai_error');
+    $curlErrno = (int)($openaiResult['curl_errno'] ?? 0);
+    $curlError = (string)($openaiResult['curl_error'] ?? '');
+    $openaiRaw = (string)($openaiResult['openai_response_raw'] ?? '');
 
-if ($status < 200 || $status >= 300) {
-    $return['status'] = $status;
-    $errorText = '';
-    $errorPayload = json_decode((string)$result, true);
-    if (is_array($errorPayload) && !empty($errorPayload['error']['message'])) {
-        $errorText = ' ' . $errorPayload['error']['message'];
+    if ($kind === 'openai_transport_error') {
+        $return['status'] = $curlErrno === CURLE_OPERATION_TIMEDOUT ? 504 : 500;
+        warning('Fehler beim Aufruf der OpenAI-API: ' . $curlError);
+        $agentFinalizeLog('openai_transport_error', [
+            'http_status' => $return['status'],
+            'curl_errno' => $curlErrno,
+            'curl_error' => $curlError,
+            'openai_attempts' => $modelAttempts,
+        ]);
+        return;
     }
-    if ($status == 429) {
-        warning('OpenAI-Rate-Limit erreicht (429). Bitte kurz warten und erneut probieren.');
-    } else {
-        warning('Fehler bei der OpenAI-API (' . $status . ').' . $errorText);
+
+    if ($kind === 'openai_http_error') {
+        $return['status'] = $status ?: 500;
+        $errorText = '';
+        $errorPayload = json_decode((string)$openaiRaw, true);
+        if (is_array($errorPayload) && !empty($errorPayload['error']['message'])) {
+            $errorText = ' ' . $errorPayload['error']['message'];
+        }
+        if ($return['status'] == 429) {
+            warning('OpenAI-Rate-Limit erreicht (429). Bitte kurz warten und erneut probieren.');
+        } else {
+            warning('Fehler bei der OpenAI-API (' . $return['status'] . ').' . $errorText);
+        }
+        $agentFinalizeLog('openai_http_error', [
+            'http_status' => $return['status'],
+            'openai_response_raw' => $openaiRaw,
+            'openai_attempts' => $modelAttempts,
+        ]);
+        return;
     }
-    $agentFinalizeLog('openai_http_error', [
-        'http_status' => $status,
-        'openai_response_raw' => $result,
-        'openai_attempts' => $modelAttempts,
-    ]);
-    return;
-} elseif ($decoded === null || !is_array($decoded)) {
+
+    if ($kind === 'openai_invalid_json') {
+        $return['status'] = 500;
+        $jsonErrorText = (string)($openaiResult['json_error'] ?? '');
+        warning('Antwort der OpenAI-API konnte nicht gelesen werden: ' . ($jsonErrorText !== '' ? $jsonErrorText : 'unknown'));
+        $agentFinalizeLog('openai_invalid_json', [
+            'http_status' => 500,
+            'openai_response_raw' => $openaiRaw,
+            'json_error' => $jsonErrorText,
+            'openai_attempts' => $modelAttempts,
+        ]);
+        return;
+    }
+
+    if ($kind === 'openai_empty_answer') {
+        $return['status'] = 500;
+        warning('Leere Antwort der OpenAI-API erhalten.');
+        $agentFinalizeLog('openai_empty_answer', [
+            'http_status' => 500,
+            'openai_response' => $decoded,
+            'openai_attempts' => $modelAttempts,
+        ]);
+        return;
+    }
+
+    if ($kind === 'assistant_invalid_json') {
+        $return['status'] = 500;
+        $assistantRaw = (string)($openaiResult['assistant_raw'] ?? '');
+        warning('Antwort der OpenAI-API ist kein gueltiges JSON.');
+        $agentFinalizeLog('assistant_invalid_json', [
+            'http_status' => 500,
+            'assistant_raw' => $assistantRaw,
+            'openai_response' => $decoded,
+            'openai_attempts' => $modelAttempts,
+        ]);
+        return;
+    }
+
     $return['status'] = 500;
-    $jsonErrorText = $jsonErrorMessage !== '' ? $jsonErrorMessage : json_last_error_msg();
-    warning('Antwort der OpenAI-API konnte nicht gelesen werden: ' . $jsonErrorText);
-    $agentFinalizeLog('openai_invalid_json', [
+    warning('Fehler bei der OpenAI-API.');
+    $agentFinalizeLog('openai_error', [
         'http_status' => 500,
-        'openai_response_raw' => $result,
-        'json_error' => $jsonErrorText,
-        'openai_attempts' => $modelAttempts,
-    ]);
-    return;
-} elseif ($raw === '') {
-    $return['status'] = 500;
-    warning('Leere Antwort der OpenAI-API erhalten.');
-    $agentFinalizeLog('openai_empty_answer', [
-        'http_status' => 500,
-        'openai_response' => $decoded,
-        'openai_attempts' => $modelAttempts,
-    ]);
-    return;
-} elseif ($parsed === null || !is_array($parsed)) {
-    $return['status'] = 500;
-    warning('Antwort der OpenAI-API ist kein gueltiges JSON.');
-    $agentFinalizeLog('assistant_invalid_json', [
-        'http_status' => 500,
-        'assistant_raw' => $raw,
-        'openai_response' => $decoded,
+        'error_kind' => $kind,
+        'openai_response_raw' => $openaiRaw,
         'openai_attempts' => $modelAttempts,
     ]);
     return;

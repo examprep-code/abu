@@ -1,5 +1,9 @@
 <?php
 // Login via email/password or token check.
+$tokenCounterModule = dirname(__DIR__, 2) . '/snippets/agent/token_counter.php';
+if (is_readable($tokenCounterModule)) {
+    include_once $tokenCounterModule;
+}
 
 $token = null;
 if (is_array($data) && isset($data['token'])) {
@@ -13,15 +17,23 @@ if (is_array($data) && isset($data['token'])) {
 if ($token) {
     $token = sql_escape($token);
     $users = sql_get(
-        'SELECT id, email, valid_until FROM `user` WHERE token = "' .
+        'SELECT * FROM `user` WHERE token = "' .
             $token .
             '" AND valid_until>=NOW() LIMIT 1;'
     );
     if (count($users)) {
+        $stats = function_exists('ai_token_counter_get_user_stats')
+            ? ai_token_counter_get_user_stats(intval($users[0]['id']))
+            : null;
         $return['data']['user'] = [
             'id' => $users[0]['id'],
             'email' => $users[0]['email'],
+            'role' => isset($users[0]['role']) && $users[0]['role'] !== '' ? intval($users[0]['role']) : 1,
         ];
+        if (is_array($stats)) {
+            $return['data']['user']['ai_usage'] = $stats;
+            $return['data']['ai_usage'] = $stats;
+        }
         $return['data']['valid'] = true;
     } else {
         $return['status'] = 401;
@@ -87,9 +99,17 @@ $return['data'] = [
     'user' => [
         'id' => $userRow['id'],
         'email' => $userRow['email'],
+        'role' => isset($userRow['role']) && $userRow['role'] !== '' ? intval($userRow['role']) : 1,
     ],
     'token' => $newToken,
     'valid_until' => $validUntil,
     'valid' => true,
 ];
+$stats = function_exists('ai_token_counter_get_user_stats')
+    ? ai_token_counter_get_user_stats(intval($userRow['id']))
+    : null;
+if (is_array($stats)) {
+    $return['data']['user']['ai_usage'] = $stats;
+    $return['data']['ai_usage'] = $stats;
+}
 ?>

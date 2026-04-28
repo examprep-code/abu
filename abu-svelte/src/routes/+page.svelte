@@ -7,9 +7,11 @@
   import { loadConfig } from '$lib/config';
   import { tokenizeCss, tokenizeHtml } from '$lib/codeTokens';
   import { createLueckeRuntime, ensureLueckeElements } from '$lib/custom-elements/luecke';
+  import { createAntworttextRuntime, ensureAntworttextElements } from '$lib/custom-elements/antworttext';
+  import { createFreitextRuntime, ensureFreitextElements } from '$lib/custom-elements/freitext';
   import { createUmfrageRuntime, ensureUmfrageElements } from '$lib/custom-elements/umfrage';
-  import { legacySheets } from '$lib/legacySheets';
   import { applySchoolCiCss } from '$lib/ci';
+  import { formatSwissDateTime } from '$lib/date';
   import {
     describeAgentContext,
     resolveAgentContext,
@@ -18,30 +20,80 @@
   import { createAgentConversation } from '$lib/agent/conversation';
   import { createDefaultAgentProvider } from '$lib/agent/provider';
   import { createAgentScopeState, createEmptyAgentDraft } from '$lib/agent/session';
+  import {
+    BLOCK_LEVEL_TAG_NAMES,
+    BLOCK_TEMPLATE_DEFINITIONS,
+    TITEL_LEVEL_OPTIONS,
+    detectWorksheetBlockType,
+    getWorksheetElementType
+  } from '$lib/worksheet-elements';
   import ListTable from '$lib/components/ListTable.svelte';
-
-  const showLegacyImport = false;
+  import ShopMockup from '$lib/components/ShopMockup.svelte';
 
   let apiBaseUrl = '';
   let configError = '';
   let ready = false;
 
   let token = '';
+  let userId = null;
+  let userRole = 1;
+  let userRoleLabel = 'Aktiviert';
+  let isAdmin = false;
+  let isActivatedUser = true;
+  let sheetReadOnly = false;
+  let classReadOnly = false;
   let userEmail = '';
+  let userAiUsage = {
+    requests: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    prompt_cost_usd: 0,
+    completion_cost_usd: 0,
+    total_cost_usd: 0
+  };
 
   let loginEmail = '';
   let loginPassword = '';
   let loginLoading = false;
   let loginError = '';
+  let learnerLoginToken = '';
+  let learnerLoginLoading = false;
+  let learnerLoginError = '';
 
   let sheets = [];
   let loadingSheets = false;
   let sheetError = '';
 
+  let collections = [];
+  let loadingCollections = false;
+  let collectionError = '';
+  let collectionLinks = [];
+  let loadingCollectionLinks = false;
+  let collectionLinkError = '';
+  let selectedCollectionId = null;
+  let selectedCollectionUserId = null;
+  let collectionName = '';
+  let collectionDescription = '';
+  let collectionFilter = '';
+  let collectionSheetFilter = '';
+  let collectionSort = 'updated_at_desc';
+  let showCollectionModal = false;
+  let collectionDescriptionOpen = false;
+  let creatingCollection = false;
+  let savingCollection = false;
+  let deletingCollection = false;
+  let collectionLinkSaving = false;
+  let newCollectionName = '';
+  let newCollectionDescription = '';
+  let newSheetCollectionId = '';
+
   let selectedId = null;
   let selectedKey = '';
   let editorContent = '';
   let editorName = '';
+  let editorPrompt = '';
+  let editorCollectionId = '';
   let saving = false;
   let sheetSaveStatus = 'idle';
   let sheetHasUnsavedChanges = false;
@@ -51,6 +103,8 @@
   let lastSavedSheetId = null;
   let lastSavedSheetName = '';
   let lastSavedSheetContent = '';
+  let lastSavedSheetPrompt = '';
+  let lastSavedSheetCollectionId = '';
   let sheetAutosaveTimer = null;
   let sheetVersions = [];
   let versionsLoading = false;
@@ -62,6 +116,7 @@
   let selectedVersion = null;
   let isCurrentVersion = false;
   let sheetVersionNumbers = new Map();
+  let selectedSheetUserId = null;
 
   let creating = false;
   let deleting = false;
@@ -70,16 +125,15 @@
   let sheetFilter = '';
   let sheetSort = 'updated_at_desc';
   let showCreateSheetModal = false;
-  let activeTab = 'editor';
+  let activeTab = 'collections';
+  let editorReturnTab = 'collections';
   let showTopbarMenu = false;
   let editorView = 'visual';
+  let lueckeInsertWidth = '';
   let topbarMenuEl = null;
   let sheetHtmlTokens = [];
   let sheetHtmlInput = null;
   let sheetHtmlHighlight = null;
-
-  let importing = false;
-  let importState = '';
 
   let adminCiSchoolId = '';
   let adminCiCss = '';
@@ -92,8 +146,10 @@
   let selectedSchoolId = null;
   let schoolName = '';
   let schoolCss = '';
+  let schoolPrompt = '';
   let newSchoolName = '';
   let newSchoolCss = '';
+  let newSchoolPrompt = '';
   let schoolCssTokens = [];
   let newSchoolCssTokens = [];
   let creatingSchool = false;
@@ -110,10 +166,12 @@
   let classError = '';
   let visibleClasses = [];
   let selectedClassId = null;
+  let selectedClassUserId = null;
   let className = '';
   let classYear = '';
   let classProfession = '';
   let classNotes = '';
+  let classPrompt = '';
   let classSchoolId = '';
   let classSort = 'name_asc';
   let classSchoolFilter = '';
@@ -122,6 +180,7 @@
   let newClassYear = '';
   let newClassProfession = '';
   let newClassNotes = '';
+  let newClassPrompt = '';
   let newClassSchoolId = '';
   let showClassModal = false;
   let creatingClass = false;
@@ -136,6 +195,7 @@
   let newLearnerName = '';
   let newLearnerEmail = '';
   let newLearnerNotes = '';
+  let newLearnerPrompt = '';
   let showLearnerModal = false;
   let learnerModalMode = 'create';
   let creatingLearner = false;
@@ -150,22 +210,30 @@
   let planAssignmentMap = new Map();
   let planFormDraft = {};
   let planStatusDraft = {};
+  let planPromptDraft = {};
+  let planPromptOpenKey = '';
 
   let previewEl = null;
   let previewLueckeRuntime = null;
+  let previewAntworttextRuntime = null;
+  let previewFreitextRuntime = null;
   let previewUmfrageRuntime = null;
   let previewPending = false;
   let previewUser = '';
 
   let visualBlocks = [];
+  let visualBlockIds = [];
+  let visualBlockIdCounter = 0;
   let visualSyncHtml = '';
   let visualPreviewEl = null;
   let visualBlockViews = [];
+  let visualBlockPromptOpen = [];
   let visualBlockHtmlInputs = [];
   let visualBlockHtmlHighlights = [];
   let visualBlockHtmlTokens = [];
   let visualBlockEditors = [];
   let visualBlockSelections = [];
+  let visualBlockInputRevisions = [];
   let blockDragImageEl = null;
   let dragIndex = null;
   let dragOverIndex = null;
@@ -194,10 +262,12 @@
   let agentInputEl = null;
   let agentContext = 'app';
   const agentScopeState = createAgentScopeState();
-  let agentSidebarOpen = true;
+  let agentScopeVersion = 0;
+  let agentSidebarOpen = false;
   let agentActiveScope = 'app';
   let agentActiveDraft = createEmptyAgentDraft();
   let agentDraftChangeItems = [];
+  let agentDraftUiVisible = false;
 
   let answersEl = null;
   let answers = [];
@@ -220,6 +290,8 @@
   let answersRenderMode = 'aggregate';
   let answersRenderKey = 0;
   let answersLueckeRuntime = null;
+  let answersAntworttextRuntime = null;
+  let answersFreitextRuntime = null;
   let answersUmfrageRuntime = null;
   let answersCiCss = '';
   let answersCiClassId = null;
@@ -229,6 +301,7 @@
     { value: '', label: 'Nicht zugeordnet' },
     { value: 'aktiv', label: 'Aktiv' },
     { value: 'freiwillig', label: 'Freiwillig' },
+    { value: 'vergangen', label: 'Vergangen' },
     { value: 'archiviert', label: 'Archiviert' }
   ];
   const PLAN_FORM_OPTIONS = [
@@ -241,14 +314,124 @@
     { id: 'preview', label: 'Preview' },
     { id: 'answers', label: 'Antworten' }
   ];
+  const COLLECTION_TABLE_COLUMNS =
+    'minmax(0, 1.15fr) minmax(0, 2fr) minmax(0, 0.65fr) minmax(0, 0.95fr) minmax(88px, auto)';
   const SHEET_TABLE_COLUMNS =
-    'minmax(0, 0.8fr) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(88px, auto)';
+    'minmax(0, 1.8fr) minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 0.9fr) minmax(88px, auto)';
   const CLASS_TABLE_COLUMNS =
     'minmax(0, 1.2fr) minmax(0, 0.42fr) minmax(0, 0.72fr) minmax(0, 0.84fr) minmax(0, 0.92fr) minmax(280px, 1.45fr)';
+
+  const getUserRoleLabel = (role) => {
+    if (role >= 3) return 'Admin';
+    if (role >= 1) return 'Aktiviert';
+    if (role === 0) return 'Wartet auf Aktivierung';
+    return `Rolle ${role}`;
+  };
 
   $: planAssignmentMap = new Map(
     planAssignments.map((entry) => [entry.sheet_key, entry])
   );
+  $: collectionCountMap = new Map();
+  $: {
+    const next = new Map();
+    collectionLinks.forEach((entry) => {
+      const collectionId = normalizeCollectionId(entry?.collection);
+      if (!collectionId) return;
+      next.set(collectionId, (next.get(collectionId) ?? 0) + 1);
+    });
+    collectionCountMap = next;
+  }
+  $: selectedCollectionEntries = [...collectionLinks]
+    .filter((entry) => normalizeCollectionId(entry?.collection) === selectedCollectionId)
+    .sort((a, b) => {
+      const posA = Number(a?.position) || 0;
+      const posB = Number(b?.position) || 0;
+      if (posA !== posB) return posA - posB;
+      const keyA = String(a?.sheet_key ?? '').toLowerCase();
+      const keyB = String(b?.sheet_key ?? '').toLowerCase();
+      return keyA.localeCompare(keyB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  $: selectedCollectionEntryMap = new Map(
+    selectedCollectionEntries.map((entry) => [String(entry?.sheet_key ?? ''), entry])
+  );
+  $: sheetCollectionEntryMap = new Map(
+    collectionLinks.map((entry) => [getSheetLookupKey(entry?.user, entry?.sheet_key), entry])
+  );
+  $: sheetByOwnerKeyMap = new Map(
+    sheets.map((sheet) => [getSheetLookupKey(sheet?.user, sheet?.key), sheet])
+  );
+  $: selectedSheetCollectionEntry =
+    selectedKey && selectedSheetUserId !== null
+      ? sheetCollectionEntryMap.get(getSheetLookupKey(selectedSheetUserId, selectedKey)) ?? null
+      : null;
+  $: editableCollections =
+    isAdmin && userId !== null
+      ? collections.filter((entry) => normalizeUserId(entry?.user) === userId)
+      : collections;
+  $: collectionFilterValue = collectionFilter.trim().toLowerCase();
+  $: filteredCollections = collectionFilterValue
+    ? collections.filter((entry) => {
+        const name = String(entry?.name ?? '').toLowerCase();
+        const description = String(entry?.description ?? '').toLowerCase();
+        const created = `${entry?.created_at ?? ''} ${formatSwissDateTime(entry?.created_at)}`.toLowerCase();
+        const updated = `${entry?.updated_at ?? ''} ${formatSwissDateTime(entry?.updated_at)}`.toLowerCase();
+        return `${name} ${description} ${created} ${updated}`.includes(collectionFilterValue);
+      })
+    : collections;
+  $: visibleCollections = [...filteredCollections].sort((a, b) => {
+    const { field, dir } = parseCollectionSort(collectionSort);
+    const direction = dir === 'desc' ? -1 : 1;
+    const valueA = getCollectionSortValue(a, field);
+    const valueB = getCollectionSortValue(b, field);
+    const normalizedA = valueA === null || valueA === undefined ? '' : String(valueA);
+    const normalizedB = valueB === null || valueB === undefined ? '' : String(valueB);
+    const result = normalizedA.localeCompare(normalizedB, undefined, {
+      numeric: true,
+      sensitivity: 'base'
+    });
+    if (result !== 0) {
+      return result * direction;
+    }
+    const nameA = String(a?.name ?? '');
+    const nameB = String(b?.name ?? '');
+    return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+  });
+  $: collectionSheetFilterValue = collectionSheetFilter.trim().toLowerCase();
+  $: collectionSheetOwnerId = selectedCollectionUserId;
+  $: collectionManageRows = sheets
+    .filter((sheet) => {
+      if (collectionSheetOwnerId === null) return true;
+      return normalizeUserId(sheet?.user) === collectionSheetOwnerId;
+    })
+    .filter((sheet) => {
+      if (!collectionSheetFilterValue) return true;
+      const name = String(sheet?.name ?? '').toLowerCase();
+      const key = String(sheet?.key ?? '').toLowerCase();
+      const content = stripHtml(sheet?.content ?? '').toLowerCase();
+      return `${name} ${key} ${content}`.includes(collectionSheetFilterValue);
+    })
+    .map((sheet) => ({
+      ...sheet,
+      assignment: selectedCollectionEntryMap.get(String(sheet?.key ?? '')) ?? null
+    }))
+    .sort((a, b) => {
+      const assignmentA = a?.assignment ?? null;
+      const assignmentB = b?.assignment ?? null;
+      if (assignmentA && !assignmentB) return -1;
+      if (!assignmentA && assignmentB) return 1;
+      if (assignmentA && assignmentB) {
+        const posA = Number(assignmentA?.position) || 0;
+        const posB = Number(assignmentB?.position) || 0;
+        if (posA !== posB) return posA - posB;
+      }
+      const nameA = String(a?.name ?? a?.key ?? '').toLowerCase();
+      const nameB = String(b?.name ?? b?.key ?? '').toLowerCase();
+      return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+    });
+  $: selectedCollectionVisibleSheets = visibleSheets.filter((sheet) => {
+    const entry = sheetCollectionEntryMap.get(getSheetLookupKey(sheet?.user, sheet?.key)) ?? null;
+    return normalizeCollectionId(entry?.collection) === selectedCollectionId;
+  });
 
   $: answersClassId = normalizeClassId(answersClassFilter);
   $: ciSelectSize = Math.max(2, Math.min(6, schools.length + 1));
@@ -285,8 +468,8 @@
         const name = (sheet.name ?? '').toString().toLowerCase();
         const key = (sheet.key ?? '').toString().toLowerCase();
         const content = stripHtml(sheet.content ?? '').toLowerCase();
-        const created = (sheet.created_at ?? '').toString().toLowerCase();
-        const updated = (sheet.updated_at ?? '').toString().toLowerCase();
+        const created = `${sheet.created_at ?? ''} ${formatSwissDateTime(sheet.created_at)}`.toLowerCase();
+        const updated = `${sheet.updated_at ?? ''} ${formatSwissDateTime(sheet.updated_at)}`.toLowerCase();
         return `${name} ${key} ${content} ${created} ${updated}`.includes(
           sheetFilterValue
         );
@@ -363,15 +546,8 @@
 
   const sheetColumns = [
     {
-      key: 'key',
-      label: 'Key',
-      sortable: true,
-      onSort: () => toggleSheetSort('key'),
-      sortHint: () => getSheetSortHint('key')
-    },
-    {
       key: 'name',
-      label: 'Name',
+      label: 'Titel',
       sortable: true,
       onSort: () => toggleSheetSort('name'),
       sortHint: () => getSheetSortHint('name'),
@@ -385,22 +561,26 @@
       sortable: true,
       onSort: () => toggleSheetSort('content'),
       sortHint: () => getSheetSortHint('content'),
+      compactVisible: true,
+      className: 'sheet-cell--text-preview',
       value: (sheet) =>
-        stripHtml(sheet?.content ?? '').slice(0, 120) || 'Leerer Inhalt'
+        stripHtml(sheet?.content ?? '').slice(0, 360) || 'Leerer Inhalt'
     },
     {
       key: 'created_at',
       label: 'Erstellt',
       sortable: true,
       onSort: () => toggleSheetSort('created_at'),
-      sortHint: () => getSheetSortHint('created_at')
+      sortHint: () => getSheetSortHint('created_at'),
+      value: (sheet) => formatSwissDateTime(sheet?.created_at)
     },
     {
       key: 'updated_at',
       label: 'Geaendert',
       sortable: true,
       onSort: () => toggleSheetSort('updated_at'),
-      sortHint: () => getSheetSortHint('updated_at')
+      sortHint: () => getSheetSortHint('updated_at'),
+      value: (sheet) => formatSwissDateTime(sheet?.updated_at)
     }
   ];
 
@@ -458,6 +638,46 @@
     }
   ];
 
+  const collectionColumns = [
+    {
+      key: 'name',
+      label: 'Name',
+      sortable: true,
+      onSort: () => toggleCollectionSort('name'),
+      sortHint: () => getCollectionSortHint('name'),
+      compactVisible: true,
+      className: 'sheet-cell--name',
+      headerClass: 'sheet-cell--name',
+      value: (entry) => entry?.name || `Sammlung #${entry?.id ?? ''}`
+    },
+    {
+      key: 'description',
+      label: 'Beschreibung',
+      sortable: true,
+      onSort: () => toggleCollectionSort('description'),
+      sortHint: () => getCollectionSortHint('description'),
+      compactVisible: true,
+      className: 'sheet-cell--text-preview',
+      value: (entry) => formatCollectionDescription(entry?.description)
+    },
+    {
+      key: 'sheet_count',
+      label: 'Blaetter',
+      sortable: true,
+      onSort: () => toggleCollectionSort('sheet_count'),
+      sortHint: () => getCollectionSortHint('sheet_count'),
+      value: (entry) => String(getCollectionCount(entry?.id))
+    },
+    {
+      key: 'updated_at',
+      label: 'Geaendert',
+      sortable: true,
+      onSort: () => toggleCollectionSort('updated_at'),
+      sortHint: () => getCollectionSortHint('updated_at'),
+      value: (entry) => formatSwissDateTime(entry?.updated_at)
+    }
+  ];
+
   const confirmDelete = (label = 'Eintrag') => {
     if (!browser) return true;
     return window.confirm(`${label} wirklich löschen?`);
@@ -478,12 +698,16 @@
     lastSavedSheetId = selectedId;
     lastSavedSheetName = editorName ?? '';
     lastSavedSheetContent = editorContent ?? '';
+    lastSavedSheetPrompt = editorPrompt ?? '';
+    lastSavedSheetCollectionId = editorCollectionId ?? '';
   };
 
   const resetSavedSheetState = () => {
     lastSavedSheetId = null;
     lastSavedSheetName = '';
     lastSavedSheetContent = '';
+    lastSavedSheetPrompt = '';
+    lastSavedSheetCollectionId = '';
   };
 
   const hasUnsavedSheetChanges = () => {
@@ -491,7 +715,9 @@
     if (lastSavedSheetId !== selectedId) return true;
     return (
       (editorName ?? '') !== (lastSavedSheetName ?? '') ||
-      (editorContent ?? '') !== (lastSavedSheetContent ?? '')
+      (editorContent ?? '') !== (lastSavedSheetContent ?? '') ||
+      (editorPrompt ?? '') !== (lastSavedSheetPrompt ?? '') ||
+      (editorCollectionId ?? '') !== (lastSavedSheetCollectionId ?? '')
     );
   };
 
@@ -529,10 +755,14 @@
     selectedId;
     editorName;
     editorContent;
+    editorPrompt;
+    editorCollectionId;
     saving;
     lastSavedSheetId;
     lastSavedSheetName;
     lastSavedSheetContent;
+    lastSavedSheetPrompt;
+    lastSavedSheetCollectionId;
     sheetHasUnsavedChanges = hasUnsavedSheetChanges();
     if (selectedId && !saving && sheetHasUnsavedChanges) {
       scheduleSheetAutosave();
@@ -556,15 +786,85 @@
     versionRestoreStatus = 'idle';
   }
 
+  $: userRoleLabel = getUserRoleLabel(userRole);
+  $: isAdmin = userRole >= 3;
+  $: isActivatedUser = userRole >= 1;
+  $: sheetReadOnly =
+    isAdmin &&
+    selectedSheetUserId !== null &&
+    userId !== null &&
+    selectedSheetUserId !== userId;
+  $: classReadOnly =
+    isAdmin &&
+    selectedClassUserId !== null &&
+    userId !== null &&
+    selectedClassUserId !== userId;
+  $: collectionReadOnly =
+    isAdmin &&
+    selectedCollectionUserId !== null &&
+    userId !== null &&
+    selectedCollectionUserId !== userId;
+
   const syncCodeScroll = (inputEl, highlightEl) => {
     if (!inputEl || !highlightEl) return;
     highlightEl.scrollTop = inputEl.scrollTop;
     highlightEl.scrollLeft = inputEl.scrollLeft;
   };
 
+  const syncEditableHtml = (node, params) => {
+    const apply = (nextParams) => {
+      if (!node) return;
+      const html = typeof nextParams === 'string' ? nextParams : (nextParams?.html ?? '');
+      const freezeWhileFocused = Boolean(nextParams?.freezeWhileFocused);
+      const isFocused =
+        typeof document !== 'undefined' &&
+        (document.activeElement === node || node.contains(document.activeElement));
+      if (freezeWhileFocused && isFocused) return;
+      if (node.innerHTML !== html) node.innerHTML = html;
+    };
+
+    apply(params);
+    return { update: apply };
+  };
+
   const STORAGE_KEY = 'abu.auth';
+  const LEARNER_STORAGE_KEY = 'abu.learner';
   const ADMIN_CI_KEY = 'abu.admin.ci';
   const SHEET_AUTOSAVE_DELAY_MS = 60 * 1000;
+  const usageNumberFormatter = new Intl.NumberFormat('de-CH');
+  const usageUsdFormatter = new Intl.NumberFormat('de-CH', {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 6
+  });
+
+  const normalizeAiUsage = (value) => {
+    const entry = value && typeof value === 'object' ? value : {};
+    const requests = Math.max(0, Number(entry.requests) || 0);
+    const promptTokens = Math.max(0, Number(entry.prompt_tokens) || 0);
+    const completionTokens = Math.max(0, Number(entry.completion_tokens) || 0);
+    const totalTokensRaw = Math.max(0, Number(entry.total_tokens) || 0);
+    const totalTokens = Math.max(totalTokensRaw, promptTokens + completionTokens);
+    const promptCost = Math.max(0, Number(entry.prompt_cost_usd) || 0);
+    const completionCost = Math.max(0, Number(entry.completion_cost_usd) || 0);
+    const totalCostRaw = Math.max(0, Number(entry.total_cost_usd) || 0);
+    const totalCost = Math.max(totalCostRaw, promptCost + completionCost);
+    return {
+      requests,
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      total_tokens: totalTokens,
+      prompt_cost_usd: promptCost,
+      completion_cost_usd: completionCost,
+      total_cost_usd: totalCost
+    };
+  };
+
+  const extractAiUsageFromPayload = (payload) =>
+    normalizeAiUsage(payload?.data?.ai_usage ?? payload?.data?.user?.ai_usage ?? null);
+
+  const formatUsageCount = (value) => usageNumberFormatter.format(Math.max(0, Number(value) || 0));
+  const formatUsageUsd = (value) =>
+    usageUsdFormatter.format(Math.max(0, Number(value) || 0));
 
   onMount(() => {
     showTopbarMenu = false;
@@ -646,6 +946,8 @@
         ? config.apiBaseUrl
         : `${config.apiBaseUrl}/`;
       ensureLueckeElements();
+      ensureAntworttextElements();
+      ensureFreitextElements();
       ensureUmfrageElements();
     } catch (err) {
       configError = err?.message ?? 'config konnte nicht geladen werden';
@@ -654,10 +956,26 @@
     }
 
     if (browser) {
+      const params = new URLSearchParams(window.location.search || '');
+      const sheetParam = (params.get('sheet') ?? '').trim();
+      if (sheetParam) {
+        const asNumber = Number(sheetParam);
+        if (Number.isFinite(asNumber) && asNumber > 0) {
+          selectedId = asNumber;
+        } else {
+          selectedKey = sheetParam;
+        }
+      }
+    }
+
+    if (browser) {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         try {
           const saved = JSON.parse(raw);
+          if (saved?.ai_usage) {
+            userAiUsage = normalizeAiUsage(saved.ai_usage);
+          }
           if (saved?.token) {
             await validateToken(saved.token);
           }
@@ -690,13 +1008,17 @@
     }
   };
 
-  const persistAuth = (newToken, email) => {
+  const persistAuth = (newToken, email, usage = null, meta = {}) => {
     token = newToken;
+    userId = normalizeClassId(meta?.id) ?? null;
+    const roleNum = Number(meta?.role);
+    userRole = Number.isFinite(roleNum) ? roleNum : 1;
     userEmail = email;
+    userAiUsage = normalizeAiUsage(usage);
     if (browser) {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ token: newToken, email })
+        JSON.stringify({ token: newToken, email, id: userId, role: userRole, ai_usage: userAiUsage })
       );
     }
   };
@@ -772,6 +1094,39 @@
     const num = Number(value);
     if (!Number.isFinite(num) || num <= 0) return null;
     return num;
+  }
+
+  function normalizeCollectionId(value) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'object') {
+      return normalizeClassId(value?.id ?? null);
+    }
+    return normalizeClassId(value);
+  }
+
+  function normalizeUserId(value) {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'object') {
+      return normalizeClassId(value?.id ?? null);
+    }
+    return normalizeClassId(value);
+  }
+
+  function getSheetLookupKey(ownerId, sheetKey) {
+    const normalizedOwnerId = normalizeUserId(ownerId);
+    return `${normalizedOwnerId ?? ''}:${String(sheetKey ?? '')}`;
+  }
+
+  function getPreferredEditableCollectionId() {
+    const currentId = normalizeCollectionId(selectedCollectionId);
+    if (
+      currentId !== null &&
+      editableCollections.some((entry) => normalizeCollectionId(entry?.id) === currentId)
+    ) {
+      return String(currentId);
+    }
+    const firstEditable = editableCollections[0] ?? null;
+    return firstEditable ? String(firstEditable.id) : '';
   }
 
   function buildLearnerPortalHref(learnerEntry) {
@@ -879,6 +1234,18 @@
     return 'Lernende';
   }
 
+  function getCollectionCount(collectionId) {
+    const normalizedId = normalizeCollectionId(collectionId);
+    if (!normalizedId) return 0;
+    return collectionCountMap.get(normalizedId) ?? 0;
+  }
+
+  function formatCollectionDescription(value) {
+    const description = (value ?? '').toString().trim();
+    if (!description) return 'Keine Beschreibung';
+    return description.length > 360 ? `${description.slice(0, 360)}...` : description;
+  }
+
   function getAnswersUserLabel(user) {
     if (!user) return 'Alle Antworten';
     const match = answersLearners.find(
@@ -889,7 +1256,10 @@
 
   const clearAuth = () => {
     token = '';
+    userId = null;
+    userRole = 1;
     userEmail = '';
+    userAiUsage = normalizeAiUsage(null);
     if (browser) {
       localStorage.removeItem(STORAGE_KEY);
     }
@@ -903,10 +1273,21 @@
       );
       const payload = await readPayload(res);
       if (res.ok && payload?.data?.valid) {
-        persistAuth(existingToken, payload?.data?.user?.email ?? '');
-        await fetchSheets();
-        await fetchSchools();
-        await fetchClasses();
+        const role = payload?.data?.user?.role ?? 1;
+        const id = payload?.data?.user?.id ?? null;
+        persistAuth(
+          existingToken,
+          payload?.data?.user?.email ?? '',
+          extractAiUsageFromPayload(payload),
+          { role, id }
+        );
+        if (Number(role) >= 1) {
+          await fetchSheets();
+          await fetchCollections();
+          await fetchCollectionLinks();
+          await fetchSchools();
+          await fetchClasses();
+        }
       } else {
         clearAuth();
       }
@@ -931,11 +1312,22 @@
         loginError = payload?.warning || 'Login fehlgeschlagen';
         return;
       }
-      persistAuth(payload.data.token, payload?.data?.user?.email ?? '');
+      const role = payload?.data?.user?.role ?? 1;
+      const id = payload?.data?.user?.id ?? null;
+      persistAuth(
+        payload.data.token,
+        payload?.data?.user?.email ?? '',
+        extractAiUsageFromPayload(payload),
+        { role, id }
+      );
       loginPassword = '';
-      await fetchSheets();
-      await fetchSchools();
-      await fetchClasses();
+      if (Number(role) >= 1) {
+        await fetchSheets();
+        await fetchCollections();
+        await fetchCollectionLinks();
+        await fetchSchools();
+        await fetchClasses();
+      }
     } catch (err) {
       loginError = err?.message ?? 'Login fehlgeschlagen';
     } finally {
@@ -943,20 +1335,61 @@
     }
   };
 
-  const logout = async () => {
-    const canLeave = await maybeWarnAndSaveBeforeLeavingEditor('Logout');
-    if (!canLeave) return;
-    clearSheetAutosaveTimer();
-    resetSavedSheetState();
+  const loginLearner = async () => {
+    learnerLoginError = '';
+    learnerLoginLoading = true;
     try {
-      await apiFetch('user/logout', { method: 'POST' });
-    } catch {
-      // ignore
+      const cleaned = (learnerLoginToken || '').replace(/\s+/g, '');
+      if (!cleaned) {
+        learnerLoginError = 'Token fehlt.';
+        return;
+      }
+      const res = await fetch(`${apiBaseUrl}learner-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: cleaned })
+      });
+      const payload = await readPayload(res);
+      const learnerEntry = payload?.data?.learner ?? null;
+      const learnerCode = learnerEntry?.code ?? '';
+      if (!res.ok || !learnerCode) {
+        learnerLoginError = payload?.warning || 'Token ungueltig.';
+        return;
+      }
+      learnerLoginToken = '';
+      if (browser) {
+        localStorage.setItem(LEARNER_STORAGE_KEY, JSON.stringify(learnerEntry));
+        window.location.href = `/lernende?token=${encodeURIComponent(learnerCode)}`;
+      }
+    } catch (err) {
+      learnerLoginError = err?.message ?? 'Login fehlgeschlagen';
+    } finally {
+      learnerLoginLoading = false;
     }
-    clearAuth();
+  };
+
+  const resetAppAfterLogout = () => {
     sheets = [];
+    collections = [];
+    collectionLinks = [];
+    selectedCollectionId = null;
+    selectedCollectionUserId = null;
+    collectionName = '';
+    collectionDescription = '';
+    collectionError = '';
+    collectionLinkError = '';
+    collectionFilter = '';
+    collectionSheetFilter = '';
+    showCollectionModal = false;
+    collectionDescriptionOpen = false;
+    newSheetCollectionId = '';
+    editorReturnTab = 'collections';
     selectedId = null;
+    selectedKey = '';
     editorContent = '';
+    editorName = '';
+    editorPrompt = '';
+    editorCollectionId = '';
     classes = [];
     selectedClassId = null;
     newClassName = '';
@@ -995,42 +1428,400 @@
     agentPending = false;
     agentHistory = [];
     agentScopeState.reset();
+    agentScopeVersion += 1;
     destroyAnswersRuntime();
   };
 
-  const fetchSheets = async () => {
-    if (!token) return;
-    loadingSheets = true;
-    sheetError = '';
+  const requestLogout = async (logoutToken) => {
+    if (!apiBaseUrl || !logoutToken) return;
     try {
-      const res = await apiFetch('sheet');
-      const payload = await readPayload(res);
-      if (!res.ok) {
-        sheetError = payload?.warning || 'Sheets konnten nicht geladen werden';
-        return;
-      }
-      const list = payload?.data?.sheet ?? [];
-      sheets = list;
-      if (list.length) {
-        let next = null;
-        if (selectedKey) {
+      await fetch(`${apiBaseUrl}user/logout`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${logoutToken}`
+        },
+        keepalive: true
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const logout = async () => {
+    const canLeave = await maybeWarnAndSaveBeforeLeavingEditor('Logout');
+    if (!canLeave) return;
+    clearSheetAutosaveTimer();
+    resetSavedSheetState();
+    const logoutToken = token;
+    clearAuth();
+    if (browser) {
+      await tick();
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+    resetAppAfterLogout();
+    void requestLogout(logoutToken);
+  };
+
+  const fetchSheets = async () => {
+	    if (!token || !isActivatedUser) return;
+	    loadingSheets = true;
+	    sheetError = '';
+	    try {
+	      const res = await apiFetch('sheet');
+	      const payload = await readPayload(res);
+	      if (!res.ok) {
+	        sheetError = payload?.warning || 'Sheets konnten nicht geladen werden';
+	        return;
+	      }
+	      const list = payload?.data?.sheet ?? [];
+	      const warningText = typeof payload?.warning === 'string' ? payload.warning.trim() : '';
+	      if (warningText.startsWith('SQL error:')) {
+	        sheetError = warningText;
+	      }
+	      sheets = list;
+	      if (list.length) {
+	        let next = null;
+	        if (selectedId) {
+	          next = list.find((sheet) => sheet.id === selectedId);
+        }
+        if (!next && selectedKey) {
           next = list.find((sheet) => sheet.key === selectedKey);
         }
-        if (!next && selectedId) {
-          next = list.find((sheet) => sheet.id === selectedId);
-        }
-        if (next) {
-          selectSheet(next.id, { preserveView: true });
-        } else {
-          closeEditor({ force: true });
-        }
-      } else {
-        closeEditor({ force: true });
-      }
+	        if (next) {
+	          selectSheet(next.id, { preserveView: true });
+	        } else {
+	          await closeEditor({ force: true });
+	          if (activeTab === 'editor') {
+	            activeTab = editorReturnTab === 'editor' ? 'collections' : editorReturnTab;
+	          }
+	        }
+	      } else {
+	        await closeEditor({ force: true });
+	        if (activeTab === 'editor') {
+	          activeTab = editorReturnTab === 'editor' ? 'collections' : editorReturnTab;
+	        }
+	      }
     } catch (err) {
       sheetError = err?.message ?? 'Sheets konnten nicht geladen werden';
     } finally {
       loadingSheets = false;
+    }
+  };
+
+  const fetchCollections = async ({ autoSelect = false } = {}) => {
+    if (!token || !isActivatedUser) return;
+    loadingCollections = true;
+    collectionError = '';
+    try {
+      const res = await apiFetch('collection');
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionError = payload?.warning || 'Sammlungen konnten nicht geladen werden';
+        return;
+      }
+      const list = payload?.data?.collection ?? [];
+      collections = list;
+      if (selectedCollectionId) {
+        const keep = list.find(
+          (entry) => normalizeCollectionId(entry?.id) === selectedCollectionId
+        );
+        if (keep) {
+          selectCollection(keep.id);
+        } else {
+          resetCollectionSelection();
+        }
+      } else if (autoSelect && list.length) {
+        const next =
+          isAdmin && userId !== null
+            ? list.find((entry) => normalizeUserId(entry?.user) === userId) ?? list[0]
+            : list[0];
+        if (next) {
+          selectCollection(next.id);
+        }
+      }
+    } catch (err) {
+      collectionError = err?.message ?? 'Sammlungen konnten nicht geladen werden';
+    } finally {
+      loadingCollections = false;
+    }
+  };
+
+  const fetchCollectionLinks = async () => {
+    if (!token || !isActivatedUser) return;
+    loadingCollectionLinks = true;
+    collectionLinkError = '';
+    try {
+      const res = await apiFetch('collection_sheet');
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionLinkError =
+          payload?.warning || 'Sammlungs-Zuordnungen konnten nicht geladen werden';
+        return;
+      }
+      collectionLinks = payload?.data?.collection_sheet ?? [];
+    } catch (err) {
+      collectionLinkError =
+        err?.message ?? 'Sammlungs-Zuordnungen konnten nicht geladen werden';
+    } finally {
+      loadingCollectionLinks = false;
+    }
+  };
+
+  const resetCollectionSelection = () => {
+    selectedCollectionId = null;
+    selectedCollectionUserId = null;
+    collectionName = '';
+    collectionDescription = '';
+    collectionSheetFilter = '';
+    collectionDescriptionOpen = false;
+  };
+
+  const selectCollection = (id) => {
+    selectedCollectionId = normalizeCollectionId(id);
+    const current = collections.find(
+      (entry) => normalizeCollectionId(entry?.id) === selectedCollectionId
+    );
+    selectedCollectionUserId = normalizeUserId(current?.user);
+    collectionName = current?.name ?? '';
+    collectionDescription = current?.description ?? '';
+    collectionDescriptionOpen = false;
+  };
+
+  const createCollection = async () => {
+    if (!isActivatedUser) return false;
+    creatingCollection = true;
+    collectionError = '';
+    try {
+      const res = await apiFetch('collection', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: newCollectionName.trim() || 'Neue Sammlung',
+          description: newCollectionDescription.trim()
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionError = payload?.warning || 'Sammlung konnte nicht erstellt werden';
+        return false;
+      }
+      newCollectionName = '';
+      newCollectionDescription = '';
+      await fetchCollections();
+      await fetchCollectionLinks();
+      const nextId = normalizeCollectionId(payload?.data?.id);
+      if (nextId) {
+        selectCollection(nextId);
+      }
+      return true;
+    } catch (err) {
+      collectionError = err?.message ?? 'Sammlung konnte nicht erstellt werden';
+      return false;
+    } finally {
+      creatingCollection = false;
+    }
+  };
+
+  const handleCreateCollection = async () => {
+    const ok = await createCollection();
+    if (ok) {
+      showCollectionModal = false;
+    }
+  };
+
+  const saveCollection = async () => {
+    if (!selectedCollectionId || savingCollection || collectionReadOnly) return false;
+    savingCollection = true;
+    collectionError = '';
+    try {
+      const res = await apiFetch('collection', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: selectedCollectionId,
+          name: collectionName,
+          description: collectionDescription
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionError = payload?.warning || 'Sammlung konnte nicht gespeichert werden';
+        return false;
+      }
+      await fetchCollections();
+      return true;
+    } catch (err) {
+      collectionError = err?.message ?? 'Sammlung konnte nicht gespeichert werden';
+      return false;
+    } finally {
+      savingCollection = false;
+    }
+  };
+
+  const deleteCollection = async (id = null) => {
+    const targetId = normalizeCollectionId(id ?? selectedCollectionId);
+    if (!targetId) return;
+    const current = collections.find((entry) => normalizeCollectionId(entry?.id) === targetId);
+    if (isAdmin && normalizeUserId(current?.user) !== userId) {
+      collectionError = 'Admin: Fremde Sammlungen koennen hier nicht geloescht werden.';
+      return;
+    }
+    const collectionTitle =
+      current?.name || (targetId ? `Sammlung #${targetId}` : 'Sammlung');
+    if (!confirmDelete(`Sammlung "${collectionTitle}"`)) return;
+    deletingCollection = true;
+    collectionError = '';
+    try {
+      const res = await apiFetch('collection', {
+        method: 'DELETE',
+        body: JSON.stringify({ id: targetId })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionError = payload?.warning || 'Sammlung konnte nicht geloescht werden';
+        return;
+      }
+      collections = collections.filter(
+        (entry) => normalizeCollectionId(entry?.id) !== targetId
+      );
+      collectionLinks = collectionLinks.filter(
+        (entry) => normalizeCollectionId(entry?.collection) !== targetId
+      );
+      if (selectedCollectionId === targetId) {
+        resetCollectionSelection();
+      }
+    } catch (err) {
+      collectionError = err?.message ?? 'Sammlung konnte nicht geloescht werden';
+    } finally {
+      deletingCollection = false;
+    }
+  };
+
+  const addSheetToCollection = async (sheetKey) => {
+    if (!selectedCollectionId || !sheetKey || collectionReadOnly) return;
+    collectionLinkSaving = true;
+    collectionLinkError = '';
+    try {
+      const res = await apiFetch('collection_sheet', {
+        method: 'POST',
+        body: JSON.stringify({
+          collection: selectedCollectionId,
+          sheet_key: sheetKey
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionLinkError =
+          payload?.warning || 'Sheet konnte nicht zur Sammlung hinzugefuegt werden';
+        return;
+      }
+      await fetchCollectionLinks();
+    } catch (err) {
+      collectionLinkError =
+        err?.message ?? 'Sheet konnte nicht zur Sammlung hinzugefuegt werden';
+    } finally {
+      collectionLinkSaving = false;
+    }
+  };
+
+  const removeSheetFromCollection = async (assignmentId) => {
+    const normalizedId = normalizeCollectionId(assignmentId);
+    if (!normalizedId || collectionReadOnly) return;
+    collectionLinkSaving = true;
+    collectionLinkError = '';
+    try {
+      const res = await apiFetch('collection_sheet', {
+        method: 'DELETE',
+        body: JSON.stringify({ id: normalizedId })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionLinkError =
+          payload?.warning || 'Sheet konnte nicht aus der Sammlung entfernt werden';
+        return;
+      }
+      await fetchCollectionLinks();
+    } catch (err) {
+      collectionLinkError =
+        err?.message ?? 'Sheet konnte nicht aus der Sammlung entfernt werden';
+    } finally {
+      collectionLinkSaving = false;
+    }
+  };
+
+  const setCollectionSheetPosition = async (assignmentId, rawValue) => {
+    const normalizedId = normalizeCollectionId(assignmentId);
+    const nextPosition = Number(rawValue);
+    if (!normalizedId || !Number.isFinite(nextPosition) || nextPosition <= 0 || collectionReadOnly) {
+      return;
+    }
+    collectionLinkSaving = true;
+    collectionLinkError = '';
+    try {
+      const res = await apiFetch('collection_sheet', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: normalizedId,
+          position: nextPosition
+        })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        collectionLinkError =
+          payload?.warning || 'Reihenfolge konnte nicht gespeichert werden';
+        return;
+      }
+      await fetchCollectionLinks();
+    } catch (err) {
+      collectionLinkError =
+        err?.message ?? 'Reihenfolge konnte nicht gespeichert werden';
+    } finally {
+      collectionLinkSaving = false;
+    }
+  };
+
+  const saveSheetCollectionAssignment = async (sheetKey, nextCollectionId, currentAssignment = null) => {
+    const normalizedCollectionId = normalizeCollectionId(nextCollectionId);
+    const currentCollectionId = normalizeCollectionId(currentAssignment?.collection);
+    if (!sheetKey) {
+      return false;
+    }
+    if (!normalizedCollectionId) {
+      saveState = 'Bitte eine Sammlung waehlen.';
+      return false;
+    }
+    if (currentAssignment?.id && currentCollectionId === normalizedCollectionId) {
+      if (editorReturnTab === 'collections') {
+        selectCollection(normalizedCollectionId);
+      }
+      return true;
+    }
+    try {
+      const payload = currentAssignment?.id
+        ? {
+            id: currentAssignment.id,
+            collection: normalizedCollectionId
+          }
+        : {
+            collection: normalizedCollectionId,
+            sheet_key: sheetKey
+          };
+      const res = await apiFetch('collection_sheet', {
+        method: currentAssignment?.id ? 'PATCH' : 'POST',
+        body: JSON.stringify(payload)
+      });
+      const responsePayload = await readPayload(res);
+      if (!res.ok) {
+        saveState = responsePayload?.warning || 'Sammlung konnte nicht gespeichert werden';
+        return false;
+      }
+      await fetchCollectionLinks();
+      if (editorReturnTab === 'collections') {
+        selectCollection(normalizedCollectionId);
+      }
+      return true;
+    } catch (err) {
+      saveState = err?.message ?? 'Sammlung konnte nicht gespeichert werden';
+      return false;
     }
   };
 
@@ -1074,9 +1865,17 @@
     clearSheetAutosaveTimer();
     selectedId = id;
     const current = sheets.find((sheet) => sheet.id === id);
+    const ownerId = normalizeUserId(current?.user);
+    const collectionEntry =
+      sheetCollectionEntryMap.get(getSheetLookupKey(ownerId, current?.key)) ?? null;
+    selectedSheetUserId = ownerId;
+    const readOnly =
+      isAdmin && ownerId !== null && userId !== null && ownerId !== userId;
     editorContent = current?.content ?? '';
     editorName = current?.name ?? '';
+    editorPrompt = current?.prompt ?? '';
     selectedKey = current?.key ?? '';
+    editorCollectionId = String(normalizeCollectionId(collectionEntry?.collection) ?? '');
     sheetSaveStatus = 'idle';
     saveState = '';
     if (!preserveView) {
@@ -1101,9 +1900,13 @@
     answersRenderKey = 0;
     destroyAnswersRuntime();
     visualActiveBlock = 0;
+    visualBlocks = [];
+    visualBlockIds = [];
+    visualBlockSelections = [];
+    visualBlockInputRevisions = [];
     resetVisualHistory();
     rememberSavedSheetState();
-    if (current?.key) {
+    if (current?.key && !readOnly) {
       fetchSheetVersions(current.key);
     }
   };
@@ -1116,15 +1919,20 @@
     clearSheetAutosaveTimer();
     selectedId = null;
     selectedKey = '';
+    selectedSheetUserId = null;
     editorContent = '';
     editorName = '';
+    editorPrompt = '';
+    editorCollectionId = '';
     sheetSaveStatus = 'idle';
     saveState = '';
     editorView = 'visual';
     resetSheetVersions();
     previewLueckeRuntime?.destroy();
+    previewAntworttextRuntime?.destroy();
     previewUmfrageRuntime?.destroy();
     previewLueckeRuntime = null;
+    previewAntworttextRuntime = null;
     previewUmfrageRuntime = null;
     previewUser = '';
     answers = [];
@@ -1145,33 +1953,45 @@
     answersRenderKey = 0;
     destroyAnswersRuntime();
     visualActiveBlock = 0;
+    visualBlocks = [];
+    visualBlockIds = [];
+    visualBlockSelections = [];
+    visualBlockInputRevisions = [];
     resetVisualHistory();
     blockInsertIndex = null;
     resetSavedSheetState();
     return true;
   };
 
-  const createSheet = async () => {
-    creating = true;
-    sheetError = '';
-    try {
+	  const createSheet = async () => {
+	    if (!isActivatedUser) return null;
+	    creating = true;
+	    sheetError = '';
+	    try {
       const trimmedKey = newSheetKey.trim();
       const trimmedName = newSheetName.trim();
-      const res = await apiFetch('sheet', {
-        method: 'POST',
-        body: JSON.stringify({
-          content: '',
-          name: trimmedName || 'Neues Sheet',
-          key: trimmedKey
-        })
-      });
-      const payload = await readPayload(res);
-      if (!res.ok) {
-        sheetError = payload?.warning || 'Sheet konnte nicht erstellt werden';
-        return false;
+      const targetCollectionId = normalizeCollectionId(newSheetCollectionId);
+      if (!targetCollectionId) {
+        sheetError = 'Bitte eine Sammlung waehlen.';
+        return null;
       }
-      if (payload?.data?.id) {
-        selectedId = payload.data.id;
+	      const res = await apiFetch('sheet', {
+	        method: 'POST',
+	        body: JSON.stringify({
+	          content: '',
+	          name: trimmedName || 'Neues Sheet',
+	          key: trimmedKey,
+	          prompt: ''
+	        })
+	      });
+	      const payload = await readPayload(res);
+	      if (!res.ok || payload?.warning) {
+	        sheetError = payload?.warning || 'Sheet konnte nicht erstellt werden';
+	        return null;
+	      }
+	      const createdId = normalizeClassId(payload?.data?.id);
+	      if (payload?.data?.id) {
+	        selectedId = payload.data.id;
         if (trimmedKey) {
           selectedKey = trimmedKey;
         } else {
@@ -1180,66 +2000,114 @@
       }
       newSheetName = '';
       newSheetKey = '';
+      newSheetCollectionId = '';
       await fetchSheets();
-      return true;
-    } catch (err) {
-      sheetError = err?.message ?? 'Sheet konnte nicht erstellt werden';
-      return false;
-    } finally {
-      creating = false;
-    }
-  };
+      const createdSheet =
+        sheets.find((entry) => normalizeClassId(entry?.id) === createdId) ?? null;
+      const createdSheetKey = createdSheet?.key ?? trimmedKey;
+      if (!createdSheetKey) {
+        sheetError = 'Sheet wurde erstellt, konnte aber keiner Sammlung zugeordnet werden.';
+        return null;
+      }
+      const assigned = await saveSheetCollectionAssignment(createdSheetKey, targetCollectionId, null);
+      if (!assigned) {
+        return null;
+      }
+	      return {
+          id: createdId,
+          key: createdSheetKey,
+          collectionId: targetCollectionId
+        };
+	    } catch (err) {
+	      sheetError = err?.message ?? 'Sheet konnte nicht erstellt werden';
+	      return null;
+	    } finally {
+	      creating = false;
+	    }
+	  };
 
-  const handleCreateSheet = async () => {
-    const ok = await createSheet();
-    if (ok) {
-      showCreateSheetModal = false;
-    }
-  };
+	  const handleCreateSheet = async () => {
+	    const created = await createSheet();
+	    if (created?.collectionId) {
+        selectCollection(created.collectionId);
+      }
+	    if (created?.id) {
+	      showCreateSheetModal = false;
+        await openShopSheet(created.id, 'visual');
+	    }
+	  };
 
   const saveSheet = async ({ refreshSheetList = true } = {}) => {
     if (!selectedId || saving) return false;
+    if (sheetReadOnly) {
+      sheetSaveStatus = 'error';
+      saveState = 'Admin: Fremde Sheets sind schreibgeschuetzt.';
+      return false;
+    }
     if (!hasUnsavedSheetChanges()) {
       return true;
     }
     const targetId = selectedId;
     const nextContent = editorContent;
     const nextName = editorName;
+    const nextPrompt = editorPrompt;
+    const nextCollectionId = normalizeCollectionId(editorCollectionId);
+    const currentCollectionAssignment =
+      sheetCollectionEntryMap.get(getSheetLookupKey(selectedSheetUserId, selectedKey)) ?? null;
+    const hasDocumentChanges =
+      (nextName ?? '') !== (lastSavedSheetName ?? '') ||
+      (nextContent ?? '') !== (lastSavedSheetContent ?? '') ||
+      (nextPrompt ?? '') !== (lastSavedSheetPrompt ?? '');
     clearSheetAutosaveTimer();
     saving = true;
     sheetSaveStatus = 'saving';
     saveState = '';
     try {
-      const res = await apiFetch('sheet', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          id: targetId,
-          content: nextContent,
-          name: nextName
-        })
-      });
-      const payload = await readPayload(res);
-      if (!res.ok) {
+      if (hasDocumentChanges) {
+        const res = await apiFetch('sheet', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            id: targetId,
+            content: nextContent,
+            name: nextName,
+            prompt: nextPrompt
+          })
+        });
+        const payload = await readPayload(res);
+        if (!res.ok) {
+          sheetSaveStatus = 'error';
+          saveState = payload?.warning || 'Speichern fehlgeschlagen';
+          return false;
+        }
+      }
+      const collectionSaved = await saveSheetCollectionAssignment(
+        selectedKey,
+        nextCollectionId,
+        currentCollectionAssignment
+      );
+      if (!collectionSaved) {
         sheetSaveStatus = 'error';
-        saveState = payload?.warning || 'Speichern fehlgeschlagen';
         return false;
       }
       if (refreshSheetList) {
         const keepView = editorView;
-        await fetchSheets();
+        if (hasDocumentChanges) {
+          await fetchSheets();
+        }
         if (selectedId) {
           editorView = keepView;
         }
-      } else {
+      } else if (hasDocumentChanges) {
         sheets = sheets.map((entry) =>
           entry.id === targetId
             ? {
-                ...entry,
-                content: nextContent,
-                name: nextName
-              }
-            : entry
-        );
+                    ...entry,
+                    content: nextContent,
+                    name: nextName,
+                    prompt: nextPrompt
+                  }
+                : entry
+            );
       }
       if (selectedId === targetId) {
         rememberSavedSheetState();
@@ -1260,6 +2128,7 @@
   };
 
   const restoreSheetVersion = async () => {
+    if (sheetReadOnly) return;
     if (!selectedVersionId) return;
     const target = sheetVersions.find(
       (entry) => String(entry?.id) === String(selectedVersionId)
@@ -1305,6 +2174,13 @@
     const targetId = id ?? selectedId;
     if (!targetId) return;
     const current = sheets.find((sheet) => sheet.id === targetId);
+    if (isAdmin) {
+      const ownerId = normalizeUserId(current?.user);
+      if (ownerId !== null && userId !== null && ownerId !== userId) {
+        sheetError = 'Admin: Fremde Sheets koennen hier nicht geloescht werden.';
+        return;
+      }
+    }
     const sheetTitle =
       current?.name || current?.key || (targetId ? `Sheet #${targetId}` : '');
     const sheetLabel = sheetTitle ? `Sheet "${sheetTitle}"` : 'Sheet';
@@ -1331,65 +2207,8 @@
     }
   };
 
-  const importLegacySheet = async (legacy) => {
-    if (!token) return;
-    importing = true;
-    importState = '';
-    try {
-      const res = await apiFetch('sheet', {
-        method: 'POST',
-        body: JSON.stringify({
-          key: legacy.key,
-          name: legacy.name,
-          content: legacy.content
-        })
-      });
-      const payload = await readPayload(res);
-      if (!res.ok) {
-        importState = payload?.warning || `Import fehlgeschlagen (${legacy.key})`;
-        return;
-      }
-      importState = `Importiert: ${legacy.key}`;
-      await fetchSheets();
-    } catch (err) {
-      importState = err?.message ?? `Import fehlgeschlagen (${legacy.key})`;
-    } finally {
-      importing = false;
-    }
-  };
-
-  const importAllLegacy = async () => {
-    if (!token) return;
-    importing = true;
-    importState = '';
-    const results = [];
-    for (const legacy of legacySheets) {
-      try {
-        const res = await apiFetch('sheet', {
-          method: 'POST',
-          body: JSON.stringify({
-            key: legacy.key,
-            name: legacy.name,
-            content: legacy.content
-          })
-        });
-        const payload = await readPayload(res);
-        if (!res.ok) {
-          results.push(`${legacy.key}: ${payload?.warning || 'Fehler'}`);
-        } else {
-          results.push(`${legacy.key}: OK`);
-        }
-      } catch (err) {
-        results.push(`${legacy.key}: Fehler`);
-      }
-    }
-    importState = results.join(' | ');
-    importing = false;
-    await fetchSheets();
-  };
-
   const fetchSchools = async () => {
-    if (!token) return;
+    if (!token || !isActivatedUser) return;
     loadingSchools = true;
     schoolError = '';
     try {
@@ -1408,10 +2227,12 @@
         if (keep) {
           schoolName = keep?.name ?? '';
           schoolCss = keep?.ci_css ?? '';
+          schoolPrompt = keep?.prompt ?? '';
         } else {
           selectedSchoolId = null;
           schoolName = '';
           schoolCss = '';
+          schoolPrompt = '';
         }
       }
     } catch (err) {
@@ -1426,6 +2247,7 @@
     const current = schools.find((entry) => entry.id === id);
     schoolName = current?.name ?? '';
     schoolCss = current?.ci_css ?? '';
+    schoolPrompt = current?.prompt ?? '';
   };
 
   const createSchool = async () => {
@@ -1437,7 +2259,8 @@
         method: 'POST',
         body: JSON.stringify({
           name: newSchoolName,
-          ci_css: newSchoolCss
+          ci_css: newSchoolCss,
+          prompt: newSchoolPrompt
         })
       });
       const payload = await readPayload(res);
@@ -1447,6 +2270,7 @@
       }
       newSchoolName = '';
       newSchoolCss = '';
+      newSchoolPrompt = '';
       await fetchSchools();
     } catch (err) {
       schoolError = err?.message ?? 'Schule konnte nicht erstellt werden';
@@ -1465,7 +2289,8 @@
         body: JSON.stringify({
           id: selectedSchoolId,
           name: schoolName,
-          ci_css: schoolCss
+          ci_css: schoolCss,
+          prompt: schoolPrompt
         })
       });
       const payload = await readPayload(res);
@@ -1503,6 +2328,7 @@
         selectedSchoolId = null;
         schoolName = '';
         schoolCss = '';
+        schoolPrompt = '';
       }
       await fetchSchools();
       await fetchClasses();
@@ -1513,8 +2339,8 @@
     }
   };
 
-  const fetchClasses = async () => {
-    if (!token) return;
+  const fetchClasses = async ({ autoSelect = true } = {}) => {
+    if (!token || !isActivatedUser) return;
     loadingClasses = true;
     classError = '';
     try {
@@ -1527,17 +2353,27 @@
       const list = payload?.data?.classroom ?? [];
       classes = list;
       if (list.length) {
-        const keep = selectedClassId
+        const keep = autoSelect && selectedClassId
           ? list.find((entry) => entry.id === selectedClassId)
           : null;
-        const next = keep || list[0];
-        selectClass(next.id);
+        let next = keep;
+        if (!next && autoSelect) {
+          if (isAdmin && userId !== null) {
+            next = list.find((entry) => normalizeUserId(entry?.user) === userId) ?? null;
+          }
+        }
+        if (!next && autoSelect) next = list[0];
+        if (next) {
+          selectClass(next.id);
+        }
       } else {
         selectedClassId = null;
+        selectedClassUserId = null;
         className = '';
         classYear = '';
         classProfession = '';
         classNotes = '';
+        classPrompt = '';
         classSchoolId = '';
         learners = [];
         selectedLearnerId = null;
@@ -1558,21 +2394,29 @@
 
   const selectClass = (id, view = 'details') => {
     selectedClassId = id;
-    classDetailView = view;
     const current = classes.find((entry) => entry.id === id);
+    const ownerId = normalizeUserId(current?.user);
+    selectedClassUserId = ownerId;
+    const readOnly =
+      isAdmin && ownerId !== null && userId !== null && ownerId !== userId;
+    classDetailView = readOnly ? 'details' : view;
     className = current?.name ?? '';
     classYear = current?.year ?? '';
     classProfession = current?.profession ?? '';
     classNotes = current?.notes ?? '';
+    classPrompt = current?.prompt ?? '';
     const normalizedSchoolId = normalizeSchoolId(current?.school);
     classSchoolId = normalizedSchoolId ? String(normalizedSchoolId) : '';
     selectedLearnerId = null;
     newLearnerName = '';
     newLearnerEmail = '';
     newLearnerNotes = '';
+    newLearnerPrompt = '';
     learnerModalMode = 'create';
-    if (id) {
+    if (id && !readOnly) {
       fetchLearners(id);
+    } else {
+      learners = [];
     }
   };
 
@@ -1584,7 +2428,11 @@
       return;
     }
     classDetailView = 'learners';
-    await fetchLearners(targetId);
+    if (!classReadOnly) {
+      await fetchLearners(targetId);
+    } else {
+      learners = [];
+    }
   };
 
   const openAssignmentsForClass = async (id) => {
@@ -1592,6 +2440,10 @@
     if (!targetId) return;
     classDetailView = 'assignments';
     selectedPlanClassId = targetId;
+    if (classReadOnly) {
+      planAssignments = [];
+      return;
+    }
     if (!sheets.length && !loadingSheets) {
       await fetchSheets();
     }
@@ -1604,7 +2456,7 @@
   };
 
   const createClass = async () => {
-    if (!token) return;
+    if (!token || !isActivatedUser) return;
     creatingClass = true;
     classError = '';
     try {
@@ -1616,6 +2468,7 @@
           year: newClassYear,
           profession: newClassProfession,
           notes: newClassNotes,
+          prompt: newClassPrompt,
           school: schoolId
         })
       });
@@ -1628,6 +2481,8 @@
       newClassYear = '';
       newClassProfession = '';
       newClassNotes = '';
+      newClassPrompt = '';
+      newClassSchoolId = '';
       await fetchClasses();
     } catch (err) {
       classError = err?.message ?? 'Klasse konnte nicht erstellt werden';
@@ -1638,6 +2493,10 @@
 
   const updateClass = async () => {
     if (!selectedClassId) return;
+    if (classReadOnly) {
+      classError = 'Admin: Fremde Klassen sind schreibgeschuetzt.';
+      return;
+    }
     savingClass = true;
     classError = '';
     try {
@@ -1650,6 +2509,7 @@
           year: classYear,
           profession: classProfession,
           notes: classNotes,
+          prompt: classPrompt,
           school: schoolId
         })
       });
@@ -1670,6 +2530,13 @@
     const targetId = id ?? selectedClassId;
     if (!targetId) return;
     const current = classes.find((entry) => entry.id === targetId);
+    if (isAdmin) {
+      const ownerId = normalizeUserId(current?.user);
+      if (ownerId !== null && userId !== null && ownerId !== userId) {
+        classError = 'Admin: Fremde Klassen koennen hier nicht geloescht werden.';
+        return;
+      }
+    }
     const classLabel = current?.name ? `Klasse "${current.name}"` : 'Klasse';
     if (!confirmDelete(classLabel)) return;
     deletingClass = true;
@@ -1698,7 +2565,7 @@
   };
 
   const fetchLearners = async (classId) => {
-    if (!token || !classId) return;
+    if (!token || !isActivatedUser || !classId || classReadOnly) return;
     loadingLearners = true;
     learnerError = '';
     try {
@@ -1734,6 +2601,7 @@
     newLearnerName = current?.name ?? '';
     newLearnerEmail = current?.email ?? '';
     newLearnerNotes = current?.notes ?? '';
+    newLearnerPrompt = current?.prompt ?? '';
     selectedLearnerCode = current?.code ?? '';
     learnerModalMode = 'edit';
     showLearnerModal = true;
@@ -1750,7 +2618,8 @@
           classroom: selectedClassId,
           name: newLearnerName,
           email: newLearnerEmail,
-          notes: newLearnerNotes
+          notes: newLearnerNotes,
+          prompt: newLearnerPrompt
         })
       });
       const payload = await readPayload(res);
@@ -1760,6 +2629,7 @@
       }
       newLearnerName = '';
       newLearnerNotes = '';
+      newLearnerPrompt = '';
       await fetchLearners(selectedClassId);
     } catch (err) {
       learnerError = err?.message ?? 'Lernende konnten nicht erstellt werden';
@@ -1778,7 +2648,8 @@
         body: JSON.stringify({
           id: selectedLearnerId,
           name: newLearnerName,
-          notes: newLearnerNotes
+          notes: newLearnerNotes,
+          prompt: newLearnerPrompt
         })
       });
       const payload = await readPayload(res);
@@ -1788,6 +2659,7 @@
       }
       newLearnerName = '';
       newLearnerNotes = '';
+      newLearnerPrompt = '';
       selectedLearnerCode = '';
       learnerModalMode = 'create';
       await fetchLearners(selectedClassId);
@@ -1820,6 +2692,7 @@
         selectedLearnerCode = '';
         newLearnerName = '';
         newLearnerNotes = '';
+        newLearnerPrompt = '';
         learnerModalMode = 'create';
       }
       await fetchLearners(selectedClassId);
@@ -1859,34 +2732,59 @@
     newLearnerName = '';
     newLearnerNotes = '';
     learnerModalMode = 'create';
+    classPrompt = '';
   };
 
   const resetSchoolSelection = () => {
     selectedSchoolId = null;
     schoolName = '';
     schoolCss = '';
+    schoolPrompt = '';
   };
 
   const getTabSwitchLabel = (tab) => {
+    if (tab === 'collections') return 'Inhalte';
     if (tab === 'classes') return 'Klassenliste';
     if (tab === 'schools') return 'Schulliste';
+    if (tab === 'shop') return 'Shop';
     if (tab === 'settings') return 'Einstellungen';
     return 'anderer Bereich';
   };
 
+  const getEditorReturnLabel = () => {
+    if (editorReturnTab === 'classes') return 'Klassen';
+    if (editorReturnTab === 'schools') return 'Schulen';
+    if (editorReturnTab === 'shop') return 'Shop';
+    if (editorReturnTab === 'settings') return 'Einstellungen';
+    return 'Inhalte';
+  };
+
   const switchTab = async (tab) => {
     if (activeTab === tab) return;
-    if (activeTab === 'editor' && selectedId && tab !== 'editor') {
+    const currentTab = activeTab;
+    if (currentTab === 'editor' && selectedId && tab !== 'editor') {
       const canLeave = await maybeWarnAndSaveBeforeLeavingEditor(getTabSwitchLabel(tab));
       if (!canLeave) return;
+    }
+    if (tab === 'editor' && currentTab !== 'editor') {
+      editorReturnTab = currentTab || 'collections';
     }
     activeTab = tab;
     if (tab === 'editor') {
       closeEditor({ force: true });
+    } else if (tab === 'collections') {
+      if (token && isActivatedUser && !collections.length) {
+        await fetchCollections();
+        await fetchCollectionLinks();
+      }
     } else if (tab === 'classes') {
-      resetClassSelection();
+      if (!(currentTab === 'editor' && editorReturnTab === 'classes')) {
+        resetClassSelection();
+      }
     } else if (tab === 'schools') {
-      resetSchoolSelection();
+      if (!(currentTab === 'editor' && editorReturnTab === 'schools')) {
+        resetSchoolSelection();
+      }
     } else if (tab === 'settings') {
       if (!token || loadingSchools) return;
       if (!schools.length) {
@@ -1903,6 +2801,26 @@
   const openSettings = async () => {
     showTopbarMenu = false;
     await switchTab('settings');
+  };
+
+  const openShopSheet = async (id, view = 'visual') => {
+    const target = sheets.find((sheet) => String(sheet?.id) === String(id));
+    if (!target?.id) return false;
+    if (activeTab !== 'editor') {
+      await switchTab('editor');
+      if (activeTab !== 'editor') return false;
+    }
+    selectSheet(target.id, { preserveView: true });
+    editorView =
+      view === 'html' || view === 'preview' || view === 'answers' ? view : 'visual';
+    return true;
+  };
+
+  const openCollectionSheet = async (sheetKey, view = 'visual') => {
+    const target =
+      sheetByOwnerKeyMap.get(getSheetLookupKey(selectedCollectionUserId, sheetKey)) ?? null;
+    if (!target?.id) return false;
+    return openShopSheet(target.id, view);
   };
 
   const getNextLueckeIndex = () => {
@@ -1923,13 +2841,35 @@
     return max + 1;
   };
 
+  const getNextAntworttextIndex = () => {
+    const matches = Array.from(editorContent.matchAll(/name="antworttext(\d+)"/g));
+    const max = matches.reduce((acc, match) => {
+      const value = parseInt(match[1], 10);
+      return Number.isFinite(value) ? Math.max(acc, value) : acc;
+    }, 0);
+    return max + 1;
+  };
+
+  const getNextFreitextIndex = () => {
+    const matches = Array.from(editorContent.matchAll(/name="freitext(\d+)"/g));
+    const max = matches.reduce((acc, match) => {
+      const value = parseInt(match[1], 10);
+      return Number.isFinite(value) ? Math.max(acc, value) : acc;
+    }, 0);
+    return max + 1;
+  };
+
   const pushBlockHtml = (blocks, html) => {
     const content = (html || '').trim();
     if (content === '') return;
     blocks.push(content);
   };
 
-  const STANDALONE_BLOCK_TAGS = new Set(['umfrage-matrix']);
+  const STANDALONE_BLOCK_TAGS = new Set([
+    'umfrage-matrix',
+    'freitext-block',
+    'antworttext-block'
+  ]);
   const STANDALONE_BLOCK_SELECTOR = Array.from(STANDALONE_BLOCK_TAGS).join(',');
 
   const isStandaloneBlockNode = (node) =>
@@ -1963,28 +2903,7 @@
     flush();
   };
 
-  const BLOCK_LEVEL_TAGS = new Set([
-    'h1',
-    'h2',
-    'h3',
-    'h4',
-    'h5',
-    'h6',
-    'div',
-    'section',
-    'article',
-    'table',
-    'ul',
-    'ol',
-    'blockquote',
-    'pre',
-    'hr',
-    'figure',
-    'header',
-    'footer',
-    'nav',
-    'umfrage-matrix'
-  ]);
+  const BLOCK_LEVEL_TAGS = new Set(BLOCK_LEVEL_TAG_NAMES);
 
   const isBlockHtml = (value) => {
     const trimmed = (value || '').trim();
@@ -2000,11 +2919,43 @@
     return isBlockHtml(trimmed) ? trimmed : `<p>${block}</p>`;
   };
 
-  const isUmfrageMatrixBlock = (block) => /<\s*umfrage-matrix\b/i.test(block || '');
+  const isUmfrageMatrixBlock = (block) => detectWorksheetBlockType(block).id === 'umfrage';
+  const isFreitextBlock = (block) => detectWorksheetBlockType(block).id === 'freitext';
+  const isAntworttextBlock = (block) => detectWorksheetBlockType(block).id === 'antworttext';
+  const isTitelBlock = (block) => detectWorksheetBlockType(block).id === 'titel';
+
+  const getTitelLevelFromBlock = (block = '') => {
+    const match = String(block || '').match(/^\s*<\s*h([1-3])\b/i);
+    return match ? match[1] : '1';
+  };
+
+  const buildTitelSnippet = (level = 1, text = '') => {
+    const normalizedLevel = [1, 2, 3].includes(Number(level)) ? Number(level) : 1;
+    const fallback =
+      normalizedLevel === 1
+        ? 'Titel'
+        : normalizedLevel === 2
+          ? 'Untertitel'
+          : 'Unteruntertitel';
+    return `<h${normalizedLevel}>${escapeHtml(text || fallback)}</h${normalizedLevel}>`;
+  };
 
   const extractParagraphBlocks = (html) => {
     const doc = new DOMParser().parseFromString(html || '', 'text/html');
     const blocks = [];
+
+    const isBlockLevelElement = (node) => {
+      if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+      const tag = node.tagName ? node.tagName.toLowerCase() : '';
+      if (!tag) return false;
+      return BLOCK_LEVEL_TAGS.has(tag);
+    };
+
+    const isStructuralWrapper = (node) => {
+      if (!node || node.nodeType !== Node.ELEMENT_NODE) return false;
+      const tag = node.tagName ? node.tagName.toLowerCase() : '';
+      return tag === 'div' || tag === 'section' || tag === 'article';
+    };
 
     const extractFromParagraph = (pEl) => {
       const childNodes = Array.from(pEl.childNodes);
@@ -2078,6 +3029,16 @@
           walkNodes(Array.from(el.childNodes));
           return;
         }
+        if (isStructuralWrapper(el) && el.childNodes && el.childNodes.length > 1) {
+          flush();
+          walkNodes(Array.from(el.childNodes));
+          return;
+        }
+        if (isBlockLevelElement(el)) {
+          flush();
+          appendNodesAsBlock(doc, blocks, [el]);
+          return;
+        }
         buffer.push(el);
       });
       flush();
@@ -2109,11 +3070,42 @@
     return next;
   };
 
-  const cloneVisualHistoryState = () => ({
-    blocks: [...visualBlocks],
-    views: [...visualBlockViews],
-    activeBlock: Number.isFinite(visualActiveBlock) ? visualActiveBlock : 0
-  });
+  const createVisualBlockId = () => {
+    visualBlockIdCounter += 1;
+    return `visual-block-${visualBlockIdCounter}`;
+  };
+
+  const normalizeVisualBlockIds = (ids, length) => {
+    const seen = new Set();
+    return Array.from({ length }, (_, idx) => {
+      const existing = typeof ids[idx] === 'string' ? ids[idx] : '';
+      const id = existing && !seen.has(existing) ? existing : createVisualBlockId();
+      seen.add(id);
+      return id;
+    });
+  };
+
+  const normalizeVisualBlockPromptOpen = (open, length) => {
+    const next = Array.from({ length }, (_, idx) => Boolean(open[idx]));
+    return next;
+  };
+
+  const moveIndexedEntry = (entries, from, to, fallback = undefined) => {
+    const next = [...entries];
+    const [entry] = next.splice(from, 1);
+    next.splice(to, 0, entry ?? fallback);
+    return next;
+  };
+
+  const cloneVisualHistoryState = () => {
+    visualBlockIds = normalizeVisualBlockIds(visualBlockIds, visualBlocks.length);
+    return {
+      blocks: [...visualBlocks],
+      ids: [...visualBlockIds],
+      views: [...visualBlockViews],
+      activeBlock: Number.isFinite(visualActiveBlock) ? visualActiveBlock : 0
+    };
+  };
 
   const isSameVisualHistoryState = (a, b) => {
     if (!a || !b) return false;
@@ -2192,10 +3184,15 @@
     try {
       const nextBlocks = Array.isArray(state.blocks) && state.blocks.length ? [...state.blocks] : [''];
       visualBlocks = nextBlocks;
+      visualBlockIds = normalizeVisualBlockIds(
+        Array.isArray(state.ids) ? state.ids : [],
+        nextBlocks.length
+      );
       visualBlockViews = normalizeVisualBlockViews(
         Array.isArray(state.views) ? state.views : [],
         nextBlocks.length
       );
+      visualBlockPromptOpen = normalizeVisualBlockPromptOpen([], nextBlocks.length);
       const nextActiveBlock = Number.isFinite(state.activeBlock) ? state.activeBlock : 0;
       visualActiveBlock = Math.max(0, Math.min(nextActiveBlock, nextBlocks.length - 1));
       commitVisualBlocks();
@@ -2255,17 +3252,474 @@
     if (!visualHistoryApplying) {
       resetVisualHistory();
     }
-    const blocks = extractParagraphBlocks(editorContent || '');
+    const blocks = mergeInstructionBlocksIntoFreitextBlocks(
+      extractParagraphBlocks(editorContent || '')
+    );
     visualBlocks = blocks;
-    visualBlockViews = normalizeVisualBlockViews(visualBlockViews, blocks.length);
+    visualBlockIds = normalizeVisualBlockIds(visualBlockIds, blocks.length);
+    visualBlockViews = normalizeVisualBlockViews(visualBlockViews, blocks.length).map((view, idx) =>
+      isTitelBlock(blocks[idx]) ? 'visual' : view
+    );
+    visualBlockPromptOpen = normalizeVisualBlockPromptOpen([], blocks.length);
     const normalized = blocksToHtml(blocks);
     editorContent = normalized;
     visualSyncHtml = normalized;
     renderVisualPreviewFromBlocks(blocks);
   };
 
-  const normalizeBlockContent = (value) =>
-    (value || '').replace(/<\/?p\b[^>]*>/gi, '');
+  const isFreitextBlockHtml = (value = '') => /^\s*<\s*freitext-block\b/i.test(value || '');
+
+  const normalizeBlockContent = (value) => {
+    const html = value || '';
+    if (isFreitextBlockHtml(html)) return html.trim();
+    return html.replace(/<\/?p\b[^>]*>/gi, '');
+  };
+
+  const parseHtmlFragment = (html = '') => {
+    if (!browser) return { doc: null, container: null };
+    const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
+    const container = doc.body.firstElementChild;
+    return { doc, container };
+  };
+
+  const FREITEXT_INSTRUCTION_SELECTOR = 'freitext-anweisung, freitext-instruction';
+  const FREITEXT_CRITERION_SELECTOR = 'freitext-teil, freitext-part, freitext-kriterium';
+  const FREITEXT_PREMISE_SELECTOR =
+    'freitext-praemisse, freitext-premise, freitext-wert, freitext-value';
+
+  const parseFreitextPremiseRequired = (entry) => {
+    if (entry?.hasAttribute?.('optional')) return false;
+    const raw = (entry?.getAttribute?.('required') || '').trim().toLowerCase();
+    return !(raw === '0' || raw === 'false' || raw === 'nein' || raw === 'no');
+  };
+
+  const setOptionalAttribute = (node, name, value) => {
+    const normalized = String(value ?? '').trim();
+    if (normalized) node.setAttribute(name, normalized);
+  };
+
+  const getFreitextInstructionHtmlFromString = (html = '') => {
+    const match = String(html || '').match(
+      /<\s*(freitext-anweisung|freitext-instruction)\b[^>]*>([\s\S]*?)<\/\s*\1\s*>/i
+    );
+    return (match?.[2] || '').trim();
+  };
+
+  const getFreitextOpeningTagFromString = (html = '') =>
+    String(html || '').match(/<\s*freitext-block\b[^>]*>/i)?.[0] || '';
+
+  const getHtmlAttributeFromString = (tag = '', name = '') => {
+    const escapedName = String(name || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`\\s${escapedName}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+    const match = String(tag || '').match(pattern);
+    return (match?.[2] ?? match?.[3] ?? match?.[4] ?? '').trim();
+  };
+
+  const buildLegacyFreitextInstructionHtmlFromString = (html = '') => {
+    const openingTag = getFreitextOpeningTagFromString(html);
+    if (!openingTag) return '';
+    const title = getHtmlAttributeFromString(openingTag, 'title');
+    const task =
+      getHtmlAttributeFromString(openingTag, 'task') ||
+      getHtmlAttributeFromString(openingTag, 'instruction');
+    const minLength = getHtmlAttributeFromString(openingTag, 'min-length');
+    const maxLength = getHtmlAttributeFromString(openingTag, 'max-length');
+    const parts = [];
+    if (title) parts.push(`<h2>${escapeHtml(title)}</h2>`);
+    if (task) parts.push(`<p>${escapeHtml(task)}</p>`);
+    if (minLength || maxLength) {
+      const limits = [];
+      if (minLength) limits.push(`mind. ${minLength} Zeichen`);
+      if (maxLength) limits.push(`max. ${maxLength} Zeichen`);
+      parts.push(`<p><em>${escapeHtml(limits.join(' · '))}</em></p>`);
+    }
+    return parts.join('\n');
+  };
+
+  const getFreitextElementFromContainer = (container) =>
+    container?.querySelector?.('freitext-block') ?? null;
+
+  const getFreitextInstructionNode = (freitext) =>
+    freitext?.querySelector?.(FREITEXT_INSTRUCTION_SELECTOR) ?? null;
+
+  const hasFreitextInstructionHtml = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    const freitext = getFreitextElementFromContainer(container);
+    return Boolean((getFreitextInstructionNode(freitext)?.innerHTML || '').trim());
+  };
+
+  const getFreitextInstructionHtml = (html = '') => {
+    const explicitFromString = getFreitextInstructionHtmlFromString(html);
+    if (explicitFromString) return explicitFromString;
+    const { container } = parseHtmlFragment(html);
+    const freitext = getFreitextElementFromContainer(container);
+    const instruction = getFreitextInstructionNode(freitext);
+    return (instruction?.innerHTML || '').trim();
+  };
+
+  const getFreitextRows = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    const freitext = getFreitextElementFromContainer(container);
+    const rows = Number(freitext?.getAttribute?.('rows') || 0);
+    return Number.isFinite(rows) && rows > 0 ? Math.floor(rows) : 10;
+  };
+
+  const getFreitextPlaceholder = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    const freitext = getFreitextElementFromContainer(container);
+    return freitext?.getAttribute?.('placeholder') || 'Schreibe deinen Text hier...';
+  };
+
+  const getFreitextCriteria = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    const freitext = getFreitextElementFromContainer(container);
+    if (!freitext) return [];
+    return Array.from(freitext.querySelectorAll(FREITEXT_CRITERION_SELECTOR)).map(
+      (entry, index) => ({
+        key: (entry.getAttribute('key') || entry.getAttribute('name') || '').trim(),
+        label: (
+          entry.getAttribute('label') ||
+          entry.getAttribute('title') ||
+          entry.getAttribute('name') ||
+          `Element ${index + 1}`
+        ).trim(),
+        description: (entry.textContent || '').replace(/\s+/g, ' ').trim()
+      })
+    );
+  };
+
+  const getFreitextPremises = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    const freitext = getFreitextElementFromContainer(container);
+    if (!freitext) return [];
+    return Array.from(freitext.querySelectorAll(FREITEXT_PREMISE_SELECTOR)).map(
+      (entry, index) => {
+        const sourceUrl = (
+          entry.getAttribute('source') ||
+          entry.getAttribute('href') ||
+          entry.getAttribute('url') ||
+          ''
+        ).trim();
+        return {
+          key: (entry.getAttribute('key') || entry.getAttribute('name') || '').trim(),
+          label: (
+            entry.hasAttribute('label')
+              ? entry.getAttribute('label')
+              : entry.getAttribute('title') ||
+                entry.getAttribute('name') ||
+                entry.getAttribute('key') ||
+                `Praemisse ${index + 1}`
+          ).trim(),
+          description: (entry.textContent || '').replace(/\s+/g, ' ').trim(),
+          sourceUrl,
+          sourceLabel: (
+            entry.getAttribute('source-label') ||
+            entry.getAttribute('link-label') ||
+            (sourceUrl ? 'Quelle oeffnen' : '')
+          ).trim(),
+          required: parseFreitextPremiseRequired(entry)
+        };
+      }
+    );
+  };
+
+  const buildLegacyFreitextInstructionHtml = (freitext) => {
+    if (!freitext) return '';
+    const parts = [];
+    const title = (freitext.getAttribute('title') || '').trim();
+    const task = (
+      freitext.getAttribute('task') ||
+      freitext.getAttribute('instruction') ||
+      ''
+    ).trim();
+    const minLength = (freitext.getAttribute('min-length') || '').trim();
+    const maxLength = (freitext.getAttribute('max-length') || '').trim();
+    if (title) parts.push(`<h2>${escapeHtml(title)}</h2>`);
+    if (task) parts.push(`<p>${escapeHtml(task)}</p>`);
+    if (minLength || maxLength) {
+      const limits = [];
+      if (minLength) limits.push(`mind. ${minLength} Zeichen`);
+      if (maxLength) limits.push(`max. ${maxLength} Zeichen`);
+      parts.push(`<p><em>${escapeHtml(limits.join(' · '))}</em></p>`);
+    }
+    return parts.join('\n');
+  };
+
+  const setFreitextInstructionHtml = (html = '', instructionHtml = '') => {
+    const { doc, container } = parseHtmlFragment(html);
+    if (!doc || !container) return html || '';
+    const freitext = getFreitextElementFromContainer(container);
+    if (!freitext) return container.innerHTML;
+    const normalizedInstruction = String(instructionHtml ?? '').trim();
+    let instruction = getFreitextInstructionNode(freitext);
+    if (!normalizedInstruction) {
+      instruction?.remove?.();
+      return container.innerHTML;
+    }
+    if (!instruction) {
+      instruction = doc.createElement('freitext-anweisung');
+      freitext.insertBefore(instruction, freitext.firstChild);
+    }
+    if (instruction.tagName.toLowerCase() !== 'freitext-anweisung') {
+      const replacement = doc.createElement('freitext-anweisung');
+      instruction.replaceWith(replacement);
+      instruction = replacement;
+    }
+    instruction.innerHTML = normalizedInstruction;
+    return container.innerHTML;
+  };
+
+  const setFreitextCriteria = (html = '', criteria = []) => {
+    const { doc, container } = parseHtmlFragment(html);
+    if (!doc || !container) return html || '';
+    const freitext = getFreitextElementFromContainer(container);
+    if (!freitext) return container.innerHTML;
+
+    Array.from(freitext.querySelectorAll(FREITEXT_CRITERION_SELECTOR)).forEach((entry) =>
+      entry.remove()
+    );
+
+    const normalizedCriteria = criteria
+      .map((criterion, index) => ({
+        key: String(criterion?.key ?? '').trim(),
+        label: String(criterion?.label ?? '').trim() || `Element ${index + 1}`,
+        description: String(criterion?.description ?? '').trim()
+      }))
+      .filter((criterion) => criterion.label || criterion.description);
+
+    const premiseNodes = Array.from(freitext.querySelectorAll(FREITEXT_PREMISE_SELECTOR));
+    const lastPremise = premiseNodes[premiseNodes.length - 1] ?? null;
+    const referenceNode =
+      lastPremise?.nextSibling ?? getFreitextInstructionNode(freitext)?.nextSibling ?? freitext.firstChild;
+    normalizedCriteria.forEach((criterion) => {
+      const node = doc.createElement('freitext-teil');
+      if (criterion.key) node.setAttribute('key', criterion.key);
+      node.setAttribute('label', criterion.label);
+      node.textContent = criterion.description;
+      freitext.insertBefore(doc.createTextNode('\n  '), referenceNode);
+      freitext.insertBefore(node, referenceNode);
+    });
+    if (normalizedCriteria.length) {
+      freitext.insertBefore(doc.createTextNode('\n'), referenceNode);
+    }
+
+    return container.innerHTML;
+  };
+
+  const setFreitextPremises = (html = '', premises = []) => {
+    const { doc, container } = parseHtmlFragment(html);
+    if (!doc || !container) return html || '';
+    const freitext = getFreitextElementFromContainer(container);
+    if (!freitext) return container.innerHTML;
+
+    Array.from(freitext.querySelectorAll(FREITEXT_PREMISE_SELECTOR)).forEach((entry) =>
+      entry.remove()
+    );
+
+    const normalizedPremises = premises
+      .map((premise, index) => ({
+        key: String(premise?.key ?? '').trim(),
+        label: String(premise?.label ?? '').trim(),
+        description: String(premise?.description ?? '').trim(),
+        sourceUrl: String(premise?.sourceUrl ?? '').trim(),
+        sourceLabel: String(premise?.sourceLabel ?? '').trim(),
+        required: premise?.required !== false
+      }))
+      .filter((premise) => premise.label || premise.description || premise.sourceUrl || !premise.key);
+
+    const referenceNode = getFreitextInstructionNode(freitext)?.nextSibling ?? freitext.firstChild;
+
+    normalizedPremises.forEach((premise) => {
+      const node = doc.createElement('freitext-praemisse');
+      if (premise.key) node.setAttribute('key', premise.key);
+      node.setAttribute('label', premise.label);
+      setOptionalAttribute(node, 'source', premise.sourceUrl);
+      setOptionalAttribute(node, 'source-label', premise.sourceLabel);
+      if (!premise.required) node.setAttribute('optional', '');
+      node.textContent = premise.description;
+      freitext.insertBefore(doc.createTextNode('\n  '), referenceNode);
+      freitext.insertBefore(node, referenceNode);
+    });
+    if (normalizedPremises.length) {
+      freitext.insertBefore(doc.createTextNode('\n'), referenceNode);
+    }
+
+    return container.innerHTML;
+  };
+
+  const getEditableFreitextInstructionHtml = (html = '') => {
+    const explicit = getFreitextInstructionHtml(html);
+    if (explicit) return explicit;
+    const legacyFromString = buildLegacyFreitextInstructionHtmlFromString(html);
+    if (legacyFromString) return legacyFromString;
+    const { container } = parseHtmlFragment(html);
+    return buildLegacyFreitextInstructionHtml(getFreitextElementFromContainer(container));
+  };
+
+  const isInstructionCandidateBlock = (block = '') => {
+    if (!String(block || '').trim()) return false;
+    const type = detectWorksheetBlockType(block).id;
+    return type !== 'freitext' && type !== 'antworttext' && type !== 'umfrage';
+  };
+
+  const mergeInstructionBlocksIntoFreitextBlocks = (blocks = []) => {
+    const result = [];
+    let pendingInstructionBlocks = [];
+
+    const flushPending = () => {
+      if (!pendingInstructionBlocks.length) return;
+      result.push(...pendingInstructionBlocks);
+      pendingInstructionBlocks = [];
+    };
+
+    for (let index = 0; index < blocks.length; index += 1) {
+      const block = blocks[index];
+      if (isFreitextBlock(block)) {
+        const trailingInstructionBlocks = [];
+        let nextIndex = index + 1;
+        while (
+          nextIndex < blocks.length &&
+          isInstructionCandidateBlock(blocks[nextIndex])
+        ) {
+          trailingInstructionBlocks.push(blocks[nextIndex]);
+          nextIndex += 1;
+        }
+        if (
+          (pendingInstructionBlocks.length || trailingInstructionBlocks.length) &&
+          !hasFreitextInstructionHtml(block)
+        ) {
+          const instructionHtml = [...pendingInstructionBlocks, ...trailingInstructionBlocks]
+            .map((entry) => renderBlockHtml(entry))
+            .join('\n');
+          result.push(setFreitextInstructionHtml(block, instructionHtml));
+          pendingInstructionBlocks = [];
+          index = nextIndex - 1;
+          continue;
+        }
+        flushPending();
+        result.push(block);
+        continue;
+      }
+
+      if (isInstructionCandidateBlock(block)) {
+        pendingInstructionBlocks.push(block);
+        continue;
+      }
+
+      flushPending();
+      result.push(block);
+    }
+
+    flushPending();
+    return result.length ? result : [''];
+  };
+
+  const getBlockPromptFromHtml = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return '';
+    const first = container.firstElementChild;
+    if (first && first.tagName && first.tagName.toLowerCase() === 'abu-block-prompt') {
+      return (first.textContent ?? '').trim();
+    }
+    const marker = container.querySelector('abu-block-prompt');
+    return (marker?.textContent ?? '').trim();
+  };
+
+  const setBlockPromptInHtml = (html = '', prompt = '') => {
+    const { doc, container } = parseHtmlFragment(html);
+    if (!doc || !container) return html || '';
+    const normalizedPrompt = String(prompt ?? '').trim();
+    const first = container.firstElementChild;
+    const existing =
+      first && first.tagName && first.tagName.toLowerCase() === 'abu-block-prompt'
+        ? first
+        : container.querySelector('abu-block-prompt');
+    if (!normalizedPrompt) {
+      existing?.remove?.();
+      return container.innerHTML;
+    }
+    const marker = existing || doc.createElement('abu-block-prompt');
+    marker.textContent = normalizedPrompt;
+    if (!existing) {
+      container.insertBefore(marker, container.firstChild);
+    }
+    return container.innerHTML;
+  };
+
+  const listLueckeGapsFromHtml = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return [];
+    const gaps = Array.from(container.querySelectorAll('luecke-gap'));
+    return gaps.map((gap) => ({
+      name: (gap.getAttribute('name') || '').trim(),
+      prompt: gap.getAttribute('prompt') || gap.getAttribute('data-prompt') || '',
+      solution: (gap.textContent || '').trim()
+    }));
+  };
+
+  const setLueckeGapPromptInHtml = (html = '', gapName = '', prompt = '') => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return html || '';
+    const normalizedName = String(gapName ?? '').trim();
+    if (!normalizedName) return html || '';
+    const normalizedPrompt = String(prompt ?? '');
+    const gap = Array.from(container.querySelectorAll('luecke-gap')).find(
+      (entry) => (entry.getAttribute('name') || '').trim() === normalizedName
+    );
+    if (!gap) return container.innerHTML;
+    const hasLegacyPrompt = gap.hasAttribute('data-prompt');
+    if (normalizedPrompt.trim() === '') {
+      gap.removeAttribute('prompt');
+      gap.removeAttribute('data-prompt');
+    } else {
+      gap.setAttribute('prompt', normalizedPrompt);
+      if (hasLegacyPrompt) {
+        gap.setAttribute('data-prompt', normalizedPrompt);
+      }
+    }
+    return container.innerHTML;
+  };
+
+  const setLueckeGapSolutionInHtml = (html = '', gapName = '', solution = '') => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return html || '';
+    const normalizedName = String(gapName ?? '').trim();
+    if (!normalizedName) return html || '';
+    const normalizedSolution = String(solution ?? '').trim();
+    const gap = Array.from(container.querySelectorAll('luecke-gap')).find(
+      (entry) => (entry.getAttribute('name') || '').trim() === normalizedName
+    );
+    if (!gap) return container.innerHTML;
+    gap.textContent = normalizedSolution;
+    return container.innerHTML;
+  };
+
+  const setVisualBlockPrompt = (index, prompt) => {
+    const current = visualBlocks[index] ?? '';
+    const next = setBlockPromptInHtml(current, prompt);
+    updateVisualBlock(index, next, {
+      coalesce: true,
+      chunkKey: `block:${index}:prompt`
+    });
+  };
+
+  const setVisualBlockGapPrompt = (index, gapName, prompt) => {
+    const current = visualBlocks[index] ?? '';
+    const next = setLueckeGapPromptInHtml(current, gapName, prompt);
+    updateVisualBlock(index, next, {
+      coalesce: true,
+      chunkKey: `block:${index}:gap:${gapName}:prompt`
+    });
+  };
+
+  const setVisualBlockGapSolution = (index, gapName, solution) => {
+    const current = visualBlocks[index] ?? '';
+    const next = setLueckeGapSolutionInHtml(current, gapName, solution);
+    updateVisualBlock(index, next, {
+      coalesce: true,
+      chunkKey: `block:${index}:gap:${gapName}:solution`
+    });
+  };
 
   const commitVisualBlocks = () => {
     const normalized = visualBlocks.map((block) => normalizeBlockContent(block));
@@ -2274,6 +3728,7 @@
       visualBlocks = normalized;
     }
     const nextBlocks = hasChanges ? normalized : visualBlocks;
+    visualBlockIds = normalizeVisualBlockIds(visualBlockIds, nextBlocks.length);
     const nextHtml = blocksToHtml(nextBlocks);
     editorContent = nextHtml;
     visualSyncHtml = nextHtml;
@@ -2298,33 +3753,78 @@
     next.splice(index, 1);
     if (!next.length) next.push('');
     visualBlocks = next;
+    const nextIds = [...visualBlockIds];
+    nextIds.splice(index, 1);
+    visualBlockIds = normalizeVisualBlockIds(nextIds, next.length);
     const nextViews = [...visualBlockViews];
     nextViews.splice(index, 1);
     visualBlockViews = normalizeVisualBlockViews(nextViews, next.length);
+    const nextPrompts = [...visualBlockPromptOpen];
+    nextPrompts.splice(index, 1);
+    visualBlockPromptOpen = normalizeVisualBlockPromptOpen(nextPrompts, next.length);
+    const nextSelections = [...visualBlockSelections];
+    nextSelections.splice(index, 1);
+    visualBlockSelections = nextSelections.slice(0, next.length);
+    const nextRevisions = [...visualBlockInputRevisions];
+    nextRevisions.splice(index, 1);
+    visualBlockInputRevisions = nextRevisions.slice(0, next.length);
     commitVisualBlocks();
   };
 
   const moveVisualBlock = (from, to) => {
     if (from === null || to === null || from === to) return;
     if (from < 0 || from >= visualBlocks.length) return;
+    if (to < 0 || to > visualBlocks.length) return;
     const next = [...visualBlocks];
     const [item] = next.splice(from, 1);
     const adjusted = from < to ? to - 1 : to;
+    if (adjusted === from) return;
     if (adjusted < 0 || adjusted > next.length) return;
     pushVisualHistorySnapshot();
     next.splice(adjusted, 0, item);
     visualBlocks = next;
+    visualBlockIds = normalizeVisualBlockIds(
+      moveIndexedEntry(visualBlockIds, from, adjusted, createVisualBlockId()),
+      next.length
+    );
     const nextViews = [...visualBlockViews];
     const [view] = nextViews.splice(from, 1);
     nextViews.splice(adjusted, 0, view ?? 'html');
     visualBlockViews = normalizeVisualBlockViews(nextViews, next.length);
+    const nextPrompts = [...visualBlockPromptOpen];
+    const [promptOpen] = nextPrompts.splice(from, 1);
+    nextPrompts.splice(adjusted, 0, Boolean(promptOpen));
+    visualBlockPromptOpen = normalizeVisualBlockPromptOpen(nextPrompts, next.length);
+    visualBlockSelections = moveIndexedEntry(visualBlockSelections, from, adjusted).slice(
+      0,
+      next.length
+    );
+    visualBlockInputRevisions = moveIndexedEntry(
+      visualBlockInputRevisions,
+      from,
+      adjusted,
+      0
+    ).slice(0, next.length);
+    visualActiveBlock = adjusted;
     commitVisualBlocks();
   };
 
   const isEditableDragTarget = (event) => {
     const target = event?.target;
     if (!target || !(target instanceof Element)) return false;
-    return Boolean(target.closest('input, textarea, [contenteditable="true"]'));
+    return Boolean(
+      target.closest(
+        [
+          '.block-format-tools',
+          'input',
+          'textarea',
+          'select',
+          'button',
+          'a',
+          '[contenteditable="true"]'
+        ].join(', ')
+      )
+    );
   };
 
   const removeBlockDragImage = () => {
@@ -2415,15 +3915,43 @@
     visualBlockViews = normalizeVisualBlockViews(next, visualBlocks.length);
   };
 
+  const toggleVisualBlockPrompts = (index) => {
+    const next = [...visualBlockPromptOpen];
+    next[index] = !next[index];
+    visualBlockPromptOpen = normalizeVisualBlockPromptOpen(next, visualBlocks.length);
+  };
+
   const toggleVisualBlockView = (index) => {
     const currentView = visualBlockViews[index] === 'html' ? 'html' : 'visual';
     setVisualBlockView(index, currentView === 'visual' ? 'html' : 'visual');
   };
 
-  const buildLueckeSnippet = (variant = 'gap') => {
+  const buildLueckeSnippet = (width = '') => {
     const index = getNextLueckeIndex();
-    const tag = variant === 'wide' ? 'luecke-gap-wide' : 'luecke-gap';
-    return `<${tag} name="luecke${index}">Antwort</${tag}>`;
+    const trimmedWidth = (width || '').trim();
+    const widthAttr = trimmedWidth ? ` width="${escapeHtml(trimmedWidth)}"` : '';
+    return `<luecke-gap name="luecke${index}"${widthAttr}>Antwort</luecke-gap>`;
+  };
+
+  const buildAntworttextSnippet = () => {
+    const index = getNextAntworttextIndex();
+    return `<antworttext-block name="antworttext${index}" rows="8" placeholder="Schreibe deine Antwort hier...">Musterloesung</antworttext-block>`;
+  };
+
+  const buildFreitextSnippet = () => {
+    const index = getNextFreitextIndex();
+    return `<freitext-block
+  name="freitext${index}"
+  title="Freitext-Aufgabe"
+  task="Schreibe einen zusammenhaengenden Text und achte auf alle Angaben."
+  rows="12"
+  placeholder="Schreibe deinen Text hier..."
+>
+  <freitext-anweisung>
+    <h2>Freitext-Aufgabe</h2>
+    <p>Schreibe einen zusammenhaengenden Text und achte auf alle Angaben.</p>
+  </freitext-anweisung>
+</freitext-block>`;
   };
 
   const buildUmfrageSnippet = () => {
@@ -2435,22 +3963,18 @@
 </umfrage-matrix>`;
   };
 
-  const BLOCK_TEMPLATES = [
-    {
-      id: 'html',
-      label: 'HTML-Block',
-      meta: 'Quelltext',
-      view: 'html',
-      getHtml: () => ''
-    },
-    {
-      id: 'umfrage',
-      label: 'Antwortmatrix',
-      meta: 'Skalenumfrage',
-      view: 'visual',
-      getHtml: buildUmfrageSnippet
-    }
-  ];
+  const BLOCK_TEMPLATE_BUILDERS = {
+    html: () => '',
+    titel: () => buildTitelSnippet(1),
+    freitext: buildFreitextSnippet,
+    antworttext: buildAntworttextSnippet,
+    umfrage: buildUmfrageSnippet
+  };
+  const LUECKE_ELEMENT_TYPE = getWorksheetElementType('luecke');
+  const BLOCK_TEMPLATES = BLOCK_TEMPLATE_DEFINITIONS.map((template) => ({
+    ...template,
+    getHtml: BLOCK_TEMPLATE_BUILDERS[template.id] || (() => '')
+  }));
 
   const extractQuotedText = (value = '') => {
     const match = value.match(/"([^"]+)"|'([^']+)'/);
@@ -2519,12 +4043,29 @@
     const payload = extractPromptPayload(trimmed);
 
     if (lower.includes('luecke') || lower.includes('gap')) {
-      const variant = lower.includes('breit') || lower.includes('wide') ? 'wide' : 'gap';
+      const width = lower.includes('breit') || lower.includes('wide') ? '100%' : '';
       return {
-        html: buildLueckeSnippet(variant),
+        html: buildLueckeSnippet(width),
         blockLevel: false,
         label: 'Luecke',
         view: 'visual'
+      };
+    }
+
+    if (
+      lower.includes('freitext') ||
+      lower.includes('antworttext') ||
+      lower.includes('textarea') ||
+      lower.includes('textfeld') ||
+      lower.includes('aufsatz') ||
+      lower.includes('essay')
+    ) {
+      const isFreitext = lower.includes('freitext');
+      return {
+        html: isFreitext ? buildFreitextSnippet() : buildAntworttextSnippet(),
+        blockLevel: true,
+        label: isFreitext ? 'Freitext' : 'Antworttext',
+        view: 'html'
       };
     }
 
@@ -2541,15 +4082,26 @@
       lower.includes('ueberschrift') ||
       lower.includes('headline') ||
       lower.includes('titel') ||
+      lower.includes('untertitel') ||
+      lower.includes('unteruntertitel') ||
       /\bh[1-6]\b/.test(lower)
     ) {
       const match = lower.match(/\bh([1-6])\b/);
-      const level = match ? parseInt(match[1], 10) : lower.includes('titel') ? 1 : 2;
-      const text = payload || 'Ueberschrift';
+      const rawLevel = match
+        ? parseInt(match[1], 10)
+        : lower.includes('unteruntertitel')
+          ? 3
+          : lower.includes('untertitel')
+            ? 2
+            : lower.includes('titel')
+              ? 1
+              : 2;
+      const level = Math.max(1, Math.min(rawLevel, 3));
+      const text = payload || TITEL_LEVEL_OPTIONS[level - 1]?.label || 'Titel';
       return {
-        html: `<h${level}>${escapeHtml(text)}</h${level}>`,
+        html: buildTitelSnippet(level, text),
         blockLevel: true,
-        label: 'Ueberschrift',
+        label: 'Titel',
         view: 'visual'
       };
     }
@@ -2760,8 +4312,16 @@
     pushVisualHistorySnapshot();
     const nextBlocks = [...visualBlocks, normalized];
     visualBlocks = nextBlocks;
+    visualBlockIds = normalizeVisualBlockIds(
+      [...visualBlockIds, createVisualBlockId()],
+      nextBlocks.length
+    );
     const nextViews = [...visualBlockViews, view];
     visualBlockViews = normalizeVisualBlockViews(nextViews, nextBlocks.length);
+    visualBlockPromptOpen = normalizeVisualBlockPromptOpen(
+      [...visualBlockPromptOpen, false],
+      nextBlocks.length
+    );
     commitVisualBlocks();
     await tick();
     visualActiveBlock = Math.max(0, nextBlocks.length - 1);
@@ -2779,9 +4339,15 @@
     const clampedIndex = Math.max(0, Math.min(index, nextBlocks.length));
     nextBlocks.splice(clampedIndex, 0, normalized);
     visualBlocks = nextBlocks;
+    const nextIds = [...visualBlockIds];
+    nextIds.splice(clampedIndex, 0, createVisualBlockId());
+    visualBlockIds = normalizeVisualBlockIds(nextIds, nextBlocks.length);
     const nextViews = [...visualBlockViews];
     nextViews.splice(clampedIndex, 0, view);
     visualBlockViews = normalizeVisualBlockViews(nextViews, nextBlocks.length);
+    const nextPrompts = [...visualBlockPromptOpen];
+    nextPrompts.splice(clampedIndex, 0, false);
+    visualBlockPromptOpen = normalizeVisualBlockPromptOpen(nextPrompts, nextBlocks.length);
     commitVisualBlocks();
     await tick();
     visualActiveBlock = clampedIndex;
@@ -3037,6 +4603,30 @@
     agentInputEl.style.height = `${nextHeight}px`;
   };
 
+  const fitTextareaToContent = (node) => {
+    const resize = () => {
+      node.style.height = 'auto';
+      node.style.height = `${node.scrollHeight}px`;
+    };
+    const resizeSoon = () => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(resize);
+        return;
+      }
+      resize();
+    };
+
+    resizeSoon();
+    node.addEventListener('input', resizeSoon);
+
+    return {
+      update: resizeSoon,
+      destroy() {
+        node.removeEventListener('input', resizeSoon);
+      }
+    };
+  };
+
   const isAgentHtmlEditableContext = (context) =>
     activeTab === 'editor' &&
     Boolean(selectedId) &&
@@ -3047,6 +4637,10 @@
       if (selectedId) return `editor:sheet:${selectedId}`;
       return 'editor:list';
     }
+    if (activeTab === 'collections') {
+      if (selectedCollectionId) return `collections:collection:${selectedCollectionId}`;
+      return 'collections:list';
+    }
     if (activeTab === 'classes') {
       if (selectedClassId) return `classes:class:${selectedClassId}`;
       return 'classes:list';
@@ -3055,21 +4649,37 @@
       if (selectedSchoolId) return `schools:school:${selectedSchoolId}`;
       return 'schools:list';
     }
+    if (activeTab === 'shop') return 'shop:list';
     if (activeTab === 'settings') return 'settings';
     return 'app';
   };
 
   const getAgentMemoryForScope = (scope) => agentScopeState.getMemory(scope);
 
-  const setAgentMemoryForScope = (scope, memory) =>
+  const setAgentMemoryForScope = (scope, memory) => {
     agentScopeState.setMemory(scope, memory);
+    agentScopeVersion += 1;
+  };
 
   const getAgentDraftForScope = (scope) => agentScopeState.getDraft(scope);
 
-  const setAgentDraftForScope = (scope, draft) => agentScopeState.setDraft(scope, draft);
+  const setAgentDraftForScope = (scope, draft) => {
+    agentScopeState.setDraft(scope, draft);
+    agentScopeVersion += 1;
+    if (scope === resolveAgentMemoryScope()) {
+      const latestDraft = agentScopeState.getDraft(scope);
+      agentActiveDraft = latestDraft;
+      if (hasOpenAgentDraft(latestDraft)) {
+        agentDraftUiVisible = true;
+      }
+    }
+  };
 
   $: agentActiveScope = resolveAgentMemoryScope();
-  $: agentActiveDraft = getAgentDraftForScope(agentActiveScope);
+  $: {
+    agentScopeVersion;
+    agentActiveDraft = getAgentDraftForScope(agentActiveScope);
+  }
   $: agentDraftChangeItems = buildAgentDraftChangeItems(agentActiveDraft);
 
   const buildAgentVisibleItems = (context) => {
@@ -3108,6 +4718,15 @@
         selectedId ? `Ausgewaehltes Sheet: ${selectedId}` : 'Kein Sheet geoeffnet'
       ];
     }
+    if (context === 'collections') {
+      return [
+        `Sammlungen (${visibleCollections.length}/${collections.length})`,
+        selectedCollectionId
+          ? `Sammlung geoeffnet: ${selectedCollectionId}`
+          : 'Keine Sammlung geoeffnet',
+        `${selectedCollectionEntries.length} zugeordnete Arbeitsblaetter`
+      ];
+    }
     if (context === 'classes') {
       return [
         `Klassenliste (${visibleClasses.length}/${classes.length})`,
@@ -3120,6 +4739,13 @@
         `Schulenliste (${schools.length})`,
         selectedSchoolId ? `Schule geoeffnet: ${selectedSchoolId}` : 'Keine Schule geoeffnet',
         schoolName ? `Schulname: ${schoolName}` : 'Kein Schulname'
+      ];
+    }
+    if (context === 'shop') {
+      return [
+        `Shop-Katalog (${sheets.length})`,
+        'Didaktische Filter mit K-Stufen',
+        'Braintrade Materialtausch Mockup'
       ];
     }
     if (context === 'settings') {
@@ -3247,7 +4873,12 @@
         }
         return true;
       },
-      closeEditorToList: async () => closeEditor({ targetLabel: 'Liste' }),
+      closeEditorToList: async () => {
+        const targetTab = editorReturnTab === 'editor' ? 'collections' : editorReturnTab;
+        const before = activeTab;
+        await switchTab(targetTab);
+        return activeTab === targetTab || before === targetTab;
+      },
       setEditorView: (view) => {
         if (editorView === view) return false;
         editorView = view;
@@ -3298,6 +4929,14 @@
       payload.selectedSheetKey = selectedKey ?? '';
       return payload;
     }
+    if (context === 'collections') {
+      payload.collectionCount = collections.length;
+      payload.filteredCount = visibleCollections.length;
+      payload.selectedCollectionId = selectedCollectionId ?? null;
+      payload.selectedCollectionName = collectionName ?? '';
+      payload.collectionSheetCount = selectedCollectionEntries.length;
+      return payload;
+    }
     if (context === 'classes') {
       payload.classCount = classes.length;
       payload.selectedClassId = selectedClassId ?? null;
@@ -3308,6 +4947,11 @@
       payload.schoolCount = schools.length;
       payload.selectedSchoolId = selectedSchoolId ?? null;
       payload.selectedSchoolName = schoolName ?? '';
+      return payload;
+    }
+    if (context === 'shop') {
+      payload.materialCount = sheets.length;
+      payload.mockup = true;
       return payload;
     }
     if (context === 'settings') {
@@ -3354,10 +4998,17 @@
       Math.max(0, visualActiveBlock),
       Math.max(visualBlocks.length - 1, 0)
     );
-    const shouldAppend = !visualBlocks.length || blockLevel;
+    const normalizedHtml = (html || '').trim();
+    const shouldInsertAsBlock =
+      !visualBlocks.length || blockLevel || isBlockHtml(normalizedHtml);
 
-    if (shouldAppend) {
-      await appendVisualBlock(html, view === 'visual' ? 'visual' : 'html');
+    if (shouldInsertAsBlock) {
+      if (!visualBlocks.length) {
+        await appendVisualBlock(html, view === 'visual' ? 'visual' : 'html');
+        return 'append';
+      }
+      const insertIndex = Math.min(Math.max(0, targetIndex + 1), visualBlocks.length);
+      await insertVisualBlockAt(insertIndex, html, view === 'visual' ? 'visual' : 'html');
       return 'append';
     }
 
@@ -3369,20 +5020,10 @@
     return 'inline';
   };
 
-  const isApplyDraftPrompt = (prompt = '') =>
-    /\b(anwenden|uebernehmen|apply|ausfuehren|ausfuhren)\b/.test(
-      normalizePrompt(prompt)
-    );
-
-  const isConfirmDraftApplyPrompt = (prompt = '') =>
-    /\b(bestaetigen|bestaetige|bestatigen|bestatige|freigeben|freigabe|genehmigen|genehmige)\b/.test(
-      normalizePrompt(prompt)
-    ) || /\b(ja|ok|okay)\s+anwenden\b/.test(normalizePrompt(prompt));
-
-  const isDiscardDraftPrompt = (prompt = '') =>
-    /\b(verwerfen|verwerfe|discard|loeschen|loesche|zuruecksetzen|zurucksetzen)\b/.test(
-      normalizePrompt(prompt)
-    );
+  // Draft-Aktionen werden ausschliesslich ueber die Buttons ausgefuehrt.
+  const isApplyDraftPrompt = () => false;
+  const isConfirmDraftApplyPrompt = () => false;
+  const isDiscardDraftPrompt = () => false;
 
   const applyAgentDraft = async ({ draft, context }) => {
     const draftApplyContext = context === 'visual' ? 'visual' : 'html';
@@ -3398,7 +5039,9 @@
         ok: true,
         status:
           applied === 'append'
-            ? 'Vorschlag als neuer Block angewendet.'
+            ? draftApplyContext === 'visual'
+              ? 'Vorschlag als neuer Block unter dem aktiven Block angewendet.'
+              : 'Vorschlag als neuer Block angewendet.'
             : 'Vorschlag eingefuegt.',
         message: draft.message || '',
         details: {
@@ -3578,6 +5221,15 @@
         context: currentContext,
         selectedSheetId: selectedId ?? null
       });
+      const latestDraft = getAgentDraftForScope(resolveAgentMemoryScope());
+      agentActiveDraft = latestDraft;
+      if (hasOpenAgentDraft(latestDraft)) {
+        agentDraftUiVisible = true;
+      } else if (result?.action === 'insert_html' || result?.action === 'replace_html') {
+        agentDraftUiVisible = true;
+      } else if (result?.action === 'draft_apply' || result?.action === 'draft_discard') {
+        agentDraftUiVisible = false;
+      }
       agentStatus = result.displayStatus || '';
     } catch (err) {
       agentStatus = err?.message ?? 'Agent-Aufruf fehlgeschlagen';
@@ -3586,21 +5238,64 @@
     }
   };
 
-  const triggerAgentDraftAction = async (action, context = agentContext) => {
+  const triggerAgentDraftAction = async (action) => {
     if (agentPending) return;
-    if (!hasOpenAgentDraft(agentActiveDraft)) {
+    let draft = agentActiveDraft;
+    if (!hasOpenAgentDraft(draft)) {
+      const latestDraft = getAgentDraftForScope(resolveAgentMemoryScope());
+      if (hasOpenAgentDraft(latestDraft)) {
+        draft = latestDraft;
+        agentActiveDraft = latestDraft;
+      }
+    }
+    if (!hasOpenAgentDraft(draft)) {
       agentStatus = 'Kein offener Vorschlag vorhanden.';
+      agentDraftUiVisible = false;
       return;
     }
-    if (action === 'apply') {
-      await applyAgentPrompt(
-        context,
-        'bestaetige anwenden',
-        'Vorschlag wird angewendet…'
-      );
+    const draftContext = draft?.context === 'visual' ? 'visual' : 'html';
+
+    if (action === 'discard') {
+      setAgentDraftForScope(agentActiveScope, createEmptyAgentDraft());
+      agentStatus = 'Vorschlag verworfen.';
+      agentDraftUiVisible = false;
       return;
     }
-    await applyAgentPrompt(context, 'verwerfen', 'Vorschlag wird verworfen…');
+
+    if (
+      draft?.selectedSheetId !== null &&
+      draft?.selectedSheetId !== undefined &&
+      String(draft.selectedSheetId) !== String(selectedId ?? '')
+    ) {
+      agentStatus =
+        'Vorschlag gehoert zu einem anderen Sheet. Bitte oeffne das gleiche Sheet wie bei der Vorschlagserstellung.';
+      return;
+    }
+
+    if (!isAgentHtmlEditableContext(draftContext)) {
+      agentStatus = 'Vorschlag kann hier nicht angewendet werden. Bitte oeffne ein Sheet im Editor.';
+      return;
+    }
+
+    agentPending = true;
+    agentStatus = 'Vorschlag wird angewendet…';
+    try {
+      const applied = await applyAgentDraft({
+        draft,
+        context: draftContext
+      });
+      if (!applied.ok) {
+        agentStatus = applied.status || 'Vorschlag konnte nicht angewendet werden.';
+        return;
+      }
+      setAgentDraftForScope(agentActiveScope, createEmptyAgentDraft());
+      agentStatus = applied.status || 'Vorschlag angewendet.';
+      agentDraftUiVisible = false;
+    } catch (err) {
+      agentStatus = err?.message ?? 'Vorschlag konnte nicht angewendet werden.';
+    } finally {
+      agentPending = false;
+    }
   };
 
   const handleAgentKeydown = (event, context) => {
@@ -3714,9 +5409,14 @@
     ) {
       return;
     }
+    const nextRevision = (visualBlockInputRevisions[index] ?? 0) + 1;
+    visualBlockInputRevisions[index] = nextRevision;
     captureVisualSelection(index);
     updateVisualBlock(index, el.innerHTML, getVisualInputHistoryOptions(index, event, 'visual'));
     await tick();
+    if ((visualBlockInputRevisions[index] ?? 0) !== nextRevision) {
+      return;
+    }
     if (visualBlockViews[index] === 'visual' && visualActiveBlock === index) {
       restoreVisualSelection(index);
     }
@@ -3727,13 +5427,145 @@
     updateVisualBlock(index, value, getVisualInputHistoryOptions(index, event, 'html'));
   };
 
-  const handleVisualKeydown = (event) => {
+  const handleFreitextInstructionHtmlInput = (index, event) => {
+    const value = event?.currentTarget?.value ?? event?.target?.value ?? '';
+    const current = visualBlocks[index] || '';
+    updateVisualBlock(
+      index,
+      setFreitextInstructionHtml(current, value),
+      getVisualInputHistoryOptions(index, event, 'freitext-instruction-html')
+    );
+  };
+
+  const handleFreitextInstructionVisualInput = async (index, event) => {
+    const el = event?.currentTarget;
+    if (!el) return;
+    const source = event?.target;
+    if (
+      source &&
+      source !== el &&
+      (source instanceof HTMLInputElement ||
+        source instanceof HTMLTextAreaElement ||
+        source instanceof HTMLSelectElement)
+    ) {
+      return;
+    }
+    const nextRevision = (visualBlockInputRevisions[index] ?? 0) + 1;
+    visualBlockInputRevisions[index] = nextRevision;
+    captureVisualSelection(index);
+    const current = visualBlocks[index] || '';
+    updateVisualBlock(
+      index,
+      setFreitextInstructionHtml(current, el.innerHTML),
+      getVisualInputHistoryOptions(index, event, 'freitext-instruction-visual')
+    );
+    await tick();
+    if ((visualBlockInputRevisions[index] ?? 0) !== nextRevision) {
+      return;
+    }
+    if (visualBlockViews[index] === 'visual' && visualActiveBlock === index) {
+      restoreVisualSelection(index);
+    }
+  };
+
+  const updateFreitextCriterion = (blockIndex, criterionIndex, patch, event = null) => {
+    const current = visualBlocks[blockIndex] || '';
+    const criteria = getFreitextCriteria(current);
+    if (!criteria[criterionIndex]) return;
+    const nextCriteria = criteria.map((criterion, index) =>
+      index === criterionIndex ? { ...criterion, ...patch } : criterion
+    );
+    const field = Object.keys(patch || {})[0] || 'item';
+    updateVisualBlock(
+      blockIndex,
+      setFreitextCriteria(current, nextCriteria),
+      getVisualInputHistoryOptions(
+        blockIndex,
+        event,
+        `freitext-checklist:${criterionIndex}:${field}`
+      )
+    );
+  };
+
+  const addFreitextCriterion = (blockIndex) => {
+    const current = visualBlocks[blockIndex] || '';
+    const criteria = getFreitextCriteria(current);
+    const nextCriteria = [
+      ...criteria,
+      {
+        key: '',
+        label: `Element ${criteria.length + 1}`,
+        description: ''
+      }
+    ];
+    updateVisualBlock(blockIndex, setFreitextCriteria(current, nextCriteria));
+  };
+
+  const deleteFreitextCriterion = (blockIndex, criterionIndex) => {
+    const current = visualBlocks[blockIndex] || '';
+    const criteria = getFreitextCriteria(current);
+    const nextCriteria = criteria.filter((_, index) => index !== criterionIndex);
+    updateVisualBlock(blockIndex, setFreitextCriteria(current, nextCriteria));
+  };
+
+  const updateFreitextPremise = (blockIndex, premiseIndex, patch, event = null) => {
+    const current = visualBlocks[blockIndex] || '';
+    const premises = getFreitextPremises(current);
+    if (!premises[premiseIndex]) return;
+    const nextPremises = premises.map((premise, index) =>
+      index === premiseIndex ? { ...premise, ...patch } : premise
+    );
+    const field = Object.keys(patch || {})[0] || 'item';
+    updateVisualBlock(
+      blockIndex,
+      setFreitextPremises(current, nextPremises),
+      getVisualInputHistoryOptions(
+        blockIndex,
+        event,
+        `freitext-premise:${premiseIndex}:${field}`
+      )
+    );
+  };
+
+  const addFreitextPremise = (blockIndex) => {
+    const current = visualBlocks[blockIndex] || '';
+    const premises = getFreitextPremises(current);
+    const nextPremises = [
+      ...premises,
+      {
+        key: '',
+        label: '',
+        description: '',
+        sourceUrl: '',
+        sourceLabel: '',
+        required: true
+      }
+    ];
+    updateVisualBlock(blockIndex, setFreitextPremises(current, nextPremises));
+  };
+
+  const deleteFreitextPremise = (blockIndex, premiseIndex) => {
+    const current = visualBlocks[blockIndex] || '';
+    const premises = getFreitextPremises(current);
+    const nextPremises = premises.filter((_, index) => index !== premiseIndex);
+    updateVisualBlock(blockIndex, setFreitextPremises(current, nextPremises));
+  };
+
+  const handleVisualKeydown = (event, index = null) => {
     const target = event?.target;
     if (
       target instanceof HTMLInputElement ||
       target instanceof HTMLTextAreaElement ||
       target instanceof HTMLSelectElement
     ) {
+      return;
+    }
+    if (
+      event?.key === 'Enter' &&
+      Number.isInteger(index) &&
+      isTitelBlock(visualBlocks[index])
+    ) {
+      event.preventDefault();
       return;
     }
     if (isUndoShortcut(event)) {
@@ -3762,7 +5594,13 @@
       selection.removeAllRanges();
       selection.addRange(range);
     }
-    updateVisualBlock(index, el.innerHTML);
+    const current = visualBlocks[index] || '';
+    updateVisualBlock(
+      index,
+      isFreitextBlock(current) && visualBlockViews[index] === 'visual'
+        ? setFreitextInstructionHtml(current, el.innerHTML)
+        : el.innerHTML
+    );
     captureVisualSelection(index);
   };
 
@@ -3787,7 +5625,13 @@
     if (document?.execCommand) {
       document.execCommand(command, false, null);
     }
-    updateVisualBlock(index, el.innerHTML);
+    const current = visualBlocks[index] || '';
+    updateVisualBlock(
+      index,
+      isFreitextBlock(current) && visualBlockViews[index] === 'visual'
+        ? setFreitextInstructionHtml(current, el.innerHTML)
+        : el.innerHTML
+    );
     captureVisualSelection(index);
   };
 
@@ -3825,8 +5669,24 @@
     event.currentTarget.value = '';
   };
 
-  const insertSnippetIntoBlock = (index, variant = 'gap') => {
-    const snippet = buildLueckeSnippet(variant);
+  const setTitelBlockLevel = (index, event) => {
+    const level = Number(event?.currentTarget?.value || 1);
+    const normalizedLevel = [1, 2, 3].includes(level) ? level : 1;
+    const current = visualBlocks[index] || '';
+    const { doc, container } = parseHtmlFragment(current);
+    const currentHeading = container?.firstElementChild;
+    if (!doc || !container || !currentHeading || !/^h[1-3]$/i.test(currentHeading.tagName || '')) {
+      updateVisualBlock(index, buildTitelSnippet(normalizedLevel));
+      return;
+    }
+    const nextHeading = doc.createElement(`h${normalizedLevel}`);
+    nextHeading.innerHTML = currentHeading.innerHTML || TITEL_LEVEL_OPTIONS[normalizedLevel - 1]?.label || 'Titel';
+    currentHeading.replaceWith(nextHeading);
+    updateVisualBlock(index, container.innerHTML);
+  };
+
+  const insertSnippetIntoBlock = (index, width = '') => {
+    const snippet = buildLueckeSnippet(width);
     if (visualBlockViews[index] === 'visual') {
       return insertHtmlIntoVisualBlock(index, snippet);
     }
@@ -3861,19 +5721,27 @@
 
   $: if (
     (activeTab !== 'editor' || editorView !== 'preview') &&
-    (previewLueckeRuntime || previewUmfrageRuntime)
+    (previewLueckeRuntime || previewAntworttextRuntime || previewFreitextRuntime || previewUmfrageRuntime)
   ) {
     previewLueckeRuntime?.destroy();
+    previewAntworttextRuntime?.destroy();
+    previewFreitextRuntime?.destroy();
     previewUmfrageRuntime?.destroy();
     previewLueckeRuntime = null;
+    previewAntworttextRuntime = null;
+    previewFreitextRuntime = null;
     previewUmfrageRuntime = null;
     previewUser = '';
   }
 
   const destroyAnswersRuntime = () => {
     answersLueckeRuntime?.destroy();
+    answersAntworttextRuntime?.destroy();
+    answersFreitextRuntime?.destroy();
     answersUmfrageRuntime?.destroy();
     answersLueckeRuntime = null;
+    answersAntworttextRuntime = null;
+    answersFreitextRuntime = null;
     answersUmfrageRuntime = null;
   };
 
@@ -3890,7 +5758,7 @@
 
   $: if (
     (activeTab !== 'editor' || editorView !== 'answers' || !answersUserFilter) &&
-    (answersLueckeRuntime || answersUmfrageRuntime)
+    (answersLueckeRuntime || answersAntworttextRuntime || answersFreitextRuntime || answersUmfrageRuntime)
   ) {
     destroyAnswersRuntime();
   }
@@ -3903,12 +5771,28 @@
 
     if (!previewEl || !apiBaseUrl || activeTab !== 'editor' || editorView !== 'preview') return;
     ensureLueckeElements();
+    ensureAntworttextElements();
+    ensureFreitextElements();
     ensureUmfrageElements();
 
     const nextUser = `preview:${selectedKey || 'draft'}`;
     previewLueckeRuntime?.destroy();
+    previewAntworttextRuntime?.destroy();
+    previewFreitextRuntime?.destroy();
     previewUmfrageRuntime?.destroy();
     previewLueckeRuntime = createLueckeRuntime({
+      root: previewEl,
+      apiBaseUrl,
+      sheetKey: selectedKey || 'draft',
+      user: nextUser
+    });
+    previewAntworttextRuntime = createAntworttextRuntime({
+      root: previewEl,
+      apiBaseUrl,
+      sheetKey: selectedKey || 'draft',
+      user: nextUser
+    });
+    previewFreitextRuntime = createFreitextRuntime({
       root: previewEl,
       apiBaseUrl,
       sheetKey: selectedKey || 'draft',
@@ -3922,6 +5806,8 @@
     });
     previewUser = nextUser;
     await previewLueckeRuntime.refresh();
+    await previewAntworttextRuntime.refresh();
+    await previewFreitextRuntime.refresh();
     await previewUmfrageRuntime.refresh();
   };
 
@@ -3933,18 +5819,7 @@
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
 
-  const formatVersionDate = (value) => {
-    if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleString('de-CH', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+  const formatVersionDate = (value) => formatSwissDateTime(value);
 
   const getVersionTimestamp = (entry) => {
     if (!entry) return Number.NaN;
@@ -4001,10 +5876,9 @@
   const formatVersionLabel = (version) => {
     if (!version) return '';
     const versionNumber = getVersionNumber(version);
-    const state = Number(version.is_current) === 1 ? 'Aktuell' : 'Version';
     const number = versionNumber ? `V${versionNumber}` : '';
     const stamp = formatVersionDate(version.updated_at || version.created_at);
-    return [state, number, stamp].filter(Boolean).join(' · ');
+    return [number, stamp].filter(Boolean).join(' · ');
   };
 
   const describeVersion = (version) => {
@@ -4042,11 +5916,54 @@
     return null;
   };
 
+  const extractStoredAnswerText = (value = '') => {
+    const raw = String(value || '');
+    if (!raw.trim().startsWith('{')) return raw;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.answer === 'string' && parsed.answer.trim()) return parsed.answer;
+        if (typeof parsed.text === 'string' && parsed.text.trim()) return parsed.text;
+        const premiseValues =
+          parsed.premise_values && typeof parsed.premise_values === 'object'
+            ? parsed.premise_values
+            : parsed.premises && typeof parsed.premises === 'object'
+              ? parsed.premises
+              : null;
+        if (premiseValues) {
+          return Object.entries(premiseValues)
+            .map(([key, entryValue]) => `${key}: ${entryValue ?? ''}`)
+            .join('; ');
+        }
+      }
+    } catch {
+      // keep raw value
+    }
+    return raw;
+  };
+
+  const summarizeAnswerValue = (value = '', max = 180) => {
+    const normalized = extractStoredAnswerText(value).replace(/\s+/g, ' ').trim();
+    if (normalized.length <= max) return normalized;
+    return `${normalized.slice(0, Math.max(0, max - 3))}...`;
+  };
+
   const transformGaps = (container) => {
-    const gaps = Array.from(container.querySelectorAll('luecke-gap, luecke-gap-wide'));
+    const gaps = Array.from(
+      container.querySelectorAll('luecke-gap, antworttext-block, freitext-block')
+    );
     gaps.forEach((gap, idx) => {
       const key = gap.getAttribute('name') || `gap-${idx + 1}`;
-      const solution = (gap.textContent || '').trim();
+      const tag = gap.tagName.toLowerCase();
+      const solutionEl =
+        tag === 'antworttext-block'
+          ? gap.querySelector('textarea.antworttext')
+          : tag === 'freitext-block'
+          ? gap.querySelector('textarea.freitext__textarea')
+          : gap.querySelector('input.luecke');
+      const solutionSource = solutionEl?.dataset?.solution;
+      const solution =
+        tag === 'freitext-block' ? '' : (solutionSource || gap.textContent || '').trim();
       const span = document.createElement('span');
       span.className = 'gap-slot';
       span.dataset.key = key;
@@ -4080,7 +5997,7 @@
         } else {
           counts.UNKLAR++;
         }
-        const value = escapeHtml(entry.value || '');
+        const value = escapeHtml(summarizeAnswerValue(entry.value || ''));
         const user = escapeHtml(entry.user || '-');
         const age = entry.updated_at ? minutesAgo(entry.updated_at) : '';
         const chipClass =
@@ -4260,9 +6177,25 @@
     try {
       await ensureAnswersCiCss(classId);
       ensureLueckeElements();
+      ensureAntworttextElements();
+      ensureFreitextElements();
       ensureUmfrageElements();
       destroyAnswersRuntime();
       answersLueckeRuntime = createLueckeRuntime({
+        root: answersEl,
+        apiBaseUrl,
+        sheetKey: key,
+        user: userCode,
+        classroom: classId
+      });
+      answersAntworttextRuntime = createAntworttextRuntime({
+        root: answersEl,
+        apiBaseUrl,
+        sheetKey: key,
+        user: userCode,
+        classroom: classId
+      });
+      answersFreitextRuntime = createFreitextRuntime({
         root: answersEl,
         apiBaseUrl,
         sheetKey: key,
@@ -4277,6 +6210,8 @@
         classroom: classId
       });
       await answersLueckeRuntime.refresh();
+      await answersAntworttextRuntime.refresh();
+      await answersFreitextRuntime.refresh();
       await answersUmfrageRuntime.refresh();
       answersKey = key;
       answersClassKey = classId;
@@ -4359,6 +6294,8 @@
         answersUserFilter !== answersUserKey ||
         editorContent !== answersContent ||
         !answersLueckeRuntime ||
+        !answersAntworttextRuntime ||
+        !answersFreitextRuntime ||
         !answersUmfrageRuntime;
       if (shouldInitLearnerRuntime) {
         await ensureAnswersRenderMode('learner');
@@ -4390,6 +6327,8 @@
   const setPlanStatus = async (sheetKey, status) => {
     if (!selectedPlanClassId || !sheetKey) return;
     const existing = planAssignmentMap.get(sheetKey);
+    const draftPrompt =
+      planPromptDraft[sheetKey] !== undefined ? String(planPromptDraft[sheetKey] ?? '') : undefined;
     if (!status && !existing?.id) {
       if (planStatusDraft[sheetKey] !== undefined) {
         const { [sheetKey]: _, ...rest } = planStatusDraft;
@@ -4425,6 +6364,9 @@
           return;
         }
         planAssignments = planAssignments.filter((entry) => entry.id !== existing.id);
+        if (planPromptOpenKey === sheetKey) {
+          planPromptOpenKey = '';
+        }
         saved = true;
         return;
       }
@@ -4452,7 +6394,8 @@
           classroom: selectedPlanClassId,
           sheet_key: sheetKey,
           status,
-          assignment_form: existingForm
+          assignment_form: existingForm,
+          prompt: draftPrompt ?? ''
         })
       });
       const payload = await readPayload(res);
@@ -4469,7 +6412,8 @@
             classroom: selectedPlanClassId,
             sheet_key: sheetKey,
             status,
-            assignment_form: existingForm
+            assignment_form: existingForm,
+            prompt: draftPrompt ?? ''
           }
         ];
         saved = true;
@@ -4491,6 +6435,49 @@
           planStatusDraft = rest;
         }
       }
+    }
+  };
+
+  const togglePlanPrompt = (sheetKey) => {
+    if (!sheetKey) return;
+    if (planPromptOpenKey === sheetKey) {
+      planPromptOpenKey = '';
+      return;
+    }
+    const existing = planAssignmentMap.get(sheetKey);
+    const current = existing?.prompt ?? '';
+    planPromptDraft = { ...planPromptDraft, [sheetKey]: String(current ?? '') };
+    planPromptOpenKey = sheetKey;
+  };
+
+  const setPlanPrompt = async (sheetKey, prompt) => {
+    if (!selectedPlanClassId || !sheetKey) return;
+    planSaving = true;
+    planError = '';
+    const existing = planAssignmentMap.get(sheetKey);
+    if (!existing?.id) {
+      planSaving = false;
+      planError = 'Bitte zuerst zuordnen, bevor ein Prompt gespeichert wird.';
+      return;
+    }
+    const normalizedPrompt = String(prompt ?? '');
+    try {
+      const res = await apiFetch('plan', {
+        method: 'PATCH',
+        body: JSON.stringify({ id: existing.id, prompt: normalizedPrompt })
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        planError = payload?.warning || 'Prompt konnte nicht gespeichert werden';
+        return;
+      }
+      planAssignments = planAssignments.map((entry) =>
+        entry.id === existing.id ? { ...entry, prompt: normalizedPrompt } : entry
+      );
+    } catch (err) {
+      planError = err?.message ?? 'Prompt konnte nicht gespeichert werden';
+    } finally {
+      planSaving = false;
     }
   };
 
@@ -4548,6 +6535,17 @@
     return notes.length > 120 ? notes.slice(0, 120) : notes;
   }
 
+  function parseCollectionSort(value) {
+    const raw = value || 'updated_at_desc';
+    const lastUnderscore = raw.lastIndexOf('_');
+    if (lastUnderscore === -1) {
+      return { field: raw, dir: 'asc' };
+    }
+    const field = raw.slice(0, lastUnderscore);
+    const dir = raw.slice(lastUnderscore + 1) === 'desc' ? 'desc' : 'asc';
+    return { field, dir };
+  }
+
   function parseSheetSort(value) {
     const raw = value || 'updated_at_desc';
     const lastUnderscore = raw.lastIndexOf('_');
@@ -4587,6 +6585,21 @@
     }
   }
 
+  function getCollectionSortValue(entry, field) {
+    switch (field) {
+      case 'name':
+        return entry?.name ?? '';
+      case 'description':
+        return entry?.description ?? '';
+      case 'sheet_count':
+        return getCollectionCount(entry?.id);
+      case 'updated_at':
+        return entry?.updated_at ?? '';
+      default:
+        return entry?.updated_at ?? '';
+    }
+  }
+
   function getClassSortValue(entry, field) {
     switch (field) {
       case 'name':
@@ -4614,6 +6627,16 @@
     sheetSort = `${field}_${defaultDir}`;
   }
 
+  function toggleCollectionSort(field) {
+    const { field: currentField, dir } = parseCollectionSort(collectionSort);
+    if (currentField === field) {
+      collectionSort = `${field}_${dir === 'asc' ? 'desc' : 'asc'}`;
+      return;
+    }
+    const defaultDir = field === 'updated_at' ? 'desc' : field === 'sheet_count' ? 'desc' : 'asc';
+    collectionSort = `${field}_${defaultDir}`;
+  }
+
   function toggleClassSort(field) {
     const { field: currentField, dir } = parseClassSort(classSort);
     if (currentField === field) {
@@ -4626,6 +6649,15 @@
   function getSheetSortNextDir(field) {
     const { field: currentField, dir } = parseSheetSort(sheetSort);
     const defaultDir = field === 'updated_at' ? 'desc' : 'asc';
+    if (currentField === field) {
+      return dir === 'asc' ? 'desc' : 'asc';
+    }
+    return defaultDir;
+  }
+
+  function getCollectionSortNextDir(field) {
+    const { field: currentField, dir } = parseCollectionSort(collectionSort);
+    const defaultDir = field === 'updated_at' ? 'desc' : field === 'sheet_count' ? 'desc' : 'asc';
     if (currentField === field) {
       return dir === 'asc' ? 'desc' : 'asc';
     }
@@ -4645,6 +6677,11 @@
     return nextDir === 'asc' ? 'Aufsteigend sortieren' : 'Absteigend sortieren';
   }
 
+  function getCollectionSortHint(field) {
+    const nextDir = getCollectionSortNextDir(field);
+    return nextDir === 'asc' ? 'Aufsteigend sortieren' : 'Absteigend sortieren';
+  }
+
   function getClassSortHint(field) {
     const nextDir = getClassSortNextDir(field);
     return nextDir === 'asc' ? 'Aufsteigend sortieren' : 'Absteigend sortieren';
@@ -4657,8 +6694,8 @@
 
 <div
   class="app"
-  class:app--with-agent={token}
-  class:app--agent-collapsed={token && !agentSidebarOpen}
+  class:app--with-agent={token && isActivatedUser}
+  class:app--agent-collapsed={token && isActivatedUser && !agentSidebarOpen}
   class:app--ci-zag={isCiSchoolZag}
 >
   <header class="topbar">
@@ -4668,15 +6705,15 @@
         <img src="/zag_logo.png" alt="ZAG Logo" />
       </div>
     </div>
-    {#if token}
+    {#if token && isActivatedUser}
       <div class="tabs topbar-tabs">
         <button
           class="ghost ci-btn-outline topbar-tab-btn"
-          aria-pressed={activeTab === 'editor'}
-          on:click={() => switchTab('editor')}
+          aria-pressed={activeTab === 'collections' || activeTab === 'editor'}
+          on:click={() => switchTab('collections')}
           type="button"
         >
-          Inhalt
+          Inhalte
         </button>
         <button
           class="ghost ci-btn-outline topbar-tab-btn"
@@ -4688,11 +6725,11 @@
         </button>
         <button
           class="ghost ci-btn-outline topbar-tab-btn"
-          aria-pressed={activeTab === 'schools'}
-          on:click={() => switchTab('schools')}
+          aria-pressed={activeTab === 'shop'}
+          on:click={() => switchTab('shop')}
           type="button"
         >
-          Schulen
+          Shop
         </button>
       </div>
       <div class="topbar-menu" data-open={showTopbarMenu} bind:this={topbarMenuEl}>
@@ -4715,13 +6752,13 @@
         >
           <button
             class="topbar-menu-item"
-            class:is-active={activeTab === 'editor'}
+            class:is-active={activeTab === 'collections' || activeTab === 'editor'}
             role="menuitemradio"
-            aria-checked={activeTab === 'editor'}
+            aria-checked={activeTab === 'collections' || activeTab === 'editor'}
             type="button"
-            on:click={() => selectTopbarTab('editor')}
+            on:click={() => selectTopbarTab('collections')}
           >
-            Inhalt
+            Inhalte
           </button>
           <button
             class="topbar-menu-item"
@@ -4735,13 +6772,13 @@
           </button>
           <button
             class="topbar-menu-item"
-            class:is-active={activeTab === 'schools'}
+            class:is-active={activeTab === 'shop'}
             role="menuitemradio"
-            aria-checked={activeTab === 'schools'}
+            aria-checked={activeTab === 'shop'}
             type="button"
-            on:click={() => selectTopbarTab('schools')}
+            on:click={() => selectTopbarTab('shop')}
           >
-            Schulen
+            Shop
           </button>
         </div>
       </div>
@@ -4749,69 +6786,71 @@
     <div class="status">
       {#if token}
         <div class="status-user">
-          <p class="label">Angemeldet</p>
           <p class="value">{userEmail || 'User'}</p>
+          <p class="hint">{userRoleLabel}</p>
         </div>
-        <button
-          class="ghost ci-btn-outline settings-btn"
-          type="button"
-          aria-label="Einstellungen"
-          aria-pressed={activeTab === 'settings'}
-          title="Einstellungen"
-          on:click={openSettings}
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <circle cx="12" cy="12" r="3.25" fill="none" stroke="currentColor" stroke-width="1.7" />
-            <path
-              d="M19.4 15a1.7 1.7 0 0 0 .35 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.35 1.7 1.7 0 0 0-1.04 1.55V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.04-1.55 1.7 1.7 0 0 0-1.87.35l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1.04H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.04 1.7 1.7 0 0 0-.35-1.87l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10.04 3.05V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1.04 1.55 1.7 1.7 0 0 0 1.87-.35l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.55 1.04H21a2 2 0 0 1 0 4h-.1A1.7 1.7 0 0 0 19.4 15Z"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.7"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-        </button>
+        {#if isActivatedUser}
+          <button
+            class="ghost ci-btn-outline settings-btn"
+            type="button"
+            aria-label="Einstellungen"
+            aria-pressed={activeTab === 'settings'}
+            title="Einstellungen"
+            on:click={openSettings}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="3.25" fill="none" stroke="currentColor" stroke-width="1.7" />
+              <path
+                d="M19.4 15a1.7 1.7 0 0 0 .35 1.87l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05a1.7 1.7 0 0 0-1.87-.35 1.7 1.7 0 0 0-1.04 1.55V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.04-1.55 1.7 1.7 0 0 0-1.87.35l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1.04H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.55-1.04 1.7 1.7 0 0 0-.35-1.87l-.05-.05a2 2 0 1 1 2.83-2.83l.05.05A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10.04 3.05V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1.04 1.55 1.7 1.7 0 0 0 1.87-.35l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.55 1.04H21a2 2 0 0 1 0 4h-.1A1.7 1.7 0 0 0 19.4 15Z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        {/if}
         <button class="ghost ci-btn-outline" on:click={logout}>Logout</button>
-        <button
-          class="ghost ci-btn-outline agent-topbar-toggle"
-          type="button"
-          aria-pressed={agentSidebarOpen}
-          aria-label={agentSidebarOpen ? 'KI Sidebar ausblenden' : 'KI Sidebar einblenden'}
-          title={agentSidebarOpen ? 'KI Sidebar ausblenden' : 'KI Sidebar einblenden'}
-          on:click={() => (agentSidebarOpen = !agentSidebarOpen)}
-        >
-          <svg class="agent-topbar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path
-              d="M12 4v2.4"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-            <path
-              d="M7.2 8h9.6a2.8 2.8 0 0 1 2.8 2.8v5a2.8 2.8 0 0 1-2.8 2.8H7.2a2.8 2.8 0 0 1-2.8-2.8v-5A2.8 2.8 0 0 1 7.2 8Z"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.4"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-            <path
-              d="M4.4 11.7H3M21 11.7h-1.4M9.4 15.3h5.2M9 18.6v1.4M15 18.6v1.4"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.3"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-            <circle cx="9.3" cy="12" r="1" fill="currentColor" />
-            <circle cx="14.7" cy="12" r="1" fill="currentColor" />
-          </svg>
-        </button>
-      {:else}
-        <span class="hint">Bitte einloggen, um loszulegen.</span>
+        {#if isActivatedUser}
+          <button
+            class="ghost ci-btn-outline agent-topbar-toggle"
+            type="button"
+            aria-pressed={agentSidebarOpen}
+            aria-label={agentSidebarOpen ? 'KI Sidebar ausblenden' : 'KI Sidebar einblenden'}
+            title={agentSidebarOpen ? 'KI Sidebar ausblenden' : 'KI Sidebar einblenden'}
+            on:click={() => (agentSidebarOpen = !agentSidebarOpen)}
+          >
+            <svg class="agent-topbar-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M12 4v2.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M7.2 8h9.6a2.8 2.8 0 0 1 2.8 2.8v5a2.8 2.8 0 0 1-2.8 2.8H7.2a2.8 2.8 0 0 1-2.8-2.8v-5A2.8 2.8 0 0 1 7.2 8Z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M4.4 11.7H3M21 11.7h-1.4M9.4 15.3h5.2M9 18.6v1.4M15 18.6v1.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.3"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <circle cx="9.3" cy="12" r="1" fill="currentColor" />
+              <circle cx="14.7" cy="12" r="1" fill="currentColor" />
+            </svg>
+          </button>
+        {/if}
       {/if}
     </div>
   </header>
@@ -4826,38 +6865,105 @@
       <p class="hint">Bitte config.json pruefen.</p>
     </div>
   {:else if !token}
-    <div class="login">
-      <div class="card">
-        <h2>Login</h2>
-        <p class="hint">Nutze deine Zugangsdaten, um deine Arbeitsblaetter zu sehen.</p>
-        <form on:submit|preventDefault={login}>
-          <label>
-            <span>Email</span>
-            <input type="email" bind:value={loginEmail} placeholder="you@school.ch" />
-          </label>
-          <label>
-            <span>Password</span>
-            <input type="password" bind:value={loginPassword} placeholder="••••••••" />
-          </label>
-          {#if loginError}
-            <p class="error-text">{loginError}</p>
-          {/if}
-          <button class="ci-btn-primary" type="submit" disabled={loginLoading}>
-            {loginLoading ? 'Login…' : 'Login'}
-          </button>
-        </form>
-        <div class="link-row">
-          <a href="/register">Kein Account? Registriere dich hier</a>
+    <div class="login login--auth">
+      <section class="auth-card auth-card--teacher">
+        <div class="auth-card__visual">
+          <span class="auth-card__badge">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M4.5 7.5h15M7.5 4.5v15M12 7.5v12M16.5 7.5v9"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+            </svg>
+            Lehrperson
+          </span>
+          <img
+            class="auth-card__art"
+            src="/login-lehrperson.svg"
+            alt="Illustration fuer den Lehrpersonen-Login"
+          />
         </div>
-      </div>
-      <div class="card highlight">
-        <h3>Was du hier kannst</h3>
-        <ul>
-          <li>Arbeitsblaetter in HTML bearbeiten</li>
-          <li>Mehrere Sheets verwalten</li>
-          <li>Schnelles Preview im Browser</li>
-        </ul>
-      </div>
+        <div class="auth-card__body">
+          <h2>Einloggen als Lehrperson</h2>
+          <p class="auth-card__copy">
+            Verwalte Klassen, bearbeite Arbeitsblaetter und werte Antworten an einem Ort aus.
+          </p>
+          <form class="auth-form" on:submit|preventDefault={login}>
+            <label>
+              <span>Email</span>
+              <input type="email" bind:value={loginEmail} placeholder="you@school.ch" />
+            </label>
+            <label>
+              <span>Password</span>
+              <input type="password" bind:value={loginPassword} placeholder="••••••••" />
+            </label>
+            {#if loginError}
+              <p class="error-text">{loginError}</p>
+            {/if}
+            <button class="auth-submit" type="submit" disabled={loginLoading}>
+              {loginLoading ? 'Login…' : 'Lehrperson einloggen'}
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <section class="auth-card auth-card--student">
+        <div class="auth-card__visual">
+          <span class="auth-card__badge">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M4 8.5 12 4l8 4.5-8 4.5L4 8.5Zm3 5.1 5 2.8 5-2.8"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            Studierende
+          </span>
+          <img
+            class="auth-card__art"
+            src="/login-studierende.svg"
+            alt="Illustration fuer den Studierenden-Login"
+          />
+        </div>
+        <div class="auth-card__body">
+          <h2>Einloggen als Studierende</h2>
+          <p class="auth-card__copy">
+            Mit deinem persoenlichen Token direkt in deine freigegebenen Arbeitsblaetter.
+          </p>
+          <form class="auth-form" on:submit|preventDefault={loginLearner}>
+            <label>
+              <span>Token</span>
+              <input
+                type="text"
+                bind:value={learnerLoginToken}
+                placeholder="z. B. CWcT6n3Ba546"
+                autocapitalize="off"
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </label>
+            {#if learnerLoginError}
+              <p class="error-text">{learnerLoginError}</p>
+            {/if}
+            <button class="auth-submit" type="submit" disabled={learnerLoginLoading}>
+              {learnerLoginLoading ? 'Login…' : 'Studierende einloggen'}
+            </button>
+          </form>
+        </div>
+      </section>
+    </div>
+  {:else if token && !isActivatedUser}
+    <div class="card">
+      <h2>Warte auf Aktivierung</h2>
+      <p class="hint">
+        Dein Account hat Rolle 0 (default). Bitte lass deinen Account aktivieren (Rolle 1 oder 3).
+      </p>
     </div>
   {:else}
     {#if activeTab === 'editor'}
@@ -4875,16 +6981,20 @@
               <input
                 type="text"
                 bind:value={sheetFilter}
-                placeholder="Name, Key oder Inhalt"
+                placeholder="Titel oder Inhalt"
               />
             </label>
+            <a class="ci-btn-secondary" href="/import/material">Material importieren</a>
             <button
               class="ci-btn-secondary"
               on:click={() => {
                 newSheetName = '';
                 newSheetKey = '';
+                sheetError = '';
+                newSheetCollectionId = getPreferredEditableCollectionId();
                 showCreateSheetModal = true;
               }}
+              disabled={editableCollections.length === 0}
             >
               Neues Sheet
             </button>
@@ -4903,10 +7013,12 @@
             columns={sheetColumns}
             rows={visibleSheets}
             columnsTemplate={SHEET_TABLE_COLUMNS}
+            tableClass="sheet-table sheet-table--sheet-list"
             rowKey={(sheet) => sheet.id}
             onRowClick={(sheet) => selectSheet(sheet.id)}
             rowAriaLabel={(sheet) => `Sheet ${sheet.name || sheet.key || sheet.id} oeffnen`}
             actionsLabel="Aktion"
+            compactBreakpoint={900}
           >
             <svelte:fragment slot="actions" let:row>
               <button
@@ -4914,7 +7026,7 @@
                 title="Sheet loeschen"
                 aria-label="Sheet loeschen"
                 on:click|stopPropagation={() => deleteSheet(row.id)}
-                disabled={deleting}
+                disabled={deleting || (isAdmin && normalizeUserId(row?.user) !== userId)}
                 type="button"
               >
                 <svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -4938,7 +7050,12 @@
       <main class="panel editor">
         <div class="editor-header">
           <div>
-            <button class="ghost ci-btn-outline" on:click={closeEditor}>&larr; Liste</button>
+            <button
+              class="ghost ci-btn-outline"
+              on:click={() => switchTab(editorReturnTab === 'editor' ? 'collections' : editorReturnTab)}
+            >
+              &larr; {getEditorReturnLabel()}
+            </button>
           </div>
           <div class="actions">
             <div class="editor-tabs">
@@ -4957,7 +7074,7 @@
               class="ci-btn-secondary editor-action-btn"
               class:editor-action-btn--saved={sheetSaveButtonSaved}
               on:click={saveSheet}
-              disabled={saving}
+              disabled={saving || sheetReadOnly}
             >
               <span class="editor-action-btn__status" aria-hidden="true">
                 {#if saving}
@@ -4988,6 +7105,9 @@
         {#if sheetSaveStatus === 'error' && saveState}
           <p class="hint error-text">{saveState}</p>
         {/if}
+        {#if sheetReadOnly}
+          <p class="hint">Admin: Fremdes Sheet (nur lesen).</p>
+        {/if}
         <div class="editor-body">
           {#if editorView === 'html' || editorView === 'visual'}
             <div class="fields">
@@ -4997,12 +7117,23 @@
                     <span>Name</span>
                     <input type="text" bind:value={editorName} placeholder="Name" />
                   </label>
+                  <label class="editor-version-select editor-collection-select">
+                    <span>Sammlung</span>
+                    <select bind:value={editorCollectionId} disabled={sheetReadOnly}>
+                      <option value="">Sammlung waehlen</option>
+                      {#each editableCollections as collection}
+                        <option value={String(collection.id)}>
+                          {collection.name || `Sammlung #${collection.id}`}
+                        </option>
+                      {/each}
+                    </select>
+                  </label>
                   <div class="editor-version">
-                    <label class="editor-version-select">
+                    <label class="editor-version-select editor-version-picker">
                       <span>Versionen</span>
                       <select
                         bind:value={selectedVersionId}
-                        disabled={versionsLoading || sheetVersions.length === 0}
+                        disabled={sheetReadOnly || versionsLoading || sheetVersions.length === 0}
                         on:change={() => {
                           versionRestoreStatus = 'idle';
                           versionsError = '';
@@ -5021,16 +7152,16 @@
                         {/if}
                       </select>
                     </label>
-                    <button
-                      class="icon-btn ci-btn-outline version-restore-btn"
-                      class:version-restore-btn--restored={versionRestoreButtonRestored}
-                      type="button"
-                      on:click={restoreSheetVersion}
-                      disabled={restoringVersion || !selectedVersionId}
-                      aria-label="Version wiederherstellen"
-                      title={restoringVersion
-                        ? 'Version wird wiederhergestellt'
-                        : versionRestoreButtonRestored
+                      <button
+                        class="icon-btn ci-btn-outline version-restore-btn"
+                        class:version-restore-btn--restored={versionRestoreButtonRestored}
+                        type="button"
+                        on:click={restoreSheetVersion}
+                        disabled={sheetReadOnly || restoringVersion || !selectedVersionId}
+                        aria-label="Version wiederherstellen"
+                        title={restoringVersion
+                          ? 'Version wird wiederhergestellt'
+                          : versionRestoreButtonRestored
                           ? 'Version wiederhergestellt'
                           : isCurrentVersion
                             ? 'Aktuelle Version erneut als aktuell setzen'
@@ -5057,6 +7188,14 @@
                     </button>
                   </div>
                 </div>
+                <label class="editor-meta-prompt">
+                  <span>Prompt</span>
+                  <textarea
+                    rows="3"
+                    bind:value={editorPrompt}
+                    placeholder="Prompt fuer dieses Auftragsblatt (optional)"
+                  ></textarea>
+                </label>
                 {#if versionsLoading}
                   <p class="hint">Lade Versionen…</p>
                 {:else if versionsError}
@@ -5107,23 +7246,55 @@
                                       role="menuitem"
                                       on:click={() => insertBlockTemplateAt(0, template)}
                                     >
-                                      <span class="block-insert-option__label">{template.label}</span>
-                                      <span class="block-insert-option__meta">{template.meta}</span>
+                                      <span class="worksheet-type-icon block-insert-option__icon" aria-hidden="true">
+                                        <svg viewBox={template.icon.viewBox} focusable="false">
+                                          {#each template.icon.paths as path}
+                                            <path d={path} />
+                                          {/each}
+                                        </svg>
+                                      </span>
+                                      <span class="block-insert-option__text">
+                                        <span class="block-insert-option__label">{template.label}</span>
+                                        <span class="block-insert-option__meta">{template.meta}</span>
+                                      </span>
                                     </button>
                                   {/each}
                                 </div>
                               {/if}
                             </div>
                           </div>
-                          {#each visualBlocks as block, idx}
+                          {#each visualBlocks as block, idx (visualBlockIds[idx])}
+                            {@const blockType = detectWorksheetBlockType(block)}
                             <div
                               class="block-editor"
+                              class:block-editor--title={isTitelBlock(block)}
                               draggable="true"
                               on:dragstart={(event) => handleBlockDragStart(event, idx)}
                               on:dragend={handleBlockDragEnd}
                             >
+                              <span class="block-type-badge">
+                                <span class="worksheet-type-icon block-type-badge__icon" aria-hidden="true">
+                                  <svg viewBox={blockType.icon.viewBox} focusable="false">
+                                    {#each blockType.icon.paths as path}
+                                      <path d={path} />
+                                    {/each}
+                                  </svg>
+                                </span>
+                                <span>{blockType.shortLabel}</span>
+                              </span>
                               <div class="block-format-tools">
-                                {#if !isUmfrageMatrixBlock(block)}
+                                {#if isTitelBlock(block)}
+                                  <select
+                                    class="ghost ci-btn-outline tool-select tool-select--title"
+                                    aria-label="Titeltyp"
+                                    value={getTitelLevelFromBlock(block)}
+                                    on:change={(event) => setTitelBlockLevel(idx, event)}
+                                  >
+                                    {#each TITEL_LEVEL_OPTIONS as option}
+                                      <option value={option.value}>{option.label}</option>
+                                    {/each}
+                                  </select>
+                                {:else if !isUmfrageMatrixBlock(block) && !isAntworttextBlock(block)}
                                   <button
                                     class="ghost ci-btn-outline tool-btn"
                                     type="button"
@@ -5176,25 +7347,29 @@
                                     <option value="'Georgia', 'Times New Roman', serif">Aa Serif</option>
                                     <option value="'Courier New', Courier, monospace">Aa Mono</option>
                                   </select>
+                                  <select class="ghost ci-btn-outline tool-select" aria-label="Lueckenbreite" bind:value={lueckeInsertWidth}>
+                                    <option value="">Auto</option>
+                                    <option value="10ch">10ch</option>
+                                    <option value="14ch">14ch</option>
+                                    <option value="18ch">18ch</option>
+                                    <option value="24ch">24ch</option>
+                                    <option value="100%">100%</option>
+                                  </select>
                                   <button
                                     class="ghost ci-btn-outline tool-btn"
                                     type="button"
                                     title="Luecke einfuegen"
                                     aria-label="Luecke einfuegen"
                                     on:mousedown|preventDefault
-                                    on:click={() => insertSnippetIntoBlock(idx, 'gap')}
+                                    on:click={() => insertSnippetIntoBlock(idx, lueckeInsertWidth)}
                                   >
-                                    <span class="tool-icon tool-icon--gap">[]</span>
-                                  </button>
-                                  <button
-                                    class="ghost ci-btn-outline tool-btn"
-                                    type="button"
-                                    title="Luecke breit"
-                                    aria-label="Luecke breit"
-                                    on:mousedown|preventDefault
-                                    on:click={() => insertSnippetIntoBlock(idx, 'wide')}
-                                  >
-                                    <span class="tool-icon tool-icon--gap-wide">[ ]</span>
+                                    <span class="worksheet-type-icon tool-icon tool-icon--gap" aria-hidden="true">
+                                      <svg viewBox={LUECKE_ELEMENT_TYPE.icon.viewBox} focusable="false">
+                                        {#each LUECKE_ELEMENT_TYPE.icon.paths as path}
+                                          <path d={path} />
+                                        {/each}
+                                      </svg>
+                                    </span>
                                   </button>
                                   <div class="tool-divider" aria-hidden="true"></div>
                                 {/if}
@@ -5229,78 +7404,302 @@
                                     />
                                   </svg>
                                 </button>
-                                <button
-                                  class="ghost ci-btn-outline tool-btn tool-btn--view-toggle"
-                                  type="button"
-                                  on:click={() => toggleVisualBlockView(idx)}
-                                  title={
-                                    visualBlockViews[idx] === 'html'
-                                      ? 'Aktuell HTML - zu Visuell wechseln'
-                                      : 'Aktuell Visuell - zu HTML wechseln'
-                                  }
-                                  aria-label={
-                                    visualBlockViews[idx] === 'html'
-                                      ? 'Darstellung: HTML. Zu Visuell wechseln'
-                                      : 'Darstellung: Visuell. Zu HTML wechseln'
-                                  }
-                                >
-                                  {#if visualBlockViews[idx] === 'html'}
-                                    <svg
-                                      class="toggle-icon"
-                                      viewBox="0 0 24 24"
-                                      aria-hidden="true"
-                                      focusable="false"
-                                    >
-                                      <path
-                                        d="M8 9l-4 3 4 3M16 9l4 3-4 3"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.8"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                      />
-                                    </svg>
-                                  {:else}
-                                    <svg
-                                      class="toggle-icon"
-                                      viewBox="0 0 24 24"
-                                      aria-hidden="true"
-                                      focusable="false"
-                                    >
-                                      <path
-                                        d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.8"
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                      />
-                                      <circle
-                                        cx="12"
-                                        cy="12"
-                                        r="2.5"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        stroke-width="1.8"
-                                      />
-                                    </svg>
-                                  {/if}
-                                </button>
+                                {#if !isTitelBlock(block)}
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn tool-btn--view-toggle"
+                                    type="button"
+                                    on:click={() => toggleVisualBlockView(idx)}
+                                    title={
+                                      visualBlockViews[idx] === 'html'
+                                        ? 'Aktuell HTML - zu Visuell wechseln'
+                                        : 'Aktuell Visuell - zu HTML wechseln'
+                                    }
+                                    aria-label={
+                                      visualBlockViews[idx] === 'html'
+                                        ? 'Darstellung: HTML. Zu Visuell wechseln'
+                                        : 'Darstellung: Visuell. Zu HTML wechseln'
+                                    }
+                                  >
+                                    {#if visualBlockViews[idx] === 'html'}
+                                      <svg
+                                        class="toggle-icon"
+                                        viewBox="0 0 24 24"
+                                        aria-hidden="true"
+                                        focusable="false"
+                                      >
+                                        <path
+                                          d="M8 9l-4 3 4 3M16 9l4 3-4 3"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="1.8"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        />
+                                      </svg>
+                                    {:else}
+                                      <svg
+                                        class="toggle-icon"
+                                        viewBox="0 0 24 24"
+                                        aria-hidden="true"
+                                        focusable="false"
+                                      >
+                                        <path
+                                          d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="1.8"
+                                          stroke-linecap="round"
+                                          stroke-linejoin="round"
+                                        />
+                                        <circle
+                                          cx="12"
+                                          cy="12"
+                                          r="2.5"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="1.8"
+                                        />
+                                      </svg>
+                                    {/if}
+                                  </button>
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn"
+                                    class:active={visualBlockPromptOpen[idx]}
+                                    type="button"
+                                    on:click={() => toggleVisualBlockPrompts(idx)}
+                                    title={visualBlockPromptOpen[idx] ? 'Prompts ausblenden' : 'Prompts einblenden'}
+                                    aria-label={
+                                      visualBlockPromptOpen[idx]
+                                        ? 'Prompts ausblenden'
+                                        : 'Prompts einblenden und bearbeiten'
+                                    }
+                                  >
+                                    <span class="tool-icon" aria-hidden="true">
+                                      <svg
+                                        viewBox="0 0 24 24"
+                                        aria-hidden="true"
+                                        focusable="false"
+                                      >
+                                        <path
+                                          d="M21 14a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v7Z"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="1.8"
+                                          stroke-linejoin="round"
+                                        />
+                                        <path
+                                          d="M8 10h8M8 13.5h5"
+                                          fill="none"
+                                          stroke="currentColor"
+                                          stroke-width="1.8"
+                                          stroke-linecap="round"
+                                        />
+                                      </svg>
+                                    </span>
+                                  </button>
+                                {/if}
                               </div>
-                              {#if visualBlockViews[idx] === 'visual'}
+                              {#if visualBlockViews[idx] === 'visual' && isFreitextBlock(block)}
+                                {@const freitextInstructionHtml = getEditableFreitextInstructionHtml(block)}
+                                {@const freitextCriteria = getFreitextCriteria(block)}
+                                {@const freitextPremises = getFreitextPremises(block)}
+                                <div class="freitext-block-editor">
+                                  <div
+                                    class="block-editor__visual freitext-instruction-editor"
+                                    contenteditable="true"
+                                    role="textbox"
+                                    tabindex="0"
+                                    aria-multiline="true"
+                                    spellcheck="false"
+                                    aria-label="Freitext-Beschreibung visuell bearbeiten"
+                                    use:syncEditableHtml={{
+                                      html: freitextInstructionHtml,
+                                      freezeWhileFocused:
+                                        visualActiveBlock === idx && !visualHistoryApplying
+                                    }}
+                                    bind:this={visualBlockEditors[idx]}
+                                    on:focus={() => (visualActiveBlock = idx)}
+                                    on:keydown={(event) => handleVisualKeydown(event, idx)}
+                                    on:input={(event) => handleFreitextInstructionVisualInput(idx, event)}
+                                    on:mouseup={() => captureVisualSelection(idx)}
+                                    on:keyup={() => captureVisualSelection(idx)}
+                                  ></div>
+                                  <div class="freitext-checklist-editor freitext-checklist-editor--premises">
+                                    <div class="freitext-checklist-editor__header">
+                                      <strong>Praemissen</strong>
+                                      <button
+                                        class="icon-btn ci-btn-outline freitext-checklist-editor__add"
+                                        type="button"
+                                        title="Praemissenfeld hinzufuegen"
+                                        aria-label="Praemissenfeld hinzufuegen"
+                                        on:click={() => addFreitextPremise(idx)}
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                    {#if freitextPremises.length}
+                                      <ol class="freitext-checklist-editor__list">
+                                        {#each freitextPremises as premise, premiseIndex}
+                                          <li class="freitext-checklist-editor__item">
+                                            <div class="freitext-checklist-editor__fields">
+                                              <label>
+                                                <span>Titel</span>
+                                                <textarea
+                                                  class="freitext-checklist-editor__label-field"
+                                                  rows="1"
+                                                  value={premise.label}
+                                                  placeholder="z. B. Link zum Inserat"
+                                                  use:fitTextareaToContent={premise.label}
+                                                  on:input={(event) =>
+                                                    updateFreitextPremise(
+                                                      idx,
+                                                      premiseIndex,
+                                                      { label: event.currentTarget.value },
+                                                      event
+                                                  )}
+                                                ></textarea>
+                                              </label>
+                                              <label>
+                                                <span>Beschreibung</span>
+                                                <textarea
+                                                  rows="1"
+                                                  value={premise.description}
+                                                  placeholder="Was muss vor dem Schreiben eingetragen werden?"
+                                                  use:fitTextareaToContent={premise.description}
+                                                  on:input={(event) =>
+                                                    updateFreitextPremise(
+                                                      idx,
+                                                      premiseIndex,
+                                                      { description: event.currentTarget.value },
+                                                      event
+                                                  )}
+                                                ></textarea>
+                                              </label>
+                                            </div>
+                                            <button
+                                              class="icon-btn ci-btn-outline tool-btn--danger freitext-checklist-editor__delete"
+                                              type="button"
+                                              title="Praemissenfeld loeschen"
+                                              aria-label="Praemissenfeld loeschen"
+                                              on:click={() => deleteFreitextPremise(idx, premiseIndex)}
+                                            >
+                                              ×
+                                            </button>
+                                          </li>
+                                        {/each}
+                                      </ol>
+                                    {:else}
+                                      <p class="hint">Noch keine Praemissenfelder erfasst.</p>
+                                    {/if}
+                                  </div>
+                                  <div class="freitext-checklist-editor">
+                                    <div class="freitext-checklist-editor__header">
+                                      <strong>Checkliste</strong>
+                                      <button
+                                        class="icon-btn ci-btn-outline freitext-checklist-editor__add"
+                                        type="button"
+                                        title="Checklistenpunkt hinzufuegen"
+                                        aria-label="Checklistenpunkt hinzufuegen"
+                                        on:click={() => addFreitextCriterion(idx)}
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                    {#if freitextCriteria.length}
+                                      <ol class="freitext-checklist-editor__list">
+                                        {#each freitextCriteria as criterion, criterionIndex}
+                                          <li class="freitext-checklist-editor__item">
+                                            <div class="freitext-checklist-editor__fields">
+                                              <label>
+                                                <span>Titel</span>
+                                                <textarea
+                                                  class="freitext-checklist-editor__label-field"
+                                                  rows="1"
+                                                  value={criterion.label}
+                                                  placeholder="z. B. Preis"
+                                                  use:fitTextareaToContent={criterion.label}
+                                                  on:input={(event) =>
+                                                    updateFreitextCriterion(
+                                                      idx,
+                                                      criterionIndex,
+                                                      { label: event.currentTarget.value },
+                                                      event
+                                                    )}
+                                                ></textarea>
+                                              </label>
+                                              <label>
+                                                <span>Beschreibung</span>
+                                                <textarea
+                                                  rows="1"
+                                                  value={criterion.description}
+                                                  placeholder="Was muss zwingend vorkommen?"
+                                                  use:fitTextareaToContent={criterion.description}
+                                                  on:input={(event) =>
+                                                    updateFreitextCriterion(
+                                                      idx,
+                                                      criterionIndex,
+                                                      { description: event.currentTarget.value },
+                                                      event
+                                                    )}
+                                                ></textarea>
+                                              </label>
+                                            </div>
+                                            <button
+                                              class="icon-btn ci-btn-outline tool-btn--danger freitext-checklist-editor__delete"
+                                              type="button"
+                                              title="Checklistenpunkt loeschen"
+                                              aria-label="Checklistenpunkt loeschen"
+                                              on:click={() => deleteFreitextCriterion(idx, criterionIndex)}
+                                            >
+                                              ×
+                                            </button>
+                                          </li>
+                                        {/each}
+                                      </ol>
+                                    {:else}
+                                      <p class="hint">Noch keine zwingenden Elemente erfasst.</p>
+                                    {/if}
+                                  </div>
+                                  <div class="freitext-block-editor__answer-preview" aria-hidden="true">
+                                    <textarea
+                                      class="freitext__textarea"
+                                      rows={getFreitextRows(block)}
+                                      placeholder={getFreitextPlaceholder(block)}
+                                      disabled
+                                    ></textarea>
+                                    <div class="freitext__actions">
+                                      <button
+                                        type="button"
+                                        class="check-btn ci-btn-primary"
+                                        aria-label="Aktuellen Stand pruefen"
+                                        disabled
+                                      ></button>
+                                      <input
+                                        class="freitext__question-field"
+                                        type="text"
+                                        placeholder="Optional: Was soll beim Pruefen besonders beachtet werden?"
+                                        disabled
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              {:else if visualBlockViews[idx] === 'visual'}
                                 <div
                                   class="block-editor__visual"
                                   contenteditable="true"
                                   spellcheck="false"
-                                bind:this={visualBlockEditors[idx]}
-                                on:focus={() => (visualActiveBlock = idx)}
-                                on:keydown={handleVisualKeydown}
-                                on:input={(event) => handleVisualInput(idx, event)}
-                                on:mouseup={() => captureVisualSelection(idx)}
-                                on:keyup={() => captureVisualSelection(idx)}
-                              >
-                                  {@html block}
-                                </div>
+                                  use:syncEditableHtml={{
+                                    html: block,
+                                    freezeWhileFocused:
+                                      visualActiveBlock === idx && !visualHistoryApplying
+                                  }}
+                                  bind:this={visualBlockEditors[idx]}
+                                  on:focus={() => (visualActiveBlock = idx)}
+                                  on:keydown={(event) => handleVisualKeydown(event, idx)}
+                                  on:input={(event) => handleVisualInput(idx, event)}
+                                  on:mouseup={() => captureVisualSelection(idx)}
+                                  on:keyup={() => captureVisualSelection(idx)}
+                                ></div>
                               {:else}
                                 <div class="code-editor visual-block-code-editor" aria-label="HTML-Block Editor">
                                   <pre class="code-highlight" aria-hidden="true" bind:this={visualBlockHtmlHighlights[idx]}>{#each visualBlockHtmlTokens[idx] || [] as token}<span class={`token token-${token.type}`}>{token.value}</span>{/each}</pre>
@@ -5317,6 +7716,56 @@
                                         visualBlockHtmlHighlights[idx]
                                       )}
                                   ></textarea>
+                                </div>
+                              {/if}
+                              {#if !isTitelBlock(block) && visualBlockPromptOpen[idx]}
+                                {@const blockPrompt = getBlockPromptFromHtml(block)}
+                                {@const gaps = listLueckeGapsFromHtml(block)}
+                                <div class="block-prompts">
+                                  <label class="block-prompt-field">
+                                    <span>Block Prompt</span>
+                                    <textarea
+                                      rows="3"
+                                      value={blockPrompt}
+                                      placeholder="Prompt fuer diesen Block (optional)"
+                                      on:input={(event) =>
+                                        setVisualBlockPrompt(idx, event.currentTarget.value)}
+                                    ></textarea>
+                                  </label>
+                                  {#if gaps.length}
+                                    <div class="gap-prompt-list">
+                                      <p class="hint">Luecken (Loesung & Prompt) in diesem Block</p>
+                                      {#each gaps as gap (gap.name || gap.solution)}
+                                        <label class="gap-prompt-field">
+                                          <span>{gap.name ? `Luecke ${gap.name}` : 'Luecke'}</span>
+                                          <input
+                                            type="text"
+                                            value={gap.solution}
+                                            placeholder="Loesung (Musterloesung)"
+                                            on:input={(event) =>
+                                              setVisualBlockGapSolution(
+                                                idx,
+                                                gap.name,
+                                                event.currentTarget.value
+                                              )}
+                                            disabled={!gap.name}
+                                          />
+                                          <textarea
+                                            rows="2"
+                                            value={gap.prompt}
+                                            placeholder="Prompt fuer diese Luecke (optional)"
+                                            on:input={(event) =>
+                                              setVisualBlockGapPrompt(
+                                                idx,
+                                                gap.name,
+                                                event.currentTarget.value
+                                              )}
+                                            disabled={!gap.name}
+                                          ></textarea>
+                                        </label>
+                                      {/each}
+                                    </div>
+                                  {/if}
                                 </div>
                               {/if}
                             </div>
@@ -5346,8 +7795,17 @@
                                       role="menuitem"
                                       on:click={() => insertBlockTemplateAt(idx + 1, template)}
                                     >
-                                      <span class="block-insert-option__label">{template.label}</span>
-                                      <span class="block-insert-option__meta">{template.meta}</span>
+                                      <span class="worksheet-type-icon block-insert-option__icon" aria-hidden="true">
+                                        <svg viewBox={template.icon.viewBox} focusable="false">
+                                          {#each template.icon.paths as path}
+                                            <path d={path} />
+                                          {/each}
+                                        </svg>
+                                      </span>
+                                      <span class="block-insert-option__text">
+                                        <span class="block-insert-option__label">{template.label}</span>
+                                        <span class="block-insert-option__meta">{template.meta}</span>
+                                      </span>
                                     </button>
                                   {/each}
                                 </div>
@@ -5441,34 +7899,320 @@
     </div>
     {/if}
 
-    {#if showLegacyImport}
-      <section class="panel full">
-        <div class="panel-header">
-          <div>
-            <h2>Legacy-Import</h2>
-            <p class="hint">Alte Arbeitsblaetter als Sheets importieren.</p>
-          </div>
-          <button class="ci-btn-primary" on:click={importAllLegacy} disabled={importing}>
-            {importing ? 'Importiere...' : 'Alle importieren'}
-          </button>
-        </div>
-        <div class="import-grid">
-          {#each legacySheets as legacy}
-            <div class="import-card">
-              <div class="import-title">{legacy.name}</div>
-              <div class="import-meta">Key: {legacy.key}</div>
-              <button class="ghost ci-btn-outline" on:click={() => importLegacySheet(legacy)} disabled={importing}>
-                Importieren
-              </button>
-            </div>
-          {/each}
-        </div>
-        {#if importState}
-          <p class="hint">{importState}</p>
-        {/if}
-      </section>
     {/if}
 
+    {#if activeTab === 'collections'}
+    <section class="panel full">
+      {#if !selectedCollectionId}
+        <div class="panel-header classes-overview-header">
+          <div>
+            <h2>Sammlungen</h2>
+            <p class="hint">{visibleCollections.length} / {collections.length} Eintraege</p>
+          </div>
+          <div class="sheet-toolbar">
+            <label class="sheet-filter">
+              <span>Suchen</span>
+              <input
+                type="text"
+                bind:value={collectionFilter}
+                placeholder="Name oder Beschreibung"
+              />
+            </label>
+            <button
+              class="icon-btn ci-btn-outline refresh-btn"
+              on:click={() => {
+                fetchCollections({ autoSelect: false });
+                fetchCollectionLinks();
+              }}
+              disabled={loadingCollections || loadingCollectionLinks}
+              title="Sammlungen aktualisieren"
+              aria-label="Sammlungen aktualisieren"
+              type="button"
+            >
+              <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              class="ci-btn-secondary"
+              type="button"
+              on:click={() => {
+                newCollectionName = '';
+                newCollectionDescription = '';
+                showCollectionModal = true;
+              }}
+            >
+              Neue Sammlung
+            </button>
+          </div>
+        </div>
+
+        <div class="manage-card">
+          {#if loadingCollections || loadingCollectionLinks}
+            <p class="hint">Lade Sammlungen...</p>
+          {:else if collections.length === 0}
+            <p class="hint">Noch keine Sammlungen vorhanden.</p>
+          {:else if visibleCollections.length === 0}
+            <p class="hint">Keine Treffer fuer den Filter.</p>
+          {:else}
+            <ListTable
+              columns={collectionColumns}
+              rows={visibleCollections}
+              columnsTemplate={COLLECTION_TABLE_COLUMNS}
+              tableClass="sheet-table sheet-table--collections"
+              rowKey={(entry) => entry.id}
+              onRowClick={(entry) => selectCollection(entry.id)}
+              rowAriaLabel={(entry) =>
+                `Sammlung ${entry.name || entry.id} oeffnen`
+              }
+              actionsLabel="Aktion"
+            >
+              <svelte:fragment slot="actions" let:row>
+                <button
+                  class="icon-btn ci-btn-outline"
+                  title="Sammlung loeschen"
+                  aria-label="Sammlung loeschen"
+                  on:click|stopPropagation={() => deleteCollection(row.id)}
+                  disabled={deletingCollection || (isAdmin && normalizeUserId(row?.user) !== userId)}
+                  type="button"
+                >
+                  <svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path
+                      d="M4 7h16M9 7v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M10 11v6M14 11v6M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </svelte:fragment>
+            </ListTable>
+          {/if}
+          {#if collectionError}
+            <p class="error-text">{collectionError}</p>
+          {/if}
+          {#if collectionLinkError}
+            <p class="error-text">{collectionLinkError}</p>
+          {/if}
+        </div>
+      {:else}
+        <div class="panel-header">
+          <div>
+            <button
+              class="ghost ci-btn-outline"
+              on:click={() => {
+                resetCollectionSelection();
+              }}
+              type="button"
+            >
+              Zurueck
+            </button>
+            <div class="collection-title-row">
+              <label class="collection-title-field">
+                <span>Sammlung</span>
+                <input
+                  type="text"
+                  bind:value={collectionName}
+                  placeholder="Name der Sammlung"
+                  disabled={collectionReadOnly}
+                />
+              </label>
+              <button
+                class="icon-btn ci-btn-outline collection-title-icon"
+                type="button"
+                aria-expanded={collectionDescriptionOpen}
+                aria-controls="collection-description-panel"
+                aria-label="Beschreibung anzeigen"
+                title="Beschreibung"
+                on:click={() => (collectionDescriptionOpen = !collectionDescriptionOpen)}
+              >
+                <svg class="info-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M12 17v-6M12 7.5h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="icon-btn ci-btn-outline collection-title-icon"
+                type="button"
+                on:click={saveCollection}
+                disabled={savingCollection || collectionReadOnly}
+                aria-label="Sammlung speichern"
+                title={savingCollection ? 'Sammlung wird gespeichert' : 'Sammlung speichern'}
+              >
+                {#if savingCollection}
+                  <span class="editor-action-btn__spinner" aria-hidden="true"></span>
+                {:else}
+                  <svg class="save-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path
+                      d="M5 4h11l3 3v13H5zM8 4v6h8V4M9 16h6"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                {/if}
+              </button>
+            </div>
+            {#if collectionReadOnly}
+              <p class="hint">Admin: Fremde Sammlung (nur lesen).</p>
+            {/if}
+          </div>
+          <div class="row-actions">
+            <button
+              class="icon-btn ci-btn-outline refresh-btn"
+              on:click={() => {
+                fetchCollections();
+                fetchCollectionLinks();
+              }}
+              disabled={loadingCollections || loadingCollectionLinks}
+              title="Sammlung aktualisieren"
+              aria-label="Sammlung aktualisieren"
+              type="button"
+            >
+              <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              class="ghost ci-btn-outline tool-btn--danger"
+              type="button"
+              on:click={() => deleteCollection(selectedCollectionId)}
+              disabled={deletingCollection || collectionReadOnly}
+            >
+              {deletingCollection ? 'Loesche...' : 'Loeschen'}
+            </button>
+          </div>
+        </div>
+
+        {#if collectionDescriptionOpen}
+          <div class="manage-card collection-description-panel" id="collection-description-panel">
+            <label>
+              <span>Beschreibung</span>
+              <textarea
+                rows="5"
+                bind:value={collectionDescription}
+                placeholder="Wofuer ist diese Sammlung gedacht?"
+                disabled={collectionReadOnly}
+              ></textarea>
+            </label>
+            {#if collectionError}
+              <p class="error-text">{collectionError}</p>
+            {/if}
+          </div>
+        {:else if collectionError}
+          <p class="error-text">{collectionError}</p>
+        {/if}
+
+        <div class="manage-grid">
+          <div class="manage-card manage-card--wide">
+            <div class="panel-header sheet-header">
+              <div>
+                <h3>Arbeitsblaetter</h3>
+                <p class="hint">
+                  {selectedCollectionVisibleSheets.length} / {selectedCollectionEntries.length} Eintraege
+                </p>
+              </div>
+              <div class="sheet-toolbar">
+                <label class="sheet-filter">
+                  <span>Suchen</span>
+                  <input
+                    type="text"
+                    bind:value={sheetFilter}
+                    placeholder="Titel oder Inhalt"
+                  />
+                </label>
+                <a class="ci-btn-secondary" href="/import/material">Material importieren</a>
+                <button
+                  class="ci-btn-secondary"
+                  on:click={() => {
+                    newSheetName = '';
+                    newSheetKey = '';
+                    sheetError = '';
+                    newSheetCollectionId =
+                      String(normalizeCollectionId(selectedCollectionId) ?? getPreferredEditableCollectionId());
+                    showCreateSheetModal = true;
+                  }}
+                  disabled={collectionReadOnly || editableCollections.length === 0}
+                >
+                  Neues Sheet
+                </button>
+              </div>
+            </div>
+            {#if loadingSheets || loadingCollectionLinks}
+              <p class="hint">Lade Sheets…</p>
+            {:else if selectedCollectionEntries.length === 0}
+              <p class="hint">Noch keine Sheets in dieser Sammlung vorhanden.</p>
+            {:else if selectedCollectionVisibleSheets.length === 0}
+              <p class="hint">Keine Treffer fuer den Filter.</p>
+            {:else}
+              <ListTable
+                columns={sheetColumns}
+                rows={selectedCollectionVisibleSheets}
+                columnsTemplate={SHEET_TABLE_COLUMNS}
+                tableClass="sheet-table sheet-table--sheet-list"
+                rowKey={(sheet) => sheet.id}
+                onRowClick={(sheet) => openShopSheet(sheet.id)}
+                rowAriaLabel={(sheet) => `Sheet ${sheet.name || sheet.key || sheet.id} oeffnen`}
+                actionsLabel="Aktion"
+                compactBreakpoint={900}
+              >
+                <svelte:fragment slot="actions" let:row>
+                  <button
+                    class="icon-btn ci-btn-outline"
+                    title="Sheet loeschen"
+                    aria-label="Sheet loeschen"
+                    on:click|stopPropagation={() => deleteSheet(row.id)}
+                    disabled={deleting || (isAdmin && normalizeUserId(row?.user) !== userId)}
+                    type="button"
+                  >
+                    <svg class="trash-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M4 7h16M9 7v-2a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M10 11v6M14 11v6M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </svelte:fragment>
+              </ListTable>
+            {/if}
+            {#if sheetError}
+              <p class="error-text">{sheetError}</p>
+            {/if}
+            {#if collectionLinkError}
+              <p class="error-text">{collectionLinkError}</p>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </section>
     {/if}
 
     {#if activeTab === 'classes'}
@@ -5493,10 +8237,11 @@
             </label>
             <button
               class="icon-btn ci-btn-outline refresh-btn"
-              on:click={fetchClasses}
+              on:click={() => fetchClasses({ autoSelect: false })}
               disabled={loadingClasses}
               title="Klassen aktualisieren"
               aria-label="Klassen aktualisieren"
+              type="button"
             >
               <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                 <path
@@ -5509,7 +8254,20 @@
                 />
               </svg>
             </button>
-            <button class="ci-btn-secondary" on:click={() => (showClassModal = true)}>Neue Klasse</button>
+            <button
+              class="ci-btn-secondary"
+              on:click={() => {
+                newClassName = '';
+                newClassYear = '';
+                newClassProfession = '';
+                newClassNotes = '';
+                newClassPrompt = '';
+                newClassSchoolId = '';
+                showClassModal = true;
+              }}
+            >
+              Neue Klasse
+            </button>
           </div>
         </div>
 
@@ -5540,6 +8298,7 @@
                     title="Arbeitsblaetter zuweisen"
                     aria-label="Arbeitsblaetter zuweisen"
                     on:click|stopPropagation={() => openClassAssignments(row.id)}
+                    disabled={isAdmin && normalizeUserId(row?.user) !== userId}
                     type="button"
                   >
                     <svg class="class-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -5559,6 +8318,7 @@
                     title="Studierende anzeigen"
                     aria-label="Studierende anzeigen"
                     on:click|stopPropagation={() => openLearnersForClass(row.id)}
+                    disabled={isAdmin && normalizeUserId(row?.user) !== userId}
                     type="button"
                   >
                     <svg class="class-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -5578,7 +8338,7 @@
                     title="Klasse loeschen"
                     aria-label="Klasse loeschen"
                     on:click|stopPropagation={() => deleteClass(row.id)}
-                    disabled={deletingClass}
+                    disabled={deletingClass || (isAdmin && normalizeUserId(row?.user) !== userId)}
                     type="button"
                   >
                     <svg class="class-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -5620,6 +8380,9 @@
               {className || 'Klasse'} {classYear || ''} {classProfession || ''}
               {getSchoolLabel(classSchoolId) ? ` · ${getSchoolLabel(classSchoolId)}` : ''}
             </p>
+            {#if classReadOnly}
+              <p class="hint">Admin: Fremde Klasse (nur lesen).</p>
+            {/if}
           </div>
           <div class="row-actions">
             <button
@@ -5634,6 +8397,7 @@
               class="ci-tab"
               class:selected={classDetailView === 'learners'}
               on:click={() => openLearnersForClass()}
+              disabled={classReadOnly}
               type="button"
             >
               Studierende
@@ -5642,6 +8406,7 @@
               class="ci-tab"
               class:selected={classDetailView === 'assignments'}
               on:click={() => openAssignmentsForClass()}
+              disabled={classReadOnly}
               type="button"
             >
               Arbeitsblaetter
@@ -5650,7 +8415,7 @@
               <button
                 class="icon-btn ci-btn-outline refresh-btn"
                 on:click={() => fetchLearners(selectedClassId)}
-                disabled={loadingLearners}
+                disabled={classReadOnly || loadingLearners}
                 title="Lernende aktualisieren"
                 aria-label="Lernende aktualisieren"
                 type="button"
@@ -5672,9 +8437,11 @@
                   learnerModalMode = 'create';
                   newLearnerName = '';
                   newLearnerNotes = '';
+                  newLearnerPrompt = '';
                   selectedLearnerCode = '';
                   showLearnerModal = true;
                 }}
+                disabled={classReadOnly}
                 type="button"
               >
                 Neue Lernende
@@ -5747,7 +8514,46 @@
                           <option value={option.value}>{option.label}</option>
                         {/each}
                       </select>
+                      <button
+                        class="ghost ci-btn-outline tool-btn"
+                        type="button"
+                        title="Prompt bearbeiten"
+                        aria-label="Prompt bearbeiten"
+                        on:click|preventDefault|stopPropagation={() => togglePlanPrompt(sheet.key)}
+                        disabled={!sheet.key}
+                      >
+                        Prompt
+                      </button>
                     </div>
+                    {#if sheet.key && planPromptOpenKey === sheet.key}
+                      <div class="assignment-prompt">
+                        <label>
+                          <span>Prompt</span>
+                          <textarea
+                            rows="4"
+                            value={planPromptDraft[sheet.key] ?? assignment?.prompt ?? ''}
+                            placeholder="Prompt fuer diese Zuweisung (optional)"
+                            on:input={(event) => {
+                              planPromptDraft = {
+                                ...planPromptDraft,
+                                [sheet.key]: event.currentTarget.value
+                              };
+                            }}
+                          ></textarea>
+                        </label>
+                        <div class="row-actions">
+                          <button
+                            class="ci-btn-secondary"
+                            type="button"
+                            disabled={planSaving}
+                            on:click={() =>
+                              setPlanPrompt(sheet.key, planPromptDraft[sheet.key] ?? '')}
+                          >
+                            Speichern
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
                   </label>
                 {/each}
               </div>
@@ -5762,19 +8568,28 @@
             <div class="form-grid">
               <label>
                 <span>Name</span>
-                <input type="text" bind:value={className} placeholder="Klassenname" />
+                <input type="text" bind:value={className} placeholder="Klassenname" disabled={classReadOnly} />
               </label>
               <label>
                 <span>Jahr</span>
-                <input type="text" bind:value={classYear} placeholder="2025/26" />
+                <input type="text" bind:value={classYear} placeholder="2025/26" disabled={classReadOnly} />
               </label>
               <label>
                 <span>Beruf</span>
-                <input type="text" bind:value={classProfession} placeholder="Beruf" />
+                <input type="text" bind:value={classProfession} placeholder="Beruf" disabled={classReadOnly} />
+              </label>
+              <label>
+                <span>Prompt</span>
+                <textarea
+                  rows="3"
+                  bind:value={classPrompt}
+                  placeholder="Prompt fuer diese Klasse (optional)"
+                  disabled={classReadOnly}
+                ></textarea>
               </label>
               <label>
                 <span>Schule</span>
-                <select bind:value={classSchoolId}>
+                <select bind:value={classSchoolId} disabled={classReadOnly}>
                   <option value="">Keine Schule</option>
                   {#each schools as school}
                     <option value={String(school.id)}>
@@ -5785,11 +8600,11 @@
               </label>
               <label>
                 <span>Notizen</span>
-                <textarea rows="3" bind:value={classNotes} placeholder="Notizen"></textarea>
+                <textarea rows="3" bind:value={classNotes} placeholder="Notizen" disabled={classReadOnly}></textarea>
               </label>
             </div>
             <div class="row-actions">
-              <button class="ci-btn-secondary" on:click={updateClass} disabled={savingClass} type="button">
+              <button class="ci-btn-secondary" on:click={updateClass} disabled={classReadOnly || savingClass} type="button">
                 {savingClass ? 'Speichere...' : 'Speichern'}
               </button>
             </div>
@@ -5885,6 +8700,14 @@
             <label>
               <span>Name</span>
               <input type="text" bind:value={newSchoolName} placeholder="Schulname" />
+            </label>
+            <label>
+              <span>Prompt</span>
+              <textarea
+                rows="3"
+                bind:value={newSchoolPrompt}
+                placeholder="Prompt fuer diese Schule (optional)"
+              ></textarea>
             </label>
             <label>
               <span>CI CSS</span>
@@ -5986,6 +8809,14 @@
               <input type="text" bind:value={schoolName} placeholder="Schulname" />
             </label>
             <label>
+              <span>Prompt</span>
+              <textarea
+                rows="3"
+                bind:value={schoolPrompt}
+                placeholder="Prompt fuer diese Schule (optional)"
+              ></textarea>
+            </label>
+            <label>
               <span>CI CSS</span>
               <div class="code-editor" aria-label="CI CSS Editor">
                 <pre class="code-highlight" aria-hidden="true" bind:this={schoolCssHighlight}>{#each schoolCssTokens as token}<span class={`token token-${token.type}`}>{token.value}</span>{/each}</pre>
@@ -6011,6 +8842,20 @@
           {/if}
         </div>
       {/if}
+    </section>
+    {/if}
+
+    {#if activeTab === 'shop'}
+    <section class="panel full panel--shop">
+      <ShopMockup
+        {sheets}
+        {collections}
+        {collectionLinks}
+        loading={loadingSheets || loadingCollections || loadingCollectionLinks}
+        error={sheetError || collectionError || collectionLinkError}
+        onOpenSheet={(id) => openShopSheet(id, 'visual')}
+        onPreviewSheet={(id) => openShopSheet(id, 'preview')}
+      />
     </section>
     {/if}
 
@@ -6076,6 +8921,222 @@
 
         {#if schoolError}
           <p class="error-text">{schoolError}</p>
+        {/if}
+      </div>
+
+      <div class="manage-card settings-card">
+        <h3>KI Tokenzaehler</h3>
+        <p class="hint">
+          Summiert alle KI-Anfragen fuer dieses Konto (Agent im Backend + Schuelerantworten).
+        </p>
+        <div class="settings-usage-grid">
+          <div class="settings-current">
+            <p class="settings-label">Requests</p>
+            <p class="settings-value">{formatUsageCount(userAiUsage.requests)}</p>
+          </div>
+          <div class="settings-current">
+            <p class="settings-label">Prompt Tokens</p>
+            <p class="settings-value">{formatUsageCount(userAiUsage.prompt_tokens)}</p>
+          </div>
+          <div class="settings-current">
+            <p class="settings-label">Completion Tokens</p>
+            <p class="settings-value">{formatUsageCount(userAiUsage.completion_tokens)}</p>
+          </div>
+          <div class="settings-current">
+            <p class="settings-label">Total Tokens</p>
+            <p class="settings-value">{formatUsageCount(userAiUsage.total_tokens)}</p>
+          </div>
+          <div class="settings-current">
+            <p class="settings-label">Prompt Kosten (USD)</p>
+            <p class="settings-value">{formatUsageUsd(userAiUsage.prompt_cost_usd)}</p>
+          </div>
+          <div class="settings-current">
+            <p class="settings-label">Completion Kosten (USD)</p>
+            <p class="settings-value">{formatUsageUsd(userAiUsage.completion_cost_usd)}</p>
+          </div>
+          <div class="settings-current">
+            <p class="settings-label">Total Kosten (USD)</p>
+            <p class="settings-value">{formatUsageUsd(userAiUsage.total_cost_usd)}</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-school-section">
+        {#if !selectedSchoolId}
+          <div class="panel-header">
+            <div>
+              <h2>Schulen</h2>
+              <p class="hint">CI CSS pro Schule definieren.</p>
+            </div>
+            <div class="row-actions">
+              <button
+                class="icon-btn ci-btn-outline refresh-btn"
+                on:click={fetchSchools}
+                disabled={loadingSchools}
+                title="Schulen aktualisieren"
+                aria-label="Schulen aktualisieren"
+              >
+                <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="manage-card">
+            <h3>Neue Schule</h3>
+            <div class="form-grid">
+              <label>
+                <span>Name</span>
+                <input type="text" bind:value={newSchoolName} placeholder="Schulname" />
+              </label>
+              <label>
+                <span>Prompt</span>
+                <textarea
+                  rows="3"
+                  bind:value={newSchoolPrompt}
+                  placeholder="Prompt fuer diese Schule (optional)"
+                ></textarea>
+              </label>
+              <label>
+                <span>CI CSS</span>
+                <div class="code-editor" aria-label="CI CSS Editor">
+                  <pre class="code-highlight" aria-hidden="true" bind:this={newSchoolCssHighlight}>{#each newSchoolCssTokens as token}<span class={`token token-${token.type}`}>{token.value}</span>{/each}</pre>
+                  <textarea
+                    class="code-input code-input--overlay"
+                    rows="10"
+                    bind:value={newSchoolCss}
+                    bind:this={newSchoolCssInput}
+                    placeholder="CSS fuer diese Schule"
+                    spellcheck="false"
+                    on:scroll={() => syncCodeScroll(newSchoolCssInput, newSchoolCssHighlight)}
+                  ></textarea>
+                </div>
+              </label>
+            </div>
+            <div class="row-actions">
+              <button class="ci-btn-secondary" on:click={createSchool} disabled={creatingSchool}>
+                {creatingSchool ? 'Erstelle...' : 'Schule erstellen'}
+              </button>
+            </div>
+          </div>
+
+          <div class="manage-card">
+            {#if loadingSchools}
+              <p class="hint">Lade Schulen...</p>
+            {:else if schools.length === 0}
+              <p class="hint">Keine Schulen vorhanden.</p>
+            {:else}
+              <div class="list">
+                {#each schools as entry}
+                  <div class="list-row">
+                    <button class="ci-btn-soft" on:click={() => selectSchool(entry.id)}>
+                      <div class="list-title">{entry.name || `Schule #${entry.id}`}</div>
+                      <div class="list-preview">{entry.ci_css ? 'CI vorhanden' : 'Kein CI gespeichert'}</div>
+                    </button>
+                    <button
+                      class="icon-btn ci-btn-outline"
+                      title="Schule loeschen"
+                      on:click={() => deleteSchool(entry.id)}
+                      disabled={deletingSchool}
+                    >
+                      Loeschen
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            {#if schoolError}
+              <p class="error-text">{schoolError}</p>
+            {/if}
+          </div>
+        {:else}
+          <div class="panel-header">
+            <div>
+              <button class="ghost ci-btn-outline" on:click={() => {
+                resetSchoolSelection();
+              }}>
+                Zurueck
+              </button>
+              <h2>Schule bearbeiten</h2>
+              <p class="hint">{schoolName || 'Schule'}</p>
+            </div>
+            <div class="row-actions">
+              <button
+                class="icon-btn ci-btn-outline refresh-btn"
+                on:click={fetchSchools}
+                disabled={loadingSchools}
+                title="Schulen aktualisieren"
+                aria-label="Schulen aktualisieren"
+              >
+                <svg class="refresh-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    d="M4 12a8 8 0 0 1 13.66-5.66M20 12a8 8 0 0 1-13.66 5.66M18 4v4h-4M6 20v-4h4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <button
+                class="ghost ci-btn-outline"
+                on:click={() => deleteSchool(selectedSchoolId)}
+                disabled={deletingSchool}
+              >
+                {deletingSchool ? 'Loesche...' : 'Loeschen'}
+              </button>
+            </div>
+          </div>
+
+          <div class="manage-card">
+            <h3>CI CSS</h3>
+            <div class="form-grid">
+              <label>
+                <span>Name</span>
+                <input type="text" bind:value={schoolName} placeholder="Schulname" />
+              </label>
+              <label>
+                <span>Prompt</span>
+                <textarea
+                  rows="3"
+                  bind:value={schoolPrompt}
+                  placeholder="Prompt fuer diese Schule (optional)"
+                ></textarea>
+              </label>
+              <label>
+                <span>CI CSS</span>
+                <div class="code-editor" aria-label="CI CSS Editor">
+                  <pre class="code-highlight" aria-hidden="true" bind:this={schoolCssHighlight}>{#each schoolCssTokens as token}<span class={`token token-${token.type}`}>{token.value}</span>{/each}</pre>
+                  <textarea
+                    class="code-input code-input--overlay"
+                    rows="12"
+                    bind:value={schoolCss}
+                    bind:this={schoolCssInput}
+                    placeholder="CSS fuer diese Schule"
+                    spellcheck="false"
+                    on:scroll={() => syncCodeScroll(schoolCssInput, schoolCssHighlight)}
+                  ></textarea>
+                </div>
+              </label>
+            </div>
+            <div class="row-actions">
+              <button class="ci-btn-secondary" on:click={updateSchool} disabled={savingSchool}>
+                {savingSchool ? 'Speichere...' : 'Speichern'}
+              </button>
+            </div>
+            {#if schoolError}
+              <p class="error-text">{schoolError}</p>
+            {/if}
+          </div>
         {/if}
       </div>
     </section>
@@ -6217,14 +9278,21 @@
           {#if agentStatus}
             <div class="agent-status" role="status">{agentStatus}</div>
           {/if}
-          {#if hasOpenAgentDraft(agentActiveDraft)}
+          {#if hasOpenAgentDraft(agentActiveDraft) || agentDraftUiVisible}
             <section class="agent-draft-card" aria-label="Vorgeschlagene Aenderung">
               <div class="agent-draft-title">Vorgeschlagene Aenderung</div>
-              <ul class="agent-draft-list">
-                {#each agentDraftChangeItems as item}
-                  <li class="agent-draft-item">{item}</li>
-                {/each}
-              </ul>
+              {#if hasOpenAgentDraft(agentActiveDraft)}
+                <ul class="agent-draft-list">
+                  {#each agentDraftChangeItems as item}
+                    <li class="agent-draft-item">{item}</li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="agent-draft-item">
+                  Vorschlag erkannt. Falls die Details noch nicht sichtbar sind, kannst du trotzdem
+                  Anwenden oder Verwerfen klicken.
+                </p>
+              {/if}
               <div class="agent-draft-actions">
                 <button
                   type="button"
@@ -6296,6 +9364,17 @@
           <input type="text" bind:value={newSheetName} placeholder="Neues Sheet" />
         </label>
         <label>
+          <span>Sammlung</span>
+          <select bind:value={newSheetCollectionId}>
+            <option value="">Sammlung waehlen</option>
+            {#each editableCollections as collection}
+              <option value={String(collection.id)}>
+                {collection.name || `Sammlung #${collection.id}`}
+              </option>
+            {/each}
+          </select>
+        </label>
+        <label>
           <span>Key (optional)</span>
           <input
             type="text"
@@ -6303,6 +9382,9 @@
             placeholder="z. B. abi-geschichte-1"
           />
         </label>
+        {#if editableCollections.length === 0}
+          <p class="hint">Bitte zuerst eine Sammlung anlegen.</p>
+        {/if}
         {#if sheetError}
           <p class="error-text">{sheetError}</p>
         {/if}
@@ -6310,8 +9392,65 @@
           <button class="ghost ci-btn-outline" type="button" on:click={() => (showCreateSheetModal = false)}>
             Abbrechen
           </button>
-          <button class="ci-btn-secondary" type="submit" disabled={creating}>
+          <button class="ci-btn-secondary" type="submit" disabled={creating || editableCollections.length === 0}>
             {creating ? 'Erstelle…' : 'Erstellen'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+{/if}
+
+{#if showCollectionModal}
+  <div
+    class="modal-backdrop"
+    role="button"
+    tabindex="0"
+    aria-label="Dialog schliessen"
+    on:click={() => (showCollectionModal = false)}
+    on:keydown={(event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        showCollectionModal = false;
+        return;
+      }
+      if (event.target !== event.currentTarget) {
+        return;
+      }
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        showCollectionModal = false;
+      }
+    }}
+  >
+    <div class="modal-card" on:click|stopPropagation>
+      <h3>Neue Sammlung</h3>
+      <form class="create-form" on:submit|preventDefault={handleCreateCollection}>
+        <label>
+          <span>Name</span>
+          <input type="text" bind:value={newCollectionName} placeholder="z. B. UNO" />
+        </label>
+        <label>
+          <span>Beschreibung</span>
+          <textarea
+            rows="4"
+            bind:value={newCollectionDescription}
+            placeholder="Wofuer ist diese Sammlung gedacht?"
+          ></textarea>
+        </label>
+        {#if collectionError}
+          <p class="error-text">{collectionError}</p>
+        {/if}
+        <div class="row-actions">
+          <button
+            class="ghost ci-btn-outline"
+            type="button"
+            on:click={() => (showCollectionModal = false)}
+          >
+            Abbrechen
+          </button>
+          <button class="ci-btn-secondary" type="submit" disabled={creatingCollection}>
+            {creatingCollection ? 'Erstelle…' : 'Erstellen'}
           </button>
         </div>
       </form>
@@ -6321,26 +9460,30 @@
 
 {#if showClassModal}
   <div class="modal-backdrop" on:click={() => (showClassModal = false)}>
-    <div class="modal-card" on:click|stopPropagation>
-      <h3>Neue Klasse</h3>
-      <div class="form-grid">
-        <label>
-          <span>Name</span>
-          <input type="text" bind:value={newClassName} placeholder="z. B. ABU 2A" />
-        </label>
-        <label>
-          <span>Jahrgang</span>
-          <input type="text" bind:value={newClassYear} placeholder="z. B. 2025/26" />
-        </label>
-        <label>
-          <span>Beruf</span>
-          <input type="text" bind:value={newClassProfession} placeholder="z. B. FaGe" />
-        </label>
-        <label>
-          <span>Schule</span>
-          <select bind:value={newClassSchoolId}>
-            <option value="">Keine Schule</option>
-            {#each schools as school}
+        <div class="modal-card" on:click|stopPropagation>
+          <h3>Neue Klasse</h3>
+          <div class="form-grid">
+            <label>
+              <span>Name</span>
+              <input type="text" bind:value={newClassName} placeholder="z. B. ABU 2A" />
+            </label>
+            <label>
+              <span>Jahrgang</span>
+              <input type="text" bind:value={newClassYear} placeholder="z. B. 2025/26" />
+            </label>
+            <label>
+              <span>Beruf</span>
+              <input type="text" bind:value={newClassProfession} placeholder="z. B. FaGe" />
+            </label>
+            <label>
+              <span>Prompt</span>
+              <textarea rows="3" bind:value={newClassPrompt} placeholder="Prompt fuer diese Klasse (optional)"></textarea>
+            </label>
+            <label>
+              <span>Schule</span>
+              <select bind:value={newClassSchoolId}>
+                <option value="">Keine Schule</option>
+                {#each schools as school}
               <option value={String(school.id)}>
                 {school.name || `Schule #${school.id}`}
               </option>
@@ -6388,6 +9531,14 @@
           <span>Notizen</span>
           <textarea rows="3" bind:value={newLearnerNotes}></textarea>
         </label>
+        <label>
+          <span>Prompt</span>
+          <textarea
+            rows="3"
+            bind:value={newLearnerPrompt}
+            placeholder="Prompt fuer diese Lernende (optional)"
+          ></textarea>
+        </label>
       </div>
       <div class="row-actions">
         <button class="ghost ci-btn-outline" on:click={() => (showLearnerModal = false)}>Abbrechen</button>
@@ -6425,7 +9576,7 @@
 
   .app {
     min-height: 100vh;
-    padding: 5px clamp(20px, 4vw, 48px) 48px;
+    padding: 4px clamp(17px, 4vw, 41px) 41px;
   }
 
   .app.app--ci-zag {
@@ -6440,10 +9591,10 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) var(--agent-sidebar-width);
     grid-template-rows: auto minmax(0, 1fr);
-    column-gap: 5px;
+    column-gap: 4px;
     align-items: stretch;
-    padding-left: 5px;
-    padding-right: 5px;
+    padding-left: 4px;
+    padding-right: 4px;
     height: 100vh;
     overflow: hidden;
   }
@@ -6466,24 +9617,24 @@
     justify-content: space-between;
     align-items: center;
     flex-wrap: nowrap;
-    gap: 24px;
-    margin-bottom: 5px;
+    gap: 20px;
+    margin-bottom: 4px;
     grid-column: 1 / -1;
   }
 
   .app.app--with-agent .topbar {
-    padding-left: 20px;
-    padding-right: 20px;
+    padding-left: 17px;
+    padding-right: 17px;
   }
 
   .brand-block {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 5px;
   }
 
   .brand-logo img {
-    height: 44px;
+    height: 37px;
     width: auto;
     object-fit: contain;
   }
@@ -6491,15 +9642,15 @@
   .topbar h1 {
     margin: 0;
     font-family: 'Space Grotesk', sans-serif;
-    font-size: clamp(28px, 4vw, 40px);
+    font-size: clamp(24px, 4vw, 34px);
     letter-spacing: -0.02em;
   }
 
   .eyebrow {
     text-transform: uppercase;
     letter-spacing: 0.24em;
-    font-size: 12px;
-    margin: 0 0 6px;
+    font-size: 10px;
+    margin: 0 0 5px;
     color: #5c6370;
   }
 
@@ -6511,26 +9662,32 @@
   .status {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 14px;
     flex-wrap: nowrap;
   }
 
-  .status .label {
-    margin: 0;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: #6f7682;
+  .status-user {
+    min-height: 34px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
   }
 
   .status .value {
     margin: 0;
     font-weight: 600;
+    line-height: 1.1;
+  }
+
+  .status .hint {
+    margin: 0;
+    line-height: 1.1;
   }
 
   .settings-btn {
-    width: 40px;
-    height: 40px;
+    width: 34px;
+    height: 34px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -6538,13 +9695,13 @@
   }
 
   .settings-btn svg {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
   }
 
   .agent-topbar-toggle {
-    width: 40px;
-    height: 40px;
+    width: 34px;
+    height: 34px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -6561,8 +9718,8 @@
   }
 
   .agent-topbar-toggle-icon {
-    width: 20px;
-    height: 20px;
+    width: 17px;
+    height: 17px;
   }
 
   .settings-btn[aria-pressed="true"],
@@ -6575,21 +9732,33 @@
 
   .settings-grid {
     display: grid;
-    gap: 16px;
+    gap: 14px;
+  }
+
+  .settings-usage-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(153px, 1fr));
+  }
+
+  .settings-school-section {
+    display: grid;
+    gap: 14px;
+    margin-top: 7px;
   }
 
   .settings-current {
     display: grid;
-    gap: 6px;
-    padding: 12px 14px;
-    border-radius: 12px;
+    gap: 5px;
+    padding: 10px 12px;
+    border-radius: 10px;
     border: 1px solid #d9dee7;
     background: #f8fafc;
   }
 
   .settings-label {
     margin: 0;
-    font-size: 12px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.18em;
     color: #6f7682;
@@ -6601,35 +9770,21 @@
   }
 
   .settings-select {
-    min-height: 140px;
+    min-height: 119px;
   }
 
   .hint {
     color: #6f7682;
-    font-size: 14px;
+    font-size: 12px;
   }
 
   .card {
     background: #ffffffcc;
-    backdrop-filter: blur(12px);
-    padding: 24px;
-    border-radius: 18px;
-    box-shadow: 0 12px 30px rgba(20, 24, 40, 0.12);
+    backdrop-filter: blur(10px);
+    padding: 20px;
+    border-radius: 15px;
+    box-shadow: 0 10px 26px rgba(20, 24, 40, 0.12);
     border: 1px solid rgba(255, 255, 255, 0.6);
-  }
-
-  .card.highlight {
-    background: linear-gradient(140deg, #1f7a6e 0%, #2d9d8f 60%, #3bb6a7 100%);
-    color: #f4f7f6;
-  }
-
-  .card.highlight h3 {
-    margin-top: 0;
-  }
-
-  .card.highlight ul {
-    margin: 0;
-    padding-left: 18px;
   }
 
   .card.error {
@@ -6638,14 +9793,184 @@
 
   .login {
     display: grid;
-    grid-template-columns: minmax(260px, 360px) minmax(260px, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 24px;
+    width: min(1180px, 100%);
+    margin: 10px auto 0;
+    align-items: stretch;
+  }
+
+  .login--auth {
+    padding-bottom: 24px;
+  }
+
+  .auth-card {
+    --auth-accent: #0f766e;
+    --auth-accent-strong: #102a43;
+    --auth-ring: rgba(15, 118, 110, 0.18);
+    --auth-panel-start: #f7ead9;
+    --auth-panel-end: #eef7f3;
+    --auth-glow: rgba(15, 118, 110, 0.18);
+    position: relative;
+    display: grid;
+    gap: 19px;
+    min-height: 100%;
+    padding: 19px;
+    border-radius: 26px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.78);
+    background: rgba(255, 255, 255, 0.74);
+    backdrop-filter: blur(15px);
+    box-shadow: 0 24px 51px rgba(15, 23, 42, 0.14);
+  }
+
+  .auth-card::after {
+    content: '';
+    position: absolute;
+    right: -61px;
+    bottom: -78px;
+    width: 187px;
+    height: 187px;
+    border-radius: 999px;
+    background: var(--auth-glow);
+    filter: blur(9px);
+    pointer-events: none;
+  }
+
+  .auth-card--student {
+    --auth-accent: #d97706;
+    --auth-accent-strong: #1d4ed8;
+    --auth-ring: rgba(29, 78, 216, 0.18);
+    --auth-panel-start: #fff2dd;
+    --auth-panel-end: #eef3ff;
+    --auth-glow: rgba(217, 119, 6, 0.16);
+  }
+
+  .auth-card__visual {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 12px;
+    align-content: space-between;
+    min-height: 187px;
+    padding: 15px;
+    border-radius: 20px;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0) 32%),
+      linear-gradient(145deg, var(--auth-panel-start) 0%, var(--auth-panel-end) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.68);
+  }
+
+  .auth-card__visual::before {
+    content: '';
+    position: absolute;
+    inset: auto -24px -36px auto;
+    width: 143px;
+    height: 143px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.34);
+    filter: blur(7px);
+  }
+
+  .auth-card__badge {
+    position: relative;
+    z-index: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    width: max-content;
+    padding: 7px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.82);
+    color: #203040;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+  }
+
+  .auth-card__badge svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .auth-card__art {
+    position: relative;
+    z-index: 1;
+    width: min(100%, 279px);
+    justify-self: end;
+    align-self: end;
+    filter: drop-shadow(0 19px 24px rgba(15, 23, 42, 0.14));
+  }
+
+  .auth-card__body {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 14px;
+  }
+
+  .auth-card__body h2 {
+    margin: 0;
+    font-size: clamp(24px, 3vw, 32px);
+    line-height: 0.98;
+    letter-spacing: -0.04em;
+  }
+
+  .auth-card__copy {
+    margin: 0;
+    max-width: 36ch;
+    color: #495568;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .auth-form {
+    display: grid;
+    gap: 12px;
+  }
+
+  .auth-form label {
+    margin: 0;
+    gap: 7px;
+    font-size: 11px;
+  }
+
+  .auth-form input {
+    background: rgba(255, 255, 255, 0.9);
+    border-color: rgba(148, 163, 184, 0.42);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84);
+  }
+
+  .auth-form input:focus-visible {
+    outline: none;
+    border-color: var(--auth-accent);
+    box-shadow: 0 0 0 3px var(--auth-ring);
+  }
+
+  .auth-form .error-text {
+    margin: 0;
+  }
+
+  .auth-submit {
+    width: 100%;
+    border: none;
+    padding: 12px 15px;
+    color: #fff;
+    background: linear-gradient(135deg, var(--auth-accent) 0%, var(--auth-accent-strong) 100%);
+    box-shadow: 0 14px 24px rgba(15, 23, 42, 0.16);
+  }
+
+  .auth-submit:hover:enabled {
+    box-shadow: 0 15px 29px rgba(15, 23, 42, 0.2);
   }
 
   .tabs {
     display: flex;
-    gap: 12px;
-    margin-bottom: 20px;
+    gap: 10px;
+    margin-bottom: 17px;
   }
 
   .topbar-tabs {
@@ -6665,8 +9990,8 @@
   }
 
   .topbar-menu-btn {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -6677,7 +10002,7 @@
   .topbar-menu-icon::before,
   .topbar-menu-icon::after {
     display: block;
-    width: 20px;
+    width: 17px;
     height: 2px;
     border-radius: 999px;
     background: #1c2333;
@@ -6696,11 +10021,11 @@
   }
 
   .topbar-menu-icon::before {
-    top: -6px;
+    top: -5px;
   }
 
   .topbar-menu-icon::after {
-    top: 6px;
+    top: 5px;
   }
 
   .topbar-menu[data-open='true'] .topbar-menu-icon {
@@ -6717,16 +10042,16 @@
 
   .topbar-menu-panel {
     position: absolute;
-    top: calc(100% + 10px);
+    top: calc(100% + 9px);
     right: 0;
-    min-width: 200px;
+    min-width: 170px;
     background: #ffffff;
     border: 1px solid #d9dee7;
-    border-radius: 16px;
-    padding: 8px;
+    border-radius: 14px;
+    padding: 7px;
     display: none;
-    gap: 6px;
-    box-shadow: 0 16px 30px rgba(15, 23, 42, 0.16);
+    gap: 5px;
+    box-shadow: 0 14px 26px rgba(15, 23, 42, 0.16);
     z-index: 20;
   }
 
@@ -6737,8 +10062,8 @@
   .topbar-menu-item {
     width: 100%;
     text-align: left;
-    padding: 10px 14px;
-    border-radius: 12px;
+    padding: 9px 12px;
+    border-radius: 10px;
     border: 1px solid transparent;
     background: transparent;
     font-weight: 600;
@@ -6766,7 +10091,7 @@
 
   .tabs button {
     border-radius: 999px;
-    padding: 10px 16px;
+    padding: 9px 14px;
     font-weight: 600;
     cursor: pointer;
   }
@@ -6777,8 +10102,8 @@
 
   label {
     display: grid;
-    gap: 8px;
-    margin-bottom: 16px;
+    gap: 7px;
+    margin-bottom: 14px;
     font-weight: 500;
   }
 
@@ -6786,14 +10111,14 @@
   textarea,
   select {
     font: inherit;
-    padding: 12px 14px;
-    border-radius: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
     border: 1px solid #d9dee7;
     background: #ffffff;
   }
 
   textarea {
-    min-height: 360px;
+    min-height: 306px;
     width: 100%;
     resize: vertical;
     font-family: 'IBM Plex Sans', sans-serif;
@@ -6802,7 +10127,7 @@
   .code-input {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
       'Courier New', monospace;
-    font-size: 12px;
+    font-size: 10px;
     line-height: 1.6;
     background: #f8fafc;
     color: #0f172a;
@@ -6815,19 +10140,20 @@
 
   .code-editor {
     position: relative;
-    border-radius: 14px;
+    border-radius: 12px;
     border: 1px solid #e2e8f0;
     background: #f8fafc;
     overflow: hidden;
+    isolation: isolate;
   }
 
   .code-highlight,
   .code-input--overlay {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
       'Courier New', monospace;
-    font-size: 12px;
+    font-size: 10px;
     line-height: 1.6;
-    padding: 14px;
+    padding: 12px;
     white-space: pre-wrap;
     word-break: break-word;
   }
@@ -6840,6 +10166,7 @@
     pointer-events: none;
     overflow: auto;
     scrollbar-width: none;
+    z-index: 0;
   }
 
   .code-highlight::-webkit-scrollbar {
@@ -6853,8 +10180,13 @@
     outline: none;
     background: transparent;
     color: transparent;
+    -webkit-text-fill-color: transparent;
     caret-color: #0f172a;
     resize: vertical;
+    -webkit-appearance: none;
+    appearance: none;
+    background-color: transparent;
+    z-index: 1;
   }
 
   .code-input--overlay::placeholder {
@@ -6865,6 +10197,15 @@
   .code-editor:focus-within {
     border-color: #cbd5f5;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  }
+
+  .code-editor:focus-within .code-highlight {
+    opacity: 0;
+  }
+
+  .code-editor:focus-within .code-input--overlay {
+    color: #0f172a;
+    -webkit-text-fill-color: #0f172a;
   }
 
   .token-comment {
@@ -6905,7 +10246,7 @@
   }
 
   button {
-    padding: 12px 18px;
+    padding: 10px 15px;
     border-radius: 999px;
     font-weight: 600;
     cursor: pointer;
@@ -6914,7 +10255,7 @@
 
   button:hover:enabled {
     transform: translateY(-1px);
-    box-shadow: 0 10px 18px rgba(15, 23, 42, 0.16);
+    box-shadow: 0 9px 15px rgba(15, 23, 42, 0.16);
   }
 
   button:disabled {
@@ -6929,7 +10270,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 10px 18px;
+    padding: 9px 15px;
     border-radius: 999px;
     font-weight: 600;
     text-decoration: none;
@@ -6938,7 +10279,7 @@
 
   .ghost-link:hover {
     transform: translateY(-1px);
-    box-shadow: 0 10px 18px rgba(15, 23, 42, 0.12);
+    box-shadow: 0 9px 15px rgba(15, 23, 42, 0.12);
   }
 
   .error-text {
@@ -6946,24 +10287,10 @@
     font-weight: 500;
   }
 
-  .link-row {
-    margin-top: 16px;
-  }
-
-  .link-row a {
-    color: #1f7a6e;
-    font-weight: 600;
-    text-decoration: none;
-  }
-
-  .link-row a:hover {
-    text-decoration: underline;
-  }
-
   .workspace {
     display: grid;
-    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
-    gap: 24px;
+    grid-template-columns: minmax(221px, 272px) minmax(0, 1fr);
+    gap: 20px;
   }
 
   .workspace.single {
@@ -6972,46 +10299,109 @@
 
   .panel {
     background: #ffffffcc;
-    border-radius: 20px;
-    padding: 20px;
-    box-shadow: 0 12px 30px rgba(20, 24, 40, 0.12);
+    border-radius: 17px;
+    padding: 17px;
+    box-shadow: 0 10px 26px rgba(20, 24, 40, 0.12);
   }
 
   .panel.full {
-    margin-top: 24px;
+    margin-top: 20px;
+  }
+
+  .panel--shop {
+    padding: clamp(15px, 2.2vw, 24px);
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.62);
+    overflow: hidden;
   }
 
   .panel-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .collection-title-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 32px 32px;
+    align-items: end;
+    gap: 7px;
+    margin: 9px 0 5px;
+    max-width: min(527px, 100%);
+  }
+
+  .collection-title-field {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+    min-width: 0;
+  }
+
+  .collection-title-field span {
+    color: #6f7682;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .collection-title-field input {
+    width: 100%;
+    padding: 7px 9px;
+    border-radius: 9px;
+    font-size: clamp(19px, 3vw, 27px);
+    font-weight: 700;
+    line-height: 1.1;
+    color: #1c232f;
+    background: rgba(255, 255, 255, 0.74);
+  }
+
+  .collection-title-icon {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .collection-description-panel {
+    margin-bottom: 17px;
+  }
+
+  .collection-description-panel label {
+    margin-bottom: 0;
+  }
+
+  .collection-description-panel textarea {
+    min-height: 102px;
   }
 
   .sheet-toolbar {
     display: flex;
     align-items: flex-end;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
   }
 
   .sheet-filter {
     margin-bottom: 0;
     display: grid;
-    gap: 6px;
-    min-width: 220px;
+    gap: 5px;
+    min-width: 187px;
   }
 
   .list {
     display: grid;
-    gap: 12px;
+    gap: 10px;
   }
 
   .create-form {
     display: grid;
-    gap: 12px;
-    margin-bottom: 16px;
+    gap: 10px;
+    margin-bottom: 14px;
   }
 
   .create-form button {
@@ -7020,8 +10410,8 @@
 
   .list button {
     text-align: left;
-    border-radius: 14px;
-    padding: 14px;
+    border-radius: 12px;
+    padding: 12px;
   }
 
   .list button.selected {
@@ -7030,138 +10420,145 @@
 
   .list-title {
     font-weight: 600;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
   }
 
   .list-preview {
-    font-size: 13px;
+    font-size: 11px;
     color: #4d5565;
   }
 
   .list-meta {
-    font-size: 12px;
+    font-size: 10px;
     color: #8a909c;
-    margin-top: 6px;
+    margin-top: 5px;
   }
 
   .manage-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(221px, 1fr));
+    gap: 17px;
   }
 
-  .import-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 16px;
-  }
-
-  .import-card {
+  .manage-card {
     background: #f5f7fa;
-    border-radius: 16px;
+    border-radius: 14px;
     padding: 14px;
     border: 1px solid #e2e8f0;
     display: grid;
     gap: 10px;
   }
 
-  .import-title {
-    font-weight: 600;
-  }
-
-  .import-meta {
-    font-size: 12px;
-    color: #6f7682;
-  }
-
-  .manage-card {
-    background: #f5f7fa;
-    border-radius: 16px;
-    padding: 16px;
-    border: 1px solid #e2e8f0;
-    display: grid;
-    gap: 12px;
+  .manage-card--wide {
+    grid-column: 1 / -1;
   }
 
   .manage-card h3 {
     margin: 0;
-    font-size: 18px;
+    font-size: 15px;
   }
 
   .manage-card h4 {
     margin: 0;
-    font-size: 15px;
+    font-size: 13px;
     color: #4d5565;
   }
 
   .assignment-list {
     display: grid;
-    gap: 10px;
+    gap: 9px;
   }
 
-  .assignment-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px;
-    border-radius: 12px;
-    border: 1px solid #e2e8f0;
-    background: #fff;
-    cursor: pointer;
-  }
+	  .assignment-row {
+	    display: flex;
+	    align-items: flex-start;
+	    justify-content: space-between;
+	    gap: 10px;
+	    flex-wrap: wrap;
+	    padding: 10px;
+	    border-radius: 10px;
+	    border: 1px solid #e2e8f0;
+	    background: #fff;
+	    cursor: pointer;
+	  }
 
   .assignment-info {
     display: grid;
-    gap: 4px;
+    gap: 3px;
   }
 
   .assignment-key {
-    font-size: 12px;
+    font-size: 10px;
     color: #6f7682;
   }
 
   .status-select {
     font: inherit;
-    padding: 8px 10px;
-    border-radius: 10px;
+    padding: 7px 9px;
+    border-radius: 9px;
     border: 1px solid #d9dee7;
     background: #f8fafc;
   }
 
-  .assignment-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+	  .assignment-controls {
+	    display: flex;
+	    align-items: center;
+	    gap: 7px;
+	    flex-wrap: wrap;
+	  }
+
+  :global(.sheet-table--collections .sheet-cell--actions) {
+    justify-content: flex-start;
   }
 
-  .form-select {
-    min-width: 160px;
-  }
+	  .assignment-prompt {
+	    width: 100%;
+	    display: grid;
+	    gap: 9px;
+	    padding-top: 7px;
+	  }
+
+	  .assignment-prompt label {
+	    display: grid;
+	    gap: 5px;
+	    margin: 0;
+	  }
+
+	  .assignment-prompt textarea {
+	    font: inherit;
+	    padding: 9px 10px;
+	    border-radius: 10px;
+	    border: 1px solid #d9dee7;
+	    resize: vertical;
+	    min-height: 77px;
+	  }
+
+	  .form-select {
+	    min-width: 136px;
+	  }
 
   .form-grid {
     display: grid;
-    gap: 12px;
+    gap: 10px;
   }
 
   .form-grid textarea {
-    min-height: 72px;
+    min-height: 61px;
   }
 
   .row-actions {
     display: flex;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
   }
 
   .classes-overview-header {
-    padding-inline: 16px;
+    padding-inline: 14px;
   }
 
   .class-table-wrap {
     overflow-x: auto;
-    padding-bottom: 4px;
+    padding-bottom: 3px;
   }
 
   .class-table-wrap :global(.sheet-table--classes) {
@@ -7171,12 +10568,12 @@
   .classes-school-filter {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
+    gap: 7px;
+    padding: 5px 10px;
     border-radius: 999px;
     border: 1px solid #d9dee7;
     background: #f8fafc;
-    font-size: 13px;
+    font-size: 11px;
     color: #475569;
   }
 
@@ -7192,7 +10589,7 @@
     background: transparent;
     font-weight: 600;
     color: #1c232f;
-    padding: 2px 4px;
+    padding: 2px 3px;
   }
 
   .classes-school-filter select:focus {
@@ -7202,23 +10599,23 @@
   .class-action-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     white-space: nowrap;
-    padding: 6px 8px;
-    font-size: 11px;
+    padding: 5px 7px;
+    font-size: 10px;
     line-height: 1;
   }
 
   .class-action-icon {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     flex: 0 0 14px;
   }
 
   .list-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 10px;
+    gap: 9px;
     align-items: center;
   }
 
@@ -7226,7 +10623,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 8px;
+    gap: 7px;
     flex-wrap: wrap;
   }
 
@@ -7235,22 +10632,22 @@
     align-items: center;
     justify-content: center;
     text-decoration: none;
-    padding: 8px 10px;
-    border-radius: 10px;
-    font-size: 12px;
+    padding: 7px 9px;
+    border-radius: 9px;
+    font-size: 10px;
     line-height: 1;
   }
 
   .icon-btn {
-    padding: 8px 10px;
-    border-radius: 10px;
-    font-size: 12px;
+    padding: 7px 9px;
+    border-radius: 9px;
+    font-size: 10px;
     cursor: pointer;
   }
 
   .refresh-btn {
-    width: 38px;
-    height: 38px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -7258,13 +10655,19 @@
   }
 
   .refresh-icon {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
+  }
+
+  .info-icon,
+  .save-icon {
+    width: 15px;
+    height: 15px;
   }
 
   .trash-icon {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
   }
 
   .icon-btn:disabled {
@@ -7309,69 +10712,69 @@
     align-items: center;
     justify-content: center;
     z-index: 50;
-    padding: 24px;
+    padding: 20px;
   }
 
   .modal-card {
-    width: min(520px, 100%);
+    width: min(442px, 100%);
     background: #fff;
-    border-radius: 18px;
-    padding: 20px;
-    box-shadow: 0 20px 50px rgba(15, 23, 42, 0.2);
+    border-radius: 15px;
+    padding: 17px;
+    box-shadow: 0 17px 43px rgba(15, 23, 42, 0.2);
     display: grid;
-    gap: 16px;
+    gap: 14px;
   }
 
   .divider {
     height: 1px;
     background: #d9dee7;
-    margin: 8px 0;
+    margin: 7px 0;
   }
 
   .editor {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
   }
 
   .editor-header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    gap: 16px;
+    gap: 14px;
   }
 
   .editor-body {
     display: grid;
-    gap: 16px;
+    gap: 14px;
     align-items: stretch;
   }
 
   .editor-tabs {
     display: flex;
-    gap: 10px;
+    gap: 9px;
     flex-wrap: wrap;
   }
 
   .editor-tabs button {
     border-radius: 999px;
-    padding: 8px 14px;
+    padding: 7px 12px;
     font-weight: 600;
     cursor: pointer;
   }
 
   .editor-action-btn {
-    padding: 8px 14px;
-    min-width: 150px;
+    padding: 7px 12px;
+    min-width: 128px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 7px;
   }
 
   .editor-action-btn__status {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -7379,8 +10782,8 @@
   }
 
   .editor-action-btn__spinner {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     border: 2px solid currentColor;
     border-top-color: transparent;
     border-radius: 50%;
@@ -7388,14 +10791,14 @@
   }
 
   .editor-action-btn__check {
-    font-size: 13px;
+    font-size: 11px;
     line-height: 1;
     font-weight: 700;
   }
 
   .editor-action-btn__disk {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
     display: block;
   }
 
@@ -7411,18 +10814,19 @@
 
   .fields {
     display: grid;
-    gap: 12px;
+    gap: 10px;
     align-content: start;
   }
 
   .editor-meta {
     display: grid;
-    gap: 8px;
+    gap: 7px;
   }
 
   .editor-meta-row {
     display: grid;
-    gap: 12px;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 10px;
     align-items: end;
   }
 
@@ -7430,13 +10834,19 @@
     margin: 0;
   }
 
+  .editor-meta-name {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
   .editor-version {
     display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+    flex-wrap: nowrap;
+    gap: 9px;
     align-items: end;
-    justify-self: end;
-    max-width: min(560px, 100%);
+    justify-self: stretch;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .editor-version label {
@@ -7444,15 +10854,27 @@
   }
 
   .editor-version-select {
-    min-width: min(240px, 100%);
+    min-width: min(204px, 100%);
     max-width: 100%;
+    position: relative;
+    z-index: 1;
+    flex: 1 1 240px;
+  }
+
+  .editor-collection-select,
+  .editor-version-picker {
+    min-width: 0;
+    flex-basis: auto;
   }
 
   .editor-version-select :global(select) {
+    width: 100%;
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    position: relative;
+    z-index: 1;
   }
 
   .editor-version button {
@@ -7460,17 +10882,20 @@
   }
 
   .version-restore-btn {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    position: relative;
+    z-index: 2;
+    touch-action: manipulation;
   }
 
   .version-restore-btn__status {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -7482,29 +10907,71 @@
   }
 
   .restore-icon {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
   }
 
-  .editor-meta .hint,
-  .editor-meta .error-text {
-    margin: 0;
-  }
+	  .editor-meta .hint,
+	  .editor-meta .error-text {
+	    margin: 0;
+	  }
 
-  .fields textarea {
-    min-height: 320px;
-  }
+	  .fields textarea {
+	    min-height: 272px;
+	  }
+
+	  .fields .editor-meta-prompt textarea {
+	    min-height: 77px;
+	    resize: vertical;
+	  }
+
+	  .block-prompts textarea {
+	    min-height: 60px;
+	    resize: vertical;
+	  }
+
+	  .block-prompts input[type='text'] {
+	    width: 100%;
+	    border-radius: 9px;
+	    border: 1px solid #d9dee7;
+	    padding: 7px 9px;
+	    font: inherit;
+	    font-size: 11px;
+	    background: #fff;
+	  }
+
+	  .block-prompts input[type='text']:focus-visible {
+	    outline: 2px solid rgba(47, 143, 131, 0.35);
+	    outline-offset: 2px;
+	  }
+
+	  .gap-prompt-list {
+	    display: grid;
+	    gap: 9px;
+	    padding-top: 9px;
+	  }
+
+	  .block-prompt-field,
+	  .gap-prompt-field {
+	    display: grid;
+	    gap: 5px;
+	    margin: 0;
+	  }
+
+	  :global(abu-block-prompt) {
+	    display: none !important;
+	  }
 
   .editor-columns {
     display: grid;
-    gap: 16px;
+    gap: 14px;
     align-items: start;
     grid-template-columns: minmax(0, 1fr);
   }
 
   .editor-main {
     display: grid;
-    gap: 12px;
+    gap: 10px;
     align-content: start;
   }
 
@@ -7524,9 +10991,9 @@
   .agent-panel {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 12px;
-    border-radius: 14px;
+    gap: 9px;
+    padding: 10px;
+    border-radius: 12px;
     border: 1px solid #e2e8f0;
     background: #f8fafc;
     min-height: 0;
@@ -7537,7 +11004,7 @@
 
   .agent-row {
     display: flex;
-    gap: 10px;
+    gap: 9px;
     align-items: center;
     flex-wrap: wrap;
   }
@@ -7545,24 +11012,24 @@
   .agent-row--composer {
     align-items: flex-end;
     flex-wrap: nowrap;
-    gap: 8px;
+    gap: 7px;
   }
 
   .agent-input {
     flex: 1 1 auto;
     min-width: 0;
     width: 100%;
-    min-height: 34px;
-    max-height: 140px;
-    font-size: 12px;
+    min-height: 29px;
+    max-height: 119px;
+    font-size: 10px;
     line-height: 1.35;
     resize: none;
     overflow-y: auto;
   }
 
   .agent-send-btn {
-    width: 40px;
-    height: 40px;
+    width: 34px;
+    height: 34px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -7571,24 +11038,24 @@
   }
 
   .agent-send-icon {
-    width: 17px;
-    height: 17px;
+    width: 14px;
+    height: 14px;
   }
 
   .agent-status {
-    font-size: 12px;
+    font-size: 10px;
     color: #1f7a6e;
     font-weight: 600;
-    min-height: 18px;
+    min-height: 15px;
   }
 
   .agent-draft-card {
     display: grid;
-    gap: 8px;
-    border-radius: 12px;
+    gap: 7px;
+    border-radius: 10px;
     border: 1px solid #cfe5df;
     background: #f3fbf8;
-    padding: 10px;
+    padding: 9px;
   }
 
   .agent-draft-title {
@@ -7601,13 +11068,13 @@
 
   .agent-draft-list {
     margin: 0;
-    padding-left: 18px;
+    padding-left: 15px;
     display: grid;
-    gap: 4px;
+    gap: 3px;
   }
 
   .agent-draft-item {
-    font-size: 12px;
+    font-size: 10px;
     line-height: 1.4;
     color: #1f2937;
     overflow-wrap: anywhere;
@@ -7615,16 +11082,16 @@
 
   .agent-draft-actions {
     display: flex;
-    gap: 8px;
+    gap: 7px;
     flex-wrap: wrap;
   }
 
   .agent-draft-btn {
-    min-height: 34px;
+    min-height: 29px;
   }
 
   .agent-context {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -7634,13 +11101,13 @@
   .agent-history {
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
-    gap: 8px;
+    gap: 7px;
     min-height: 0;
     flex: 1 1 auto;
   }
 
   .agent-history-title {
-    font-size: 11px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.16em;
     color: #6f7682;
@@ -7651,23 +11118,23 @@
     flex-direction: column;
     justify-content: flex-end;
     flex: 1 1 auto;
-    gap: 10px;
+    gap: 9px;
     overflow-y: auto;
     overflow-x: hidden;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    padding-right: 4px;
+    padding-right: 3px;
     min-height: 0;
   }
 
   .agent-history-item {
     position: relative;
-    border-radius: 12px;
+    border-radius: 10px;
     border: 1px solid #e2e8f0;
     background: #ffffff;
-    padding: 10px 12px;
+    padding: 9px 10px;
     display: grid;
-    gap: 8px;
+    gap: 7px;
   }
 
   .agent-history-item--pending {
@@ -7682,7 +11149,7 @@
 
   .agent-history-line {
     display: grid;
-    gap: 4px;
+    gap: 3px;
   }
 
   .agent-history-label {
@@ -7694,14 +11161,14 @@
   }
 
   .agent-history-text {
-    font-size: 12px;
+    font-size: 10px;
     line-height: 1.5;
     color: #1f2937;
     white-space: pre-wrap;
   }
 
   .agent-history-meta {
-    font-size: 11px;
+    font-size: 10px;
     color: #64748b;
   }
 
@@ -7712,8 +11179,8 @@
   }
 
   .agent-feedback-toggle {
-    width: 20px;
-    height: 20px;
+    width: 17px;
+    height: 17px;
     border: none;
     background: transparent;
     color: #94a3b8;
@@ -7727,8 +11194,8 @@
   }
 
   .agent-feedback-toggle svg {
-    width: 17px;
-    height: 17px;
+    width: 14px;
+    height: 14px;
   }
 
   .agent-feedback-toggle:hover:enabled,
@@ -7744,9 +11211,9 @@
 
   .agent-feedback {
     display: grid;
-    gap: 6px;
+    gap: 5px;
     border-top: 1px solid #edf2f7;
-    padding-top: 8px;
+    padding-top: 7px;
   }
 
   .agent-feedback-label {
@@ -7759,7 +11226,7 @@
 
   .agent-feedback-actions {
     display: flex;
-    gap: 6px;
+    gap: 5px;
     flex-wrap: wrap;
   }
 
@@ -7768,8 +11235,8 @@
     background: #f8fafc;
     color: #334155;
     border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 11px;
+    padding: 3px 9px;
+    font-size: 10px;
     line-height: 1.2;
     cursor: pointer;
   }
@@ -7821,12 +11288,12 @@
 
   .agent-feedback-comment {
     width: 100%;
-    min-height: 52px;
-    border-radius: 10px;
+    min-height: 44px;
+    border-radius: 9px;
     border: 1px solid #dbe3ee;
     background: #ffffff;
-    padding: 6px 8px;
-    font-size: 12px;
+    padding: 5px 7px;
+    font-size: 10px;
     line-height: 1.35;
     resize: vertical;
   }
@@ -7834,14 +11301,14 @@
   .agent-feedback-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     flex-wrap: wrap;
   }
 
   .agent-feedback-submit {
     border-radius: 999px;
-    padding: 5px 10px;
-    font-size: 11px;
+    padding: 4px 9px;
+    font-size: 10px;
     line-height: 1.2;
     cursor: pointer;
   }
@@ -7852,36 +11319,40 @@
   }
 
   .agent-feedback-error {
-    font-size: 11px;
+    font-size: 10px;
     color: #b91c1c;
   }
 
   .agent-feedback-ok {
-    font-size: 11px;
+    font-size: 10px;
     color: #166534;
     font-weight: 600;
   }
 
   .agent-history-empty {
-    font-size: 12px;
+    font-size: 10px;
     color: #94a3b8;
   }
 
   @media (min-width: 900px) {
     .editor-meta-row {
-      grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+      grid-template-columns: minmax(306px, 1fr) minmax(128px, 179px) minmax(187px, 255px);
+    }
+
+    .editor-meta-name {
+      grid-column: auto;
     }
   }
 
   @media (min-width: 1100px) {
     .agent-panel {
       height: 100%;
-      max-height: calc(100vh - 112px);
+      max-height: calc(100vh - 95px);
     }
   }
 
   .preview {
-    border-radius: 14px;
+    border-radius: 12px;
     border: 1px solid #d9dee7;
     overflow: hidden;
     background: white;
@@ -7890,22 +11361,22 @@
   }
 
   .preview-header {
-    padding: 10px 14px;
+    padding: 9px 12px;
     background: #f5f7fa;
-    font-size: 12px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.16em;
     color: #6f7682;
   }
 
   .preview-body {
-    padding: 16px;
+    padding: 14px;
     overflow: auto;
   }
 
   :global(umfrage-matrix) {
     display: block;
-    margin: 1.2rem 0;
+    margin: 1.02rem 0;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scroll) {
@@ -7916,17 +11387,17 @@
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
-    min-width: 520px;
+    min-width: 442px;
   }
 
   :global(umfrage-matrix .umfrage-matrix__col-statement) {
-    min-width: 220px;
+    min-width: 187px;
   }
 
   :global(umfrage-matrix th),
   :global(umfrage-matrix td) {
     border: 1px solid #d9dee7;
-    padding: 0.45rem 0.6rem;
+    padding: 0.38rem 0.51rem;
     text-align: center;
   }
 
@@ -7945,29 +11416,29 @@
 
   :global(umfrage-matrix .umfrage-matrix__statement-input) {
     width: 100%;
-    border-radius: 8px;
+    border-radius: 7px;
     border: 1px solid #cbd5e1;
-    padding: 6px 8px;
-    font-size: 13px;
+    padding: 5px 7px;
+    font-size: 11px;
     line-height: 1.35;
     background: #fff;
     color: #1f2937;
     resize: vertical;
-    min-height: 2.8rem;
+    min-height: 2.38rem;
     white-space: pre-wrap;
   }
 
   :global(umfrage-matrix .umfrage-matrix__statement-editor) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
+    gap: 7px;
     align-items: stretch;
   }
 
   :global(umfrage-matrix .umfrage-matrix__statement-controls) {
     display: grid;
     grid-auto-rows: minmax(0, 1fr);
-    gap: 6px;
+    gap: 5px;
     align-content: center;
   }
 
@@ -7986,14 +11457,14 @@
   }
 
   :global(umfrage-matrix .umfrage-matrix__statement-insert-btn) {
-    width: 24px;
-    height: 24px;
-    margin: -12px 0;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0;
     border-radius: 999px;
     border: 1px solid #cbd5e1;
     background: #fff;
     color: #2f8f83;
-    font-size: 14px;
+    font-size: 12px;
     line-height: 1;
     cursor: pointer;
     display: inline-flex;
@@ -8009,13 +11480,13 @@
   }
 
   :global(umfrage-matrix .umfrage-matrix__statement-btn) {
-    width: 24px;
-    min-height: 24px;
+    width: 20px;
+    min-height: 20px;
     border-radius: 999px;
     border: 1px solid #cbd5e1;
     background: #fff;
     color: #2f8f83;
-    font-size: 14px;
+    font-size: 12px;
     line-height: 1;
     cursor: pointer;
     display: inline-flex;
@@ -8050,12 +11521,12 @@
 
   :global(umfrage-matrix .umfrage-matrix__scale-value) {
     display: block;
-    font-size: 0.95rem;
+    font-size: 0.81rem;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-label) {
     display: block;
-    font-size: 0.72rem;
+    font-size: 0.65rem;
     color: #6f7682;
     margin-top: 2px;
   }
@@ -8067,7 +11538,7 @@
 
   :global(umfrage-matrix .umfrage-matrix__scale-editor) {
     display: grid;
-    gap: 6px;
+    gap: 5px;
     justify-items: center;
   }
 
@@ -8076,26 +11547,26 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    min-height: 22px;
+    gap: 5px;
+    min-height: 19px;
     position: relative;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-controls .umfrage-matrix__scale-value) {
     display: inline-flex;
-    min-width: 1.6rem;
+    min-width: 1.36rem;
     justify-content: center;
-    font-size: 0.85rem;
+    font-size: 0.72rem;
     font-weight: 700;
     color: #364152;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-input) {
-    width: min(160px, 100%);
-    border-radius: 8px;
+    width: min(136px, 100%);
+    border-radius: 7px;
     border: 1px solid #cbd5e1;
-    padding: 4px 6px;
-    font-size: 11px;
+    padding: 3px 5px;
+    font-size: 10px;
     text-align: center;
     background: #fff;
     color: #1f2937;
@@ -8107,13 +11578,13 @@
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-btn) {
-    width: 22px;
-    height: 22px;
+    width: 19px;
+    height: 19px;
     border-radius: 999px;
     border: 1px solid #cbd5e1;
     background: #fff;
     color: #2f8f83;
-    font-size: 14px;
+    font-size: 12px;
     line-height: 1;
     cursor: pointer;
     display: inline-flex;
@@ -8163,8 +11634,8 @@
   }
 
   :global(umfrage-matrix .umfrage-matrix__option input) {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     margin: 0;
     accent-color: #2f8f83;
   }
@@ -8176,46 +11647,155 @@
 
   @media (max-width: 720px) {
     :global(umfrage-matrix .umfrage-matrix__table) {
-      min-width: 420px;
+      min-width: 357px;
     }
   }
 
   .visual-layout {
     display: grid;
-    gap: 16px;
+    gap: 14px;
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
   }
 
   .visual-edit-panel {
-    border-radius: 14px;
+    border-radius: 12px;
     border: 1px solid #d9dee7;
     background: #ffffff;
-    padding: 14px;
+    padding: 12px;
     display: grid;
-    gap: 10px;
+    gap: 9px;
   }
 
   .visual-edit-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 7px;
   }
 
 
   .block-editors {
     display: grid;
-    gap: 16px;
+    gap: 14px;
   }
 
   .block-editor {
-    border-radius: 12px;
+    position: relative;
+    border-radius: 10px;
     border: 1px solid #e2e8f0;
     background: #f8fafc;
-    padding: 12px;
+    padding: 15px 10px 10px;
     display: grid;
-    gap: 10px;
+    gap: 9px;
+  }
+
+  .block-editor--title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 9px;
+  }
+
+  .block-editor--title .block-type-badge {
+    display: none;
+  }
+
+  .block-editor--title .block-format-tools {
+    display: contents;
+  }
+
+  .block-editor--title .tool-select--title {
+    order: 1;
+    flex: 0 0 auto;
+    min-width: 105px;
+    height: 29px;
+  }
+
+  .block-editor--title .block-editor__visual {
+    order: 2;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 29px;
+    display: flex;
+    align-items: center;
+    padding: 3px 9px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .block-editor--title .tool-btn--danger {
+    order: 3;
+    flex: 0 0 32px;
+    margin-left: 0;
+  }
+
+  .block-editor--title .block-editor__visual :global(h1),
+  .block-editor--title .block-editor__visual :global(h2),
+  .block-editor--title .block-editor__visual :global(h3) {
+    margin: 0;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.05;
+    white-space: nowrap;
+  }
+
+  .block-editor--title .block-editor__visual :global(br) {
+    display: none;
+  }
+
+  .block-type-badge {
+    position: absolute;
+    top: -9px;
+    left: 10px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 19px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid #b7d9d2;
+    background: #e8f7f4;
+    color: #0f766e;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    pointer-events: none;
+  }
+
+  .worksheet-type-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    color: currentColor;
+  }
+
+  .worksheet-type-icon svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .worksheet-type-icon path {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .block-type-badge__icon {
+    width: 12px;
+    height: 12px;
   }
 
   .block-editor--drag-image {
@@ -8252,10 +11832,10 @@
   .preview-body :global(textarea)::before {
     content: '|';
     position: absolute;
-    top: -14px;
+    top: -12px;
     left: 2px;
     font-weight: 700;
-    font-size: 16px;
+    font-size: 14px;
     line-height: 1;
     color: #0f172a;
     pointer-events: none;
@@ -8289,21 +11869,497 @@
   }
 
   .block-editor textarea {
-    min-height: 140px;
+    min-height: 119px;
+  }
+
+  .block-editor__visual :global(h1),
+  .block-editor__visual :global(h2),
+  .block-editor__visual :global(h3),
+  .preview-body :global(h1),
+  .preview-body :global(h2),
+  .preview-body :global(h3) {
+    margin: 0 0 0.72rem;
+    color: #132238;
+    font-family: var(--ci-font-title, 'Arial Black', Arial, sans-serif);
+    font-weight: 800;
+    line-height: 1.16;
+    letter-spacing: 0;
+  }
+
+  .block-editor__visual :global(h1),
+  .preview-body :global(h1) {
+    font-size: 1.7rem;
+  }
+
+  .block-editor__visual :global(h2),
+  .preview-body :global(h2) {
+    font-size: 1.23rem;
+    margin-top: 0.3rem;
+  }
+
+  .block-editor__visual :global(h3),
+  .preview-body :global(h3) {
+    font-size: 0.95rem;
+    margin-top: 0.25rem;
+  }
+
+  .block-editor__visual :global(freitext-block),
+  .preview-body :global(freitext-block) {
+    display: block;
+    margin: 1.27rem 0;
+  }
+
+  .block-editor__visual :global(.freitext),
+  .preview-body :global(.freitext) {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid #e2d8cc;
+    background: linear-gradient(180deg, #fffdf8 0%, #f8f3ea 100%);
+  }
+
+  .block-editor__visual :global(.freitext__intro),
+  .preview-body :global(.freitext__intro) {
+    display: grid;
+    gap: 7px;
+  }
+
+  .block-editor__visual :global(.freitext__instruction),
+  .preview-body :global(.freitext__instruction) {
+    display: grid;
+    gap: 7px;
+  }
+
+  .block-editor__visual :global(.freitext__instruction > :first-child),
+  .preview-body :global(.freitext__instruction > :first-child) {
+    margin-top: 0;
+  }
+
+  .block-editor__visual :global(.freitext__instruction > :last-child),
+  .preview-body :global(.freitext__instruction > :last-child) {
+    margin-bottom: 0;
+  }
+
+  .block-editor__visual :global(.freitext__title),
+  .preview-body :global(.freitext__title) {
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.25;
+  }
+
+  .block-editor__visual :global(.freitext__task),
+  .block-editor__visual :global(.freitext__meta),
+  .preview-body :global(.freitext__task),
+  .preview-body :global(.freitext__meta) {
+    margin: 0;
+    color: #5e554a;
+    font-size: 12px;
+  }
+
+  .block-editor__visual :global(.freitext__criteria-wrap),
+  .preview-body :global(.freitext__criteria-wrap) {
+    display: grid;
+    gap: 2px;
+  }
+
+  .block-editor__visual :global(.freitext__criteria-label),
+  .preview-body :global(.freitext__criteria-label) {
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7a6f62;
+  }
+
+  .block-editor__visual :global(.freitext__criteria),
+  .preview-body :global(.freitext__criteria) {
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0;
+    list-style: none;
+  }
+
+  .block-editor__visual :global(.freitext__criterion),
+  .preview-body :global(.freitext__criterion) {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr);
+    gap: 5px;
+    align-items: start;
+    padding: 2px 5px;
+    border: 1px solid #eadfd3;
+    border-radius: 0;
+    background: #fffdf8;
+  }
+
+  .block-editor__visual :global(.freitext__criterion + .freitext__criterion),
+  .preview-body :global(.freitext__criterion + .freitext__criterion) {
+    border-top: 0;
+  }
+
+  .block-editor__visual :global(.freitext__criterion-label),
+  .preview-body :global(.freitext__criterion-label) {
+    min-width: 0;
+    font-weight: 700;
+    color: #111827;
+    overflow-wrap: anywhere;
+  }
+
+  .block-editor__visual :global(.freitext__criterion-description),
+  .preview-body :global(.freitext__criterion-description) {
+    min-width: 0;
+    color: #5e554a;
+    font-size: 12px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .block-editor__visual :global(.freitext__premises-wrap),
+  .preview-body :global(.freitext__premises-wrap) {
+    display: grid;
+    gap: 2px;
+  }
+
+  .block-editor__visual :global(.freitext__premises),
+  .preview-body :global(.freitext__premises) {
+    display: grid;
+    gap: 0;
+  }
+
+  .block-editor__visual :global(.freitext__premise),
+  .preview-body :global(.freitext__premise) {
+    display: grid;
+    grid-template-columns: minmax(160px, 0.42fr) minmax(180px, 0.58fr);
+    gap: 5px;
+    align-items: center;
+    padding: 2px 5px;
+    border-radius: 0;
+    border: 1px solid #eadfd3;
+    background: #fffdf8;
+  }
+
+  .block-editor__visual :global(.freitext__premise + .freitext__premise),
+  .preview-body :global(.freitext__premise + .freitext__premise) {
+    border-top: 0;
+  }
+
+  .block-editor__visual :global(.freitext__premise-label),
+  .preview-body :global(.freitext__premise-label) {
+    min-width: 0;
+    font-weight: 700;
+    color: #111827;
+    overflow-wrap: anywhere;
+  }
+
+  .block-editor__visual :global(.freitext__premise-hint),
+  .preview-body :global(.freitext__premise-hint) {
+    min-width: 0;
+    color: #5e554a;
+    font-size: 11px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .block-editor__visual :global(.freitext__premise-hint a),
+  .preview-body :global(.freitext__premise-hint a) {
+    color: #25636a;
+    font-weight: 700;
+  }
+
+  .block-editor__visual :global(.freitext__premise-input-row),
+  .preview-body :global(.freitext__premise-input-row) {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .block-editor__visual :global(.freitext__premise-input),
+  .preview-body :global(.freitext__premise-input) {
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 9px;
+    border-radius: 9px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    font: inherit;
+  }
+
+  .block-editor__visual :global(.freitext__premise-input:focus),
+  .preview-body :global(.freitext__premise-input:focus) {
+    outline: 2px solid rgba(47, 143, 131, 0.18);
+    border-color: #2f8f83;
+  }
+
+  .block-editor__visual :global(.freitext__textarea),
+  .preview-body :global(.freitext__textarea) {
+    width: 100%;
+    min-height: 187px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    font: inherit;
+    line-height: 1.6;
+    resize: vertical;
+  }
+
+  .block-editor__visual :global(.freitext__question),
+  .preview-body :global(.freitext__question) {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+  }
+
+  .block-editor__visual :global(.freitext__question-label),
+  .preview-body :global(.freitext__question-label) {
+    font-size: 11px;
+    font-weight: 700;
+    color: #5e554a;
+  }
+
+  .block-editor__visual :global(.freitext__question-field),
+  .preview-body :global(.freitext__question-field) {
+    width: 100%;
+    height: 34px;
+    min-height: 34px;
+    padding: 0 10px;
+    border-radius: 10px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    font: inherit;
+    line-height: 1.2;
+    resize: none;
+  }
+
+  .block-editor__visual :global(.freitext__question-field:focus),
+  .preview-body :global(.freitext__question-field:focus) {
+    outline: 2px solid rgba(47, 143, 131, 0.18);
+    border-color: #2f8f83;
+  }
+
+  .block-editor__visual :global(.freitext--richtig),
+  .preview-body :global(.freitext--richtig) {
+    border-color: #1c8f4a;
+    background: #f4fbf5;
+  }
+
+  .block-editor__visual :global(.freitext--teilweise),
+  .preview-body :global(.freitext--teilweise) {
+    border-color: #d98a1a;
+    background: #fff9ef;
+  }
+
+  .block-editor__visual :global(.freitext--falsch),
+  .preview-body :global(.freitext--falsch) {
+    border-color: #c33b3b;
+    background: #fff5f5;
+  }
+
+  .block-editor__visual :global(.freitext__actions),
+  .preview-body :global(.freitext__actions) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+  }
+
+  .block-editor__visual :global(.freitext__actions .check-btn),
+  .preview-body :global(.freitext__actions .check-btn) {
+    width: 34px;
+    height: 34px;
+    margin-left: 0;
+  }
+
+  .block-editor__visual :global(.freitext__action-hint),
+  .preview-body :global(.freitext__action-hint) {
+    display: none;
+    font-size: 11px;
+    color: #6f6a60;
   }
 
   .visual-block-code-editor {
-    border-radius: 10px;
+    border-radius: 9px;
   }
 
   .visual-block-code-editor .code-highlight,
   .visual-block-code-editor .code-input--overlay {
-    min-height: 140px;
+    min-height: 119px;
+  }
+
+  .freitext-block-editor {
+    display: grid;
+    gap: 10px;
+  }
+
+  .freitext-checklist-editor {
+    display: grid;
+    gap: 2px;
+    padding: 5px;
+    border-radius: 4px;
+    border: 1px solid #d9dee7;
+    background: #fff;
+  }
+
+  .freitext-checklist-editor__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-height: 22px;
+  }
+
+  .freitext-checklist-editor__header strong {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #475569;
+  }
+
+  .freitext-checklist-editor__add {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    font-size: 15px;
+    line-height: 1;
+  }
+
+  .freitext-checklist-editor__list {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .freitext-checklist-editor__item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 24px;
+    gap: 4px;
+    align-items: center;
+    padding: 2px 3px;
+    border: 1px solid #e2e8f0;
+    border-radius: 0;
+    background: #fff;
+  }
+
+  .freitext-checklist-editor__item + .freitext-checklist-editor__item {
+    border-top: 0;
+  }
+
+  .freitext-checklist-editor__fields {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr);
+    gap: 4px;
+    align-items: start;
+  }
+
+  .freitext-checklist-editor label {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 4px;
+    align-items: center;
+    margin: 0;
+  }
+
+  .freitext-checklist-editor label span {
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    color: #64748b;
+  }
+
+  .freitext-checklist-editor textarea {
+    width: 100%;
+    border: 1px solid #d9dee7;
+    border-radius: 3px;
+    padding: 3px 6px;
+    font: inherit;
+    line-height: 1.2;
+    color: #0f172a;
+    background: #fff;
+  }
+
+  .freitext-checklist-editor textarea {
+    min-height: 28px;
+    resize: vertical;
+  }
+
+  .freitext-checklist-editor__label-field {
+    overflow: hidden;
+    resize: none;
+  }
+
+  .freitext-checklist-editor__delete {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border-radius: 4px;
+    line-height: 1;
+  }
+
+  @media (max-width: 640px) {
+    .block-editor__visual :global(.freitext__criterion),
+    .preview-body :global(.freitext__criterion),
+    .block-editor__visual :global(.freitext__premise),
+    .preview-body :global(.freitext__premise),
+    .freitext-checklist-editor__fields {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .freitext-block-editor__answer-preview {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid #e2d8cc;
+    background: linear-gradient(180deg, #fffdf8 0%, #f8f3ea 100%);
+  }
+
+  .freitext-block-editor__answer-preview .freitext__textarea {
+    width: 100%;
+    min-height: 187px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    color: #64748b;
+    font: inherit;
+    line-height: 1.6;
+    resize: vertical;
+  }
+
+  .freitext-block-editor__answer-preview .freitext__question-field {
+    width: 100%;
+    height: 34px;
+    min-height: 34px;
+    padding: 0 10px;
+    border-radius: 10px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    color: #64748b;
+    font: inherit;
+    line-height: 1.2;
+    resize: none;
+  }
+
+  .freitext-block-editor__answer-preview .freitext__actions {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+  }
+
+  .freitext-block-editor__answer-preview .freitext__actions .check-btn {
+    width: 34px;
+    height: 34px;
+    margin-left: 0;
   }
 
   .block-format-tools {
     display: flex;
-    gap: 6px;
+    gap: 5px;
     flex-wrap: nowrap;
     align-items: center;
     justify-content: flex-start;
@@ -8312,13 +12368,13 @@
   }
 
   .tool-btn {
-    width: 32px;
-    height: 32px;
+    width: 27px;
+    height: 27px;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 10px;
+    border-radius: 9px;
   }
 
   .tool-btn--right-start {
@@ -8349,11 +12405,17 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 16px;
-    height: 16px;
-    font-size: 12px;
+    width: 14px;
+    height: 14px;
+    font-size: 10px;
     font-weight: 700;
     line-height: 1;
+  }
+
+  .tool-icon svg {
+    width: 14px;
+    height: 14px;
+    display: block;
   }
 
   .tool-icon--italic {
@@ -8365,22 +12427,25 @@
     text-decoration: underline;
   }
 
-  .tool-icon--gap,
-  .tool-icon--gap-wide {
+  .tool-icon--gap {
     font-weight: 600;
-    font-size: 11px;
-    letter-spacing: -0.4px;
+    font-size: 10px;
+    letter-spacing: 0px;
   }
 
   .tool-select {
-    padding: 4px 10px;
+    padding: 3px 9px;
     border-radius: 999px;
     border: 1px solid #d9dee7;
     background: #fff;
     color: #0f172a;
     font-weight: 600;
-    height: 32px;
-    font-size: 12px;
+    height: 27px;
+    font-size: 10px;
+  }
+
+  .tool-select--title {
+    min-width: 117px;
   }
 
   .tool-select option {
@@ -8389,7 +12454,7 @@
 
   .tool-divider {
     width: 1px;
-    height: 20px;
+    height: 17px;
     background: #d9dee7;
     margin: 0 2px;
   }
@@ -8403,24 +12468,24 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 7px;
   }
 
   .block-editor__actions {
     display: flex;
-    gap: 8px;
+    gap: 7px;
     flex-wrap: wrap;
     align-items: center;
   }
 
   .block-view-toggle {
     display: flex;
-    gap: 4px;
+    gap: 3px;
   }
 
   .block-view-toggle button {
-    width: 32px;
-    height: 32px;
+    width: 27px;
+    height: 27px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -8428,8 +12493,8 @@
   }
 
   .block-view-toggle .toggle-icon {
-    width: 18px;
-    height: 18px;
+    width: 15px;
+    height: 15px;
   }
 
   .block-view-toggle button.active {
@@ -8439,12 +12504,46 @@
   }
 
   .block-editor__visual {
-    min-height: 140px;
-    border-radius: 10px;
+    min-height: 119px;
+    border-radius: 9px;
     border: 1px solid #d9dee7;
     background: #fff;
-    padding: 10px 12px;
+    padding: 9px 10px;
     outline: none;
+  }
+
+  :global(.block-editor__visual luecke-gap) {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px dashed #94a3b8;
+    background: rgba(148, 163, 184, 0.12);
+    color: #0f172a;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  :global(.block-editor__visual luecke-gap)::before {
+    content: 'Luecke';
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #475569;
+  }
+
+  :global(.block-editor__visual luecke-gap:empty)::after {
+    content: '(Loesung)';
+    color: #64748b;
+    font-weight: 500;
+  }
+
+  :global(.block-editor__visual luecke-gap[width='100%']) {
+    display: flex;
+    width: 100%;
+    border-radius: 10px;
   }
 
   .block-editor__visual:focus {
@@ -8457,8 +12556,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 28px;
-    margin: 6px 0;
+    height: 24px;
+    margin: 5px 0;
     border-radius: 999px;
   }
 
@@ -8480,32 +12579,45 @@
 
   .block-insert-menu {
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + 7px);
     left: 50%;
     transform: translateX(-50%);
     background: #ffffff;
     border: 1px solid #d9dee7;
-    border-radius: 12px;
-    padding: 6px;
+    border-radius: 10px;
+    padding: 5px;
     display: grid;
-    gap: 4px;
+    gap: 3px;
     min-width: 190px;
-    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.18);
     z-index: 5;
   }
 
   .block-insert-option {
     border: 1px solid transparent;
     background: #fff;
-    border-radius: 10px;
-    padding: 8px 10px;
+    border-radius: 9px;
+    padding: 7px 9px;
     text-align: left;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    gap: 7px;
+    align-items: center;
     cursor: pointer;
     color: #1f2937;
-    font-size: 13px;
+    font-size: 11px;
+  }
+
+  .block-insert-option__icon {
+    width: 17px;
+    height: 17px;
+    color: #0f766e;
+  }
+
+  .block-insert-option__text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
   }
 
   .block-insert-option:hover,
@@ -8519,20 +12631,20 @@
   }
 
   .block-insert-option__meta {
-    font-size: 11px;
+    font-size: 10px;
     color: #6f7682;
   }
 
   .block-insert-btn {
     position: relative;
     z-index: 1;
-    width: 28px;
-    height: 28px;
+    width: 24px;
+    height: 24px;
     border-radius: 999px;
     border: 1px solid #c7d0db;
     background: #fff;
     color: #2f8f83;
-    font-size: 18px;
+    font-size: 15px;
     line-height: 1;
     display: inline-flex;
     align-items: center;
@@ -8568,8 +12680,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
+    gap: 10px;
+    padding: 9px 12px;
     border-bottom: 1px solid #d9dee7;
     background: #fff;
     flex-wrap: wrap;
@@ -8577,7 +12689,7 @@
 
   .answers-title {
     margin: 0;
-    font-size: 20px;
+    font-size: 17px;
     line-height: 1.2;
     font-weight: 700;
     color: #0f172a;
@@ -8590,19 +12702,19 @@
   .answers-meta-controls {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
     flex-wrap: wrap;
   }
 
   .answers-class-select {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
+    gap: 7px;
+    padding: 5px 10px;
     border-radius: 999px;
     border: 1px solid #d9dee7;
     background: #f8fafc;
-    font-size: 13px;
+    font-size: 11px;
     color: #475569;
   }
 
@@ -8618,7 +12730,7 @@
     background: transparent;
     font-weight: 600;
     color: #1c232f;
-    padding: 2px 4px;
+    padding: 2px 3px;
   }
 
   .answers-class-select select:focus {
@@ -8626,17 +12738,17 @@
   }
 
   .answers-error {
-    margin: 0 14px 10px;
+    margin: 0 12px 9px;
   }
 
   .empty {
     text-align: center;
-    padding: 40px 20px;
+    padding: 34px 17px;
   }
 
   .actions {
     display: flex;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
     align-items: center;
   }
@@ -8648,14 +12760,14 @@
   .answers :global(.gap-wrapper) {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    margin: 3px 4px 3px 0;
-    border-radius: 18px;
+    gap: 7px;
+    padding: 5px 9px;
+    margin: 3px 3px 3px 0;
+    border-radius: 15px;
     background: #e2e8f0;
     border: 1px solid #cbd5e1;
     color: #0f172a;
-    font-size: 14px;
+    font-size: 12px;
     cursor: help;
     white-space: nowrap;
     position: relative;
@@ -8664,16 +12776,16 @@
   .answers :global(.gap-summary) {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
   }
 
   .answers :global(.gap-summary__count) {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 2px 6px;
-    border-radius: 10px;
-    font-size: 12px;
+    gap: 3px;
+    padding: 2px 5px;
+    border-radius: 9px;
+    font-size: 10px;
     font-weight: 600;
     background: #fff;
     border: 1px solid #cbd5e1;
@@ -8697,10 +12809,10 @@
   .answers :global(.gap-slot) {
     position: relative;
     display: inline-block;
-    min-width: 140px;
-    min-height: 32px;
+    min-width: 119px;
+    min-height: 27px;
     vertical-align: middle;
-    padding: 4px 6px;
+    padding: 3px 5px;
     border-bottom: 2px dashed #cbd5e1;
   }
 
@@ -8708,22 +12820,22 @@
     display: inline;
     color: #15803d;
     font-weight: 700;
-    font-size: 14px;
+    font-size: 12px;
   }
 
   .answers :global(.gap-tooltip) {
     display: none;
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + 7px);
     left: 0;
     background: #fff;
     border: 1px solid #cbd5e1;
-    border-radius: 10px;
-    padding: 10px;
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.15);
+    border-radius: 9px;
+    padding: 9px;
+    box-shadow: 0 9px 26px rgba(15, 23, 42, 0.15);
     z-index: 5;
-    min-width: 260px;
-    max-width: 420px;
+    min-width: 221px;
+    max-width: 357px;
     white-space: normal;
   }
 
@@ -8736,13 +12848,13 @@
   .answers :global(.gap-tooltip__item) {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    margin: 4px 6px 0 0;
-    border-radius: 14px;
+    gap: 5px;
+    padding: 5px 9px;
+    margin: 3px 5px 0 0;
+    border-radius: 12px;
     border: 1px solid #e2e8f0;
     background: #f8fafc;
-    font-size: 13px;
+    font-size: 11px;
     color: #0f172a;
   }
 
@@ -8771,22 +12883,22 @@
 
   .answers :global(.gap-tooltip__age) {
     color: #6b7280;
-    font-size: 12px;
+    font-size: 10px;
   }
 
   .answers :global(.gap-tooltip__actions) {
     display: inline-flex;
-    gap: 6px;
-    margin-left: 8px;
+    gap: 5px;
+    margin-left: 7px;
   }
 
   .answers :global(.gap-action-btn) {
     border: 1px solid #cbd5e1;
     background: #fff;
     color: #0f172a;
-    padding: 4px 6px;
-    border-radius: 6px;
-    font-size: 11px;
+    padding: 3px 5px;
+    border-radius: 5px;
+    font-size: 10px;
     cursor: pointer;
   }
 
@@ -8827,7 +12939,7 @@
 
   @media (max-width: 900px) {
     .topbar {
-      gap: 16px;
+      gap: 14px;
     }
 
     .topbar-tabs {
@@ -8864,7 +12976,7 @@
       grid-row: auto;
       width: 100%;
       height: auto;
-      margin-top: 18px;
+      margin-top: 15px;
     }
 
   }

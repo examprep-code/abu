@@ -27,6 +27,7 @@ services:
       DB_NAME: abu
       APP_PATH: ""
       DEBUG: "true"
+      PDFTOTEXT_BIN: /usr/bin/pdftotext
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     depends_on:
       - db

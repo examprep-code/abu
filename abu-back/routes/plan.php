@@ -13,7 +13,7 @@ $planConfig = [
     ],
 ];
 
-const PLAN_STATUSES = ['aktiv', 'freiwillig', 'archiviert'];
+const PLAN_STATUSES = ['aktiv', 'freiwillig', 'vergangen', 'archiviert'];
 const PLAN_FORMS = ['personal', 'anonym'];
 
 function normalize_plan_status($value) {

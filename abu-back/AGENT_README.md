@@ -1,2 +1,2 @@
-- Tags immer schliessen (z.B. <luecke-gap>...</luecke-gap>, <luecke-gap-wide>...</luecke-gap-wide>).
+- Tags immer schliessen (z.B. <luecke-gap>...</luecke-gap>).
 - Notizen immer beachten und befolgen.

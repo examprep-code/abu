@@ -174,31 +174,10 @@ function bewerteAntwortMitKI($payload)
         return ['error' => 'Kein OpenAI API-Key im Backend gesetzt.'];
     }
 
-    $antwort = trim($payload['value'] ?? '');
-    $lueckentext = trim($payload['lueckentext'] ?? '');
-    $musterloesung = trim($payload['musterloesung'] ?? '');
-    $targetName = $payload['key'] ?? '';
-
-    $messages = [
-        [
-            'role' => 'system',
-            'content' =>
-                'Du bist eine Lehrperson für Politik und Geschichte. Du bewertest kurze Antworten von Lernenden zu einem Lückentext sachlich korrekt, freundlich und knapp auf Deutsch. Du kennst eine Lehrerlösung, verwendest sie als zentrale fachliche Referenz, verrätst sie aber nie wörtlich. Antworten, die inhaltlich sehr nahe an der Lehrerlösung sind, sollen klar als richtig bewertet werden. Entscheidend ist gleichzeitig, ob die Antwort im Kontext des Lückentextes inhaltlich korrekt ist – auch andere richtige Lösungen, Umschreibungen oder Synonyme können als richtig gelten. Bewerte bewusst tolerant: Ignoriere kleine sprachliche Unterschiede wie Artikel, Präpositionen, Flexionen oder Satzzeichen. Du gibst nur eine grobe Einschätzung (richtig/teilweise richtig/falsch) und kurze Hinweise oder Denkanstösse. Wenn du RICHTIG schreibst, soll die Rückmeldung kurz positiv sein und idealerweise einen ganz kurzen inhaltlichen Hinweis zur Lösung geben (z.B. welches historische Ereignis oder welcher Begriff gemeint ist). Antworte IMMER in genau diesem Format: Erste Zeile NUR eines dieser Wörter in Grossbuchstaben: RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile eine sehr kurze Rückmeldung (maximal 2 Sätze).',
-        ],
-        [
-            'role' => 'user',
-            'content' =>
-                "Hier ist der komplette Lückentext (mit den aktuell eingetragenen Antworten):\n\n" .
-                $lueckentext .
-                "\n\nZu prüfende Lücke: " .
-                $targetName .
-                ".\nAntwort der Schülerin / des Schülers in dieser Lücke: \"" .
-                $antwort .
-                "\".\n\nLehrerlösung für diese Lücke (nur zur internen groben Orientierung, nicht wörtlich wiedergeben): \"" .
-                $musterloesung .
-                "\".\n\nBeurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung nur als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.",
-        ],
-    ];
+    $messages = build_answer_feedback_messages($payload);
+    if (empty($messages)) {
+        return ['error' => 'Feedback-Prompt konnte nicht erzeugt werden.'];
+    }
 
     $modelCandidates = function_exists('agent_model_chain_for')
         ? agent_model_chain_for('grading')
@@ -330,6 +309,170 @@ function bewerteAntwortMitKI($payload)
         'raw' => $rohText,
         'model' => $selectedModel,
     ];
+}
+
+function build_answer_feedback_messages($payload)
+{
+    $exerciseType = strtolower(trim((string)($payload['exercise_type'] ?? '')));
+    if ($exerciseType === 'freitext') {
+        return build_freitext_feedback_messages($payload);
+    }
+    return build_gap_feedback_messages($payload);
+}
+
+function build_gap_feedback_messages($payload)
+{
+    $antwort = trim((string)($payload['value'] ?? ''));
+    $lueckentext = trim((string)($payload['lueckentext'] ?? ''));
+    $musterloesung = trim((string)($payload['musterloesung'] ?? ''));
+    $targetName = trim((string)($payload['key'] ?? ''));
+
+    return [
+        [
+            'role' => 'system',
+            'content' =>
+                'Du bist eine Lehrperson für Politik und Geschichte. Du bewertest kurze Antworten von Lernenden zu einem Lückentext sachlich korrekt, freundlich und knapp auf Deutsch. Du kennst eine Lehrerlösung, verwendest sie als zentrale fachliche Referenz, verrätst sie aber nie wörtlich. Antworten, die inhaltlich sehr nahe an der Lehrerlösung sind, sollen klar als richtig bewertet werden. Entscheidend ist gleichzeitig, ob die Antwort im Kontext des Lückentextes inhaltlich korrekt ist – auch andere richtige Lösungen, Umschreibungen oder Synonyme können als richtig gelten. Bewerte bewusst tolerant: Ignoriere kleine sprachliche Unterschiede wie Artikel, Präpositionen, Flexionen oder Satzzeichen. Du gibst nur eine grobe Einschätzung (richtig/teilweise richtig/falsch) und kurze Hinweise oder Denkanstösse. Wenn du RICHTIG schreibst, soll die Rückmeldung kurz positiv sein und idealerweise einen ganz kurzen inhaltlichen Hinweis zur Lösung geben. Antworte IMMER in genau diesem Format: Erste Zeile NUR eines dieser Wörter in Grossbuchstaben: RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile eine sehr kurze Rückmeldung (maximal 2 Sätze).',
+        ],
+        [
+            'role' => 'user',
+            'content' =>
+                "Hier ist der komplette Lückentext (mit den aktuell eingetragenen Antworten):\n\n" .
+                $lueckentext .
+                "\n\nZu prüfende Lücke: " .
+                $targetName .
+                ".\nAntwort der Schülerin / des Schülers in dieser Lücke: \"" .
+                $antwort .
+                "\".\n\nLehrerlösung für diese Lücke (nur zur internen groben Orientierung, nicht wörtlich wiedergeben): \"" .
+                $musterloesung .
+                "\".\n\nBeurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung nur als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.",
+        ],
+    ];
+}
+
+function build_freitext_feedback_messages($payload)
+{
+    $rawValue = $payload['value'] ?? '';
+    $storedValue = decode_freitext_value($rawValue);
+    $antwort = trim((string)($payload['answer_text'] ?? ''));
+    if ($antwort === '') {
+        $storedAnswer = trim((string)($storedValue['answer'] ?? ''));
+        if ($storedAnswer !== '') {
+            $antwort = $storedAnswer;
+        }
+    }
+    if ($antwort === '' && empty($storedValue['structured'])) {
+        $antwort = trim((string)$rawValue);
+    }
+    $title = trim((string)($payload['title'] ?? ($payload['key'] ?? 'Freitext')));
+    $taskPrompt = trim((string)($payload['task_prompt'] ?? ''));
+    $criteriaText = trim((string)($payload['criteria_text'] ?? ''));
+    $additionalQuestion = trim((string)($payload['additional_question'] ?? ($payload['follow_up_question'] ?? '')));
+    $premisesText = trim((string)($payload['premises_text'] ?? ''));
+    if ($premisesText === '' && !empty($payload['premise_values_json'])) {
+        $decodedPremiseValues = json_decode((string)$payload['premise_values_json'], true);
+        if (is_array($decodedPremiseValues)) {
+            $premisesText = freitext_premise_values_text($decodedPremiseValues);
+        }
+    }
+    if ($premisesText === '' && !empty($storedValue['premise_values'])) {
+        $premisesText = freitext_premise_values_text($storedValue['premise_values']);
+    }
+    $minLength = trim((string)($payload['min_length'] ?? ''));
+    $maxLength = trim((string)($payload['max_length'] ?? ''));
+
+    $lengthInfo = [];
+    if ($minLength !== '') $lengthInfo[] = 'Mindestlaenge: ' . $minLength . ' Zeichen';
+    if ($maxLength !== '') $lengthInfo[] = 'Maximallaenge: ' . $maxLength . ' Zeichen';
+
+    return [
+        [
+            'role' => 'system',
+            'content' =>
+                'Du bist eine ABU-Lehrperson und gibst lernwirksames Mikro-Feedback zu einem deutschsprachigen Freitext. Beurteile den aktuellen Zwischenstand, nicht eine Endnote. Beruecksichtige die Praemissen, die Ausgangslage und die ausgefuellten Werte als verbindlichen Sachkontext. Nutze die KI-Hinweise zu den Praemissen, um Zahlen, Daten, Links und Sachangaben besonders genau auf Plausibilitaet und Passung zu pruefen. Wenn noch kein Text vorhanden ist, bewerte nur die ausgefuellten Praemissen als Vorbereitung und gib Feedback, ob sie stimmig, plausibel und nutzbar sind. Wenn der Text einer verbindlichen Ausgangslage oder einem ausgefuellten Wert widerspricht, darf er nicht RICHTIG sein; bei einem zentralen Widerspruch ist er FALSCH. Pruefe danach, welche zwingenden Teile vorhanden sind und welche fehlen oder zu schwach sind. Wenn eine Zusatzfrage der lernenden Person vorhanden ist, beruecksichtige oder beantworte sie knapp in der zweiten Zeile, ohne das Format zu verlassen. Gib knappes, konkretes Ueberarbeitungsfeedback. Keine komplette Neuformulierung, keine Musterloesung, keine langen Erklaerungen. Antworte IMMER exakt so: Erste Zeile NUR RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile maximal 3 kurze Saetze. Nenne zuerst kurz, was stimmig ist, und dann hoechstens 2 naechste Verbesserungen.',
+        ],
+        [
+            'role' => 'user',
+            'content' =>
+                "Aufgabentitel: " .
+                $title .
+                "\n\nArbeitsauftrag:\n" .
+                ($taskPrompt !== '' ? $taskPrompt : 'Kein separater Arbeitsauftrag angegeben.') .
+                "\n\nZwingende Teile:\n" .
+                ($criteriaText !== '' ? $criteriaText : 'Keine zwingenden Teile angegeben.') .
+                "\n\nZusatzfrage der lernenden Person:\n" .
+                ($additionalQuestion !== '' ? $additionalQuestion : 'Keine Zusatzfrage gestellt.') .
+                "\n\nAusgangslage und ausgefuellte Werte:\n" .
+                ($premisesText !== '' ? $premisesText : 'Keine Ausgangslage oder Werte angegeben.') .
+                "\n\nRahmen:\n" .
+                (!empty($lengthInfo) ? implode("\n", $lengthInfo) : 'Keine Laengenvorgaben angegeben.') .
+                "\n\nPruefmodus:\n" .
+                ($antwort !== '' ? 'Freitext mit Praemissen pruefen.' : 'Vorbereitung pruefen: Es ist noch kein Text vorhanden; bewerte nur die Praemissenwerte.') .
+                "\n\nAktueller Text:\n\"" .
+                ($antwort !== '' ? $antwort : '[noch kein Text geschrieben]') .
+                "\"\n\nGib ueberarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand.",
+        ],
+    ];
+}
+
+function decode_freitext_value($rawValue)
+{
+    $raw = trim((string)$rawValue);
+    if ($raw === '' || substr($raw, 0, 1) !== '{') {
+        return [
+            'answer' => $raw,
+            'premise_values' => [],
+            'structured' => false,
+        ];
+    }
+
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        return [
+            'answer' => $raw,
+            'premise_values' => [],
+            'structured' => false,
+        ];
+    }
+
+    $answer = '';
+    if (isset($decoded['answer']) && is_string($decoded['answer'])) {
+        $answer = $decoded['answer'];
+    } elseif (isset($decoded['text']) && is_string($decoded['text'])) {
+        $answer = $decoded['text'];
+    } else {
+        $answer = '';
+    }
+
+    $premiseValues = [];
+    if (isset($decoded['premise_values']) && is_array($decoded['premise_values'])) {
+        $premiseValues = $decoded['premise_values'];
+    } elseif (isset($decoded['premises']) && is_array($decoded['premises'])) {
+        $premiseValues = $decoded['premises'];
+    }
+
+    return [
+        'answer' => $answer,
+        'premise_values' => $premiseValues,
+        'structured' => true,
+    ];
+}
+
+function freitext_premise_values_text($values)
+{
+    if (!is_array($values) || empty($values)) {
+        return '';
+    }
+
+    $lines = [];
+    $index = 1;
+    foreach ($values as $key => $value) {
+        $cleanKey = trim((string)$key);
+        $cleanValue = trim((string)$value);
+        if ($cleanKey === '' && $cleanValue === '') continue;
+        $lines[] = $index . '. ' . ($cleanKey !== '' ? $cleanKey : 'Wert') . ': ' . ($cleanValue !== '' ? $cleanValue : '[fehlt]');
+        $index++;
+    }
+    return implode("\n", $lines);
 }
 
 function mapClassificationScore($value)

@@ -1,6 +1,3 @@
-<script context="module">
-</script>
-
 <script>
   import { onMount } from 'svelte';
   import { loadConfig } from '$lib/config';
@@ -11,19 +8,13 @@
 
   let apiBaseUrl = '';
   let configError = '';
-  let ready = false;
+  let loading = true;
+  let redirecting = false;
 
   let learner = null;
-  let loginCode = '';
-  let loginError = '';
-  let loginLoading = false;
-
   let sheets = [];
   let loadingSheets = false;
   let sheetError = '';
-  let sortedSheets = [];
-  let currentSheets = [];
-  let archivedSheets = [];
 
   const readPayload = async (res) => {
     try {
@@ -36,13 +27,58 @@
   const persistLearner = (nextLearner) => {
     learner = nextLearner;
     applySchoolCiCss(nextLearner?.school_css);
-    if (typeof localStorage !== 'undefined') {
-      if (nextLearner) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextLearner));
-      } else {
-        localStorage.removeItem(STORAGE_KEY);
-      }
+    if (typeof localStorage === 'undefined') return;
+    if (nextLearner) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextLearner));
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
     }
+  };
+
+  const readLearnerCode = () => {
+    let urlCode = '';
+    if (typeof window !== 'undefined') {
+      const params = new URL(window.location.href).searchParams;
+      urlCode = (params.get('token') || params.get('code') || '').replace(/\s+/g, '');
+    }
+    if (urlCode) return urlCode;
+
+    if (typeof localStorage === 'undefined') return '';
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const stored = raw ? JSON.parse(raw) : null;
+      return (stored?.code || '').replace(/\s+/g, '');
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
+      return '';
+    }
+  };
+
+  const clearLearnerCodeFromUrl = () => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('token');
+    url.searchParams.delete('code');
+    window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+  };
+
+  const clearLearnerState = () => {
+    persistLearner(null);
+    sheets = [];
+    sheetError = '';
+    loadingSheets = false;
+  };
+
+  const redirectToHome = () => {
+    clearLearnerState();
+    redirecting = true;
+    if (typeof window !== 'undefined') {
+      window.location.replace('/');
+    }
+  };
+
+  const showConfigError = () => {
+    loading = false;
   };
 
   const validateLearner = async (code) => {
@@ -64,12 +100,13 @@
   };
 
   const loadSheets = async () => {
-    if (!apiBaseUrl) return;
+    if (!apiBaseUrl || !learner?.code) return;
     loadingSheets = true;
     sheetError = '';
     try {
-      const codeParam = learner?.code ? `?code=${encodeURIComponent(learner.code)}` : '';
-      const res = await fetch(`${apiBaseUrl}sheet/public-list${codeParam}`);
+      const res = await fetch(
+        `${apiBaseUrl}sheet/public-list?code=${encodeURIComponent(learner.code)}`
+      );
       const payload = await readPayload(res);
       if (!res.ok) {
         sheetError = payload?.warning || 'Sheets konnten nicht geladen werden';
@@ -84,24 +121,9 @@
     }
   };
 
-  const loginLearner = async () => {
-    loginError = '';
-    loginLoading = true;
-    try {
-      const cleaned = (loginCode || '').replace(/\s+/g, '');
-      const validated = await validateLearner(cleaned);
-      if (!validated) {
-        loginError = 'Code ungueltig.';
-        return;
-      }
-      persistLearner(validated);
-      loginCode = '';
-      await loadSheets();
-    } catch (err) {
-      loginError = err?.message ?? 'Login fehlgeschlagen';
-    } finally {
-      loginLoading = false;
-    }
+  const logoutLearner = () => {
+    clearLearnerCodeFromUrl();
+    redirectToHome();
   };
 
   const buildSheetHref = (sheetKey) => {
@@ -112,8 +134,7 @@
     if (code) params.set('code', code);
     const classroom = String(learner?.classroom ?? '').trim();
     if (classroom) params.set('classroom', classroom);
-    const query = params.toString();
-    return query ? `/sheet/${key}?${query}` : `/sheet/${key}`;
+    return `/sheet/${key}?${params.toString()}`;
   };
 
   const normalizeStatus = (status) => String(status ?? '').trim().toLowerCase();
@@ -133,8 +154,8 @@
 
   const sortSheetsByUpdate = (entries) =>
     [...entries].sort((a, b) => {
-      const timeA = Date.parse(String(a?.updated_at ?? '')) || 0;
-      const timeB = Date.parse(String(b?.updated_at ?? '')) || 0;
+      const timeA = Date.parse(String(a?.updated_at ?? a?.created_at ?? '')) || 0;
+      const timeB = Date.parse(String(b?.updated_at ?? b?.created_at ?? '')) || 0;
       if (timeB !== timeA) return timeB - timeA;
       const nameA = String(a?.name ?? a?.key ?? '').toLowerCase();
       const nameB = String(b?.name ?? b?.key ?? '').toLowerCase();
@@ -144,14 +165,33 @@
     });
 
   $: sortedSheets = sortSheetsByUpdate(sheets);
-  $: currentSheets = sortedSheets.filter(
+  $: activeSheets = sortedSheets.filter(
     (entry) => normalizeStatus(entry?.assignment_status) !== ARCHIVED_STATUS
   );
   $: archivedSheets = sortedSheets.filter(
     (entry) => normalizeStatus(entry?.assignment_status) === ARCHIVED_STATUS
   );
+  $: sheetGroups = [
+    {
+      title: 'Freigegeben',
+      entries: activeSheets,
+      emptyText: 'Keine freigegebenen Arbeitsblaetter.'
+    },
+    {
+      title: 'Archiviert',
+      entries: archivedSheets,
+      emptyText: 'Keine archivierten Arbeitsblaetter.',
+      archived: true
+    }
+  ];
 
   onMount(async () => {
+    const code = readLearnerCode();
+    if (!code) {
+      redirectToHome();
+      return;
+    }
+
     try {
       const config = await loadConfig();
       apiBaseUrl = config.apiBaseUrl.endsWith('/')
@@ -159,96 +199,58 @@
         : `${config.apiBaseUrl}/`;
     } catch (err) {
       configError = err?.message ?? 'config konnte nicht geladen werden';
-    } finally {
-      ready = true;
+      showConfigError();
+      return;
     }
 
-    if (typeof localStorage !== 'undefined') {
-      if (typeof window !== 'undefined') {
-        const params = new URL(window.location.href).searchParams;
-        const urlCode = (params.get('code') || '').replace(/\s+/g, '');
-        if (urlCode) {
-          const validated = await validateLearner(urlCode);
-          params.delete('code');
-          const newUrl =
-            window.location.pathname +
-            (params.toString() ? `?${params.toString()}` : '') +
-            window.location.hash;
-          window.history.replaceState({}, document.title, newUrl);
-          if (validated) {
-            persistLearner(validated);
-            await loadSheets();
-            return;
-          }
-          loginError = 'Code ungueltig.';
-        }
-      }
+    const validated = await validateLearner(code);
+    clearLearnerCodeFromUrl();
 
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        try {
-          const stored = JSON.parse(raw);
-          if (stored?.code) {
-            const validated = await validateLearner(stored.code);
-            if (validated) {
-              persistLearner(validated);
-              await loadSheets();
-              return;
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
+    if (!validated) {
+      redirectToHome();
+      return;
     }
+
+    persistLearner(validated);
+    await loadSheets();
+    loading = false;
   });
 </script>
 
-<div class="page">
-  <header class="hero">
-    <div>
-      <p class="eyebrow">ABU</p>
-      <h1>Lernenden-Login</h1>
-      <p class="meta">Arbeitsblaetter mit deinem Identifikationscode oeffnen.</p>
-    </div>
-    {#if learner}
-      <div class="status-card">
-        <strong>Eingeloggt als</strong>
-        <span>{learner.name} ({learner.code})</span>
+{#if redirecting}
+  <div class="page">
+    <div class="state">Weiterleitung zur Startseite...</div>
+  </div>
+{:else}
+  <div class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">ABU</p>
+        <h1>Lernendenportal</h1>
+        <p class="meta">Deine freigegebenen Arbeitsblaetter.</p>
       </div>
-    {/if}
-  </header>
-
-  {#if configError}
-    <div class="state error">{configError}</div>
-  {:else if !ready}
-    <div class="state">Lade Konfiguration...</div>
-  {:else}
-    {#if !learner}
-      <section class="login-card">
-        <h2>Identifikationscode</h2>
-        <p>Bitte gib deinen 12-stelligen Code ein.</p>
-        <div class="login-row">
-          <input
-            type="text"
-            inputmode="numeric"
-            placeholder="123456789012"
-            bind:value={loginCode}
-          />
-          <button class="primary" on:click={loginLearner} disabled={loginLoading}>
-            {loginLoading ? '...' : 'Einloggen'}
-          </button>
+      {#if learner}
+        <div class="status-card">
+          <strong>Eingeloggt als</strong>
+          <span>{learner.name} ({learner.code})</span>
+          <button class="secondary" type="button" on:click={logoutLearner}>Ausloggen</button>
         </div>
-        {#if loginError}
-          <p class="state error">{loginError}</p>
-        {/if}
-      </section>
+      {/if}
+    </header>
+
+    {#if configError}
+      <div class="state error">{configError}</div>
+    {:else if loading}
+      <div class="state">Lade Konfiguration...</div>
+    {:else if !learner}
+      <div class="state">Weiterleitung zur Startseite...</div>
     {:else}
       <section class="sheet-section">
         <div class="section-head">
           <h2>Arbeitsblaetter</h2>
           <button
             class="icon-btn ci-btn-outline refresh-btn"
+            type="button"
             on:click={loadSheets}
             disabled={loadingSheets}
             title="Sheets aktualisieren"
@@ -266,6 +268,7 @@
             </svg>
           </button>
         </div>
+
         {#if loadingSheets}
           <p class="state">Lade Sheets...</p>
         {:else if sheetError}
@@ -274,88 +277,56 @@
           <p class="state">Keine Arbeitsblaetter gefunden.</p>
         {:else}
           <div class="sheet-groups">
-            <section class="sheet-group">
-              <div class="group-head">
-                <h3>Aktuell</h3>
-                <span>{currentSheets.length}</span>
-              </div>
-              {#if currentSheets.length === 0}
-                <p class="state">Keine aktuellen Arbeitsblaetter.</p>
-              {:else}
-                <div class="sheet-list">
-                  {#each currentSheets as entry}
-                    <a class="sheet-item" href={buildSheetHref(entry.key)}>
-                      <span class="sheet-item__title">
-                        {entry.name || `Sheet ${entry.key}`}
-                        {#if isAnonymousAssignment(entry)}
-                          <span
-                            class="assignment-symbol"
-                            title="Anonyme Zuweisung"
-                            aria-label="Anonyme Zuweisung"
-                          >
-                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                              <path
-                                d="M7 10V8a5 5 0 1 1 10 0v2M6 10h12v9H6z"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.8"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                              />
-                            </svg>
-                          </span>
-                        {/if}
-                      </span>
-                      <span class="sheet-item__summary">{summarizeSheet(entry)}</span>
-                    </a>
-                  {/each}
+            {#each sheetGroups as group}
+              <section class="sheet-group">
+                <div class="group-head">
+                  <h3>{group.title}</h3>
+                  <span>{group.entries.length}</span>
                 </div>
-              {/if}
-            </section>
-            <section class="sheet-group">
-              <div class="group-head">
-                <h3>Archiviert</h3>
-                <span>{archivedSheets.length}</span>
-              </div>
-              {#if archivedSheets.length === 0}
-                <p class="state">Keine archivierten Arbeitsblaetter.</p>
-              {:else}
-                <div class="sheet-list">
-                  {#each archivedSheets as entry}
-                    <a class="sheet-item sheet-item--archived" href={buildSheetHref(entry.key)}>
-                      <span class="sheet-item__title">
-                        {entry.name || `Sheet ${entry.key}`}
-                        {#if isAnonymousAssignment(entry)}
-                          <span
-                            class="assignment-symbol"
-                            title="Anonyme Zuweisung"
-                            aria-label="Anonyme Zuweisung"
-                          >
-                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                              <path
-                                d="M7 10V8a5 5 0 1 1 10 0v2M6 10h12v9H6z"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.8"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                              />
-                            </svg>
-                          </span>
-                        {/if}
-                      </span>
-                      <span class="sheet-item__summary">{summarizeSheet(entry)}</span>
-                    </a>
-                  {/each}
-                </div>
-              {/if}
-            </section>
+                {#if group.entries.length === 0}
+                  <p class="state">{group.emptyText}</p>
+                {:else}
+                  <div class="sheet-list">
+                    {#each group.entries as entry}
+                      <a
+                        class="sheet-item"
+                        class:sheet-item--archived={group.archived}
+                        href={buildSheetHref(entry.key)}
+                      >
+                        <span class="sheet-item__title">
+                          {entry.name || `Sheet ${entry.key}`}
+                          {#if isAnonymousAssignment(entry)}
+                            <span
+                              class="assignment-symbol"
+                              title="Anonyme Zuweisung"
+                              aria-label="Anonyme Zuweisung"
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                                <path
+                                  d="M7 10V8a5 5 0 1 1 10 0v2M6 10h12v9H6z"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="1.8"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                />
+                              </svg>
+                            </span>
+                          {/if}
+                        </span>
+                        <span class="sheet-item__summary">{summarizeSheet(entry)}</span>
+                      </a>
+                    {/each}
+                  </div>
+                {/if}
+              </section>
+            {/each}
           </div>
         {/if}
       </section>
     {/if}
-  {/if}
-</div>
+  </div>
+{/if}
 
 <style>
   :global(body) {
@@ -367,9 +338,9 @@
 
   .page {
     min-height: 100vh;
-    padding: 32px clamp(16px, 4vw, 56px) 64px;
+    padding: 27px clamp(14px, 4vw, 48px) 54px;
     display: grid;
-    gap: 24px;
+    gap: 20px;
   }
 
   .hero {
@@ -377,12 +348,12 @@
     flex-wrap: wrap;
     justify-content: space-between;
     align-items: center;
-    gap: 20px;
+    gap: 17px;
   }
 
   .eyebrow {
-    margin: 0 0 8px;
-    font-size: 11px;
+    margin: 0 0 7px;
+    font-size: 10px;
     letter-spacing: 0.3em;
     text-transform: uppercase;
     color: #7a6f62;
@@ -391,69 +362,57 @@
   h1 {
     margin: 0;
     font-family: var(--ci-font-title);
-    font-size: clamp(28px, 4vw, 42px);
+    font-size: clamp(24px, 4vw, 36px);
   }
 
   .meta {
-    margin: 6px 0 0;
+    margin: 5px 0 0;
     color: #6b7280;
   }
 
   .status-card {
     background: #fff;
-    border-radius: 16px;
+    border-radius: 14px;
     border: 1px solid #e2e8f0;
-    padding: 14px 18px;
+    padding: 12px 15px;
     display: grid;
-    gap: 6px;
-    min-width: 220px;
-    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+    gap: 7px;
+    min-width: 187px;
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
   }
 
-  .login-card {
-    background: #fff;
-    border-radius: 18px;
-    padding: 22px;
-    border: 1px solid #e2e8f0;
-    max-width: 520px;
-    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
-    display: grid;
-    gap: 12px;
-  }
-
-  .login-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-
-  .login-row input {
-    flex: 1 1 220px;
-    padding: 12px 14px;
-    border-radius: 10px;
-    border: 1px solid #cbd5e1;
-    font-size: 16px;
-  }
-
-  .primary {
-    padding: 10px 16px;
+  .secondary {
+    width: fit-content;
+    padding: 9px 12px;
     border-radius: 999px;
-    border: 1px solid #0f172a;
-    background: #0f172a;
-    color: #fff;
-    font-weight: 600;
+    border: 1px solid #cbd5e1;
+    background: #fff;
     cursor: pointer;
+    font: inherit;
+    font-weight: 600;
   }
 
-  .primary:hover {
-    background: #1f2937;
-    color: #fff;
+  .sheet-section {
+    display: grid;
+    gap: 14px;
+  }
+
+  .section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .section-head h2 {
+    margin: 0;
+    font-size: 19px;
   }
 
   .icon-btn {
-    padding: 8px 10px;
-    border-radius: 10px;
-    font-size: 12px;
+    padding: 7px 9px;
+    border-radius: 9px;
+    font-size: 10px;
     cursor: pointer;
   }
 
@@ -463,8 +422,8 @@
   }
 
   .refresh-btn {
-    width: 38px;
-    height: 38px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -472,66 +431,54 @@
   }
 
   .refresh-icon {
-    width: 18px;
-    height: 18px;
-  }
-
-  .sheet-section {
-    display: grid;
-    gap: 16px;
-  }
-
-  .section-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
+    width: 15px;
+    height: 15px;
   }
 
   .sheet-groups {
     display: grid;
-    gap: 14px;
+    gap: 12px;
   }
 
   .sheet-group {
     display: grid;
-    gap: 10px;
+    gap: 9px;
   }
 
   .group-head {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 8px;
+    gap: 7px;
   }
 
   .group-head h3 {
     margin: 0;
-    font-size: 16px;
+    font-size: 14px;
   }
 
   .group-head span {
-    min-width: 26px;
+    min-width: 22px;
     text-align: center;
     border-radius: 999px;
-    padding: 2px 8px;
-    font-size: 12px;
+    padding: 2px 7px;
+    font-size: 10px;
     background: rgba(15, 23, 42, 0.08);
     color: #374151;
   }
 
   .sheet-list {
     display: grid;
-    gap: 8px;
+    gap: 7px;
   }
 
   .sheet-item {
     background: rgba(255, 255, 255, 0.92);
-    border-radius: 12px;
+    border-radius: 10px;
     border: 1px solid #dbe4ef;
-    padding: 10px 12px;
+    padding: 9px 10px;
     display: grid;
-    gap: 4px;
+    gap: 3px;
     text-decoration: none;
     color: inherit;
     transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
@@ -548,17 +495,17 @@
   }
 
   .sheet-item__title {
-    font-size: 14px;
+    font-size: 12px;
     font-weight: 700;
     line-height: 1.25;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
   }
 
   .assignment-symbol {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -566,12 +513,12 @@
   }
 
   .assignment-symbol svg {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
   }
 
   .sheet-item__summary {
-    font-size: 12px;
+    font-size: 10px;
     color: #4b5563;
     line-height: 1.35;
     display: -webkit-box;
@@ -582,8 +529,8 @@
   }
 
   .state {
-    padding: 10px 12px;
-    border-radius: 12px;
+    padding: 9px 10px;
+    border-radius: 10px;
     background: rgba(255, 255, 255, 0.7);
     border: 1px solid #e2e8f0;
   }

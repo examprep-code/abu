@@ -7,6 +7,7 @@ $m['learner']=[
     'email' => ['email'],
     'code' => ['token'],
     'notes' => ['text'],
+    'prompt' => ['text'],
     'created_at' => ['timestamp'],
     'updated_at' => ['timestamp'],
 ];

@@ -152,7 +152,7 @@ function buildLueckentext(root: HTMLElement): string {
         const value = (el as HTMLInputElement).value.trim();
         return value || '____';
       }
-      if (tag === 'LUECKE-GAP' || tag === 'LUECKE-GAP-WIDE') {
+      if (tag === 'LUECKE-GAP') {
         const gapInput = el.querySelector('input.luecke') as HTMLInputElement | null;
         const value = gapInput?.value?.trim() || '';
         return value || '____';
@@ -332,16 +332,35 @@ function notifySaveState(
 export function ensureLueckeElements(): void {
   if (customElements.get('luecke-gap')) return;
 
+  const upgraded = new WeakSet<HTMLElement>();
+  const isVisualEditorGap = (el: HTMLElement) =>
+    Boolean(el.closest('.block-editor__visual[contenteditable="true"]'));
+
   class LueckeGap extends HTMLElement {
     connectedCallback() {
-      if (this.dataset.upgraded === '1') return;
-      this.dataset.upgraded = '1';
+      const existingName = (this.getAttribute('name') || '').trim();
+      const nameAttr = existingName || `luecke-${Math.random().toString(36).slice(2)}`;
+      if (!existingName) {
+        this.setAttribute('name', nameAttr);
+      }
 
-      const nameAttr = this.getAttribute('name') || `luecke-${Math.random().toString(36).slice(2)}`;
-      this.setAttribute('name', nameAttr);
+      // Clean up legacy editor artifacts (this attribute used to be written by older versions).
+      this.removeAttribute('data-upgraded');
 
-      const solutionText = (this.textContent || '').trim();
+      // In the visual editor we want to keep the original markup (<luecke-gap prompt>Loesung</luecke-gap>)
+      // so it can be edited/serialized without injecting runtime inputs/buttons.
+      if (isVisualEditorGap(this)) {
+        return;
+      }
+
+      if (upgraded.has(this)) return;
+      upgraded.add(this);
+
+      const existingInput = this.querySelector('input.luecke') as HTMLInputElement | null;
+      const solutionSource = existingInput?.dataset?.solution;
+      const solutionText = (solutionSource || this.textContent || '').trim();
       const acceptedExtra = this.getAttribute('data-accepted') || '';
+      const widthAttr = (this.getAttribute('width') || '').trim();
 
       this.innerHTML = '';
 
@@ -350,6 +369,9 @@ export function ensureLueckeElements(): void {
       input.className = 'luecke';
       input.name = nameAttr;
       input.dataset.solution = solutionText;
+      if (widthAttr) {
+        input.style.width = widthAttr;
+      }
       if (acceptedExtra) {
         input.dataset.accepted = acceptedExtra;
       }
@@ -375,10 +397,7 @@ export function ensureLueckeElements(): void {
     }
   }
 
-  class LueckeGapWide extends LueckeGap {}
-
   customElements.define('luecke-gap', LueckeGap);
-  customElements.define('luecke-gap-wide', LueckeGapWide);
 }
 
 async function prefillAnswers(options: LueckeRuntimeOptions): Promise<void> {
@@ -445,7 +464,7 @@ async function checkGap(
 ): Promise<void> {
   if (button.dataset.lueckeBusy === '1') return;
   button.dataset.lueckeBusy = '1';
-  const wrapper = button.closest('luecke-gap, luecke-gap-wide') as HTMLElement | null;
+  const wrapper = button.closest('luecke-gap') as HTMLElement | null;
   const input = wrapper?.querySelector('input.luecke') as HTMLInputElement | null;
   const feedback = wrapper?.querySelector('.feedback') as HTMLElement | null;
 

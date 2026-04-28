@@ -1,12 +1,11 @@
 <?php
 
-$schoolConfig = [
-    'school' => [
+$collectionConfig = [
+    'collection' => [
         'id' => [],
         'user' => [],
         'name' => [],
-        'ci_css' => [],
-        'prompt' => [],
+        'description' => [],
         'created_at' => [],
         'updated_at' => [],
     ],
@@ -19,14 +18,19 @@ if (!isset($user['id'])) {
 }
 
 if ($method === 'GET') {
-    $where = ['user = ' . intval($user['id'])];
+    $where = [];
+    $scopeToCurrentUser = !user_is_admin() || !empty($paras[0]);
+    if ($scopeToCurrentUser) {
+        $where[] = 'user = ' . intval($user['id']);
+    }
     if (!empty($paras[0])) {
         $where[] = 'id = ' . intval($paras[0]);
     }
-    $schoolConfig['school']['_where'] = $where;
-    $result = get($schoolConfig);
+    $collectionConfig['collection']['_where'] = $where;
+    $collectionConfig['collection']['_append'] = ['ORDER BY updated_at DESC, name ASC'];
+    $result = get($collectionConfig);
     if (!empty($paras[0])) {
-        $return['data'] = $result['school'][0] ?? [];
+        $return['data'] = $result['collection'][0] ?? [];
     } else {
         $return['data'] = $result;
     }
@@ -34,7 +38,7 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST') {
-    $name = trim($data['name'] ?? '');
+    $name = trim((string) ($data['name'] ?? ''));
     if ($name === '') {
         $return['status'] = 400;
         warning('name fehlt');
@@ -45,19 +49,17 @@ if ($method === 'POST') {
     $payload = [
         'user' => ['id' => $user['id']],
         'name' => $name,
-        'ci_css' => (string) ($data['ci_css'] ?? ''),
-        'prompt' => trim((string) ($data['prompt'] ?? '')),
+        'description' => trim((string) ($data['description'] ?? '')),
         'created_at' => $now,
         'updated_at' => $now,
     ];
 
     set(
-        'school',
+        'collection',
         [
             'user' => [],
             'name' => [],
-            'ci_css' => [],
-            'prompt' => [],
+            'description' => [],
             'created_at' => [],
             'updated_at' => [],
         ],
@@ -76,7 +78,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
     }
 
     $existing = sql_get(
-        'SELECT id FROM `school` WHERE id = ' .
+        'SELECT id FROM `collection` WHERE id = ' .
             intval($id) .
             ' AND user = ' .
             intval($user['id']) .
@@ -84,17 +86,26 @@ if ($method === 'PUT' || $method === 'PATCH') {
     );
     if (!count($existing)) {
         $return['status'] = 404;
-        warning('schule nicht gefunden');
+        warning('sammlung nicht gefunden');
         return;
     }
 
     $update = [];
-    if (array_key_exists('name', $data)) $update['name'] = trim($data['name']);
-    if (array_key_exists('ci_css', $data)) $update['ci_css'] = (string) ($data['ci_css'] ?? '');
-    if (array_key_exists('prompt', $data)) $update['prompt'] = trim((string) ($data['prompt'] ?? ''));
+    if (array_key_exists('name', $data)) {
+        $name = trim((string) ($data['name'] ?? ''));
+        if ($name === '') {
+            $return['status'] = 400;
+            warning('name fehlt');
+            return;
+        }
+        $update['name'] = $name;
+    }
+    if (array_key_exists('description', $data)) {
+        $update['description'] = trim((string) ($data['description'] ?? ''));
+    }
     $update['updated_at'] = date('Y-m-d H:i:s');
 
-    sql_update('school', $update, intval($id));
+    sql_update('collection', $update, intval($id));
     return;
 }
 
@@ -107,7 +118,7 @@ if ($method === 'DELETE') {
     }
 
     $existing = sql_get(
-        'SELECT id FROM `school` WHERE id = ' .
+        'SELECT id FROM `collection` WHERE id = ' .
             intval($id) .
             ' AND user = ' .
             intval($user['id']) .
@@ -115,19 +126,22 @@ if ($method === 'DELETE') {
     );
     if (!count($existing)) {
         $return['status'] = 404;
-        warning('schule nicht gefunden');
+        warning('sammlung nicht gefunden');
         return;
     }
 
     sql_set(
-        'UPDATE `classroom` SET school = null WHERE school = ' .
+        'DELETE FROM `collection_sheet` WHERE collection = ' .
             intval($id) .
             ' AND user = ' .
             intval($user['id']) .
             ';'
     );
-    sql_delete('school', intval($id));
+    sql_delete('collection', intval($id));
     return;
 }
+
+$return['status'] = 405;
+warning('Methode nicht erlaubt');
 
 ?>

@@ -36,6 +36,7 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
     description: 'Lehrperson/Admin mit Login-Token.',
     fields: [
       { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'role', type: 'int', description: '0=warte Aktivierung, 1=normal, 3=admin' },
       { name: 'email', type: 'varchar', description: 'Login-Email' },
       { name: 'password', type: 'varchar(hash)', description: 'Gehashtes Passwort' },
       { name: 'token', type: 'varchar', description: 'Aktiver API-Token' },
@@ -53,6 +54,7 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
       { name: 'key', type: 'word', description: 'Stabiler Sheet-Schluessel' },
       { name: 'name', type: 'word', description: 'Titel des Sheets' },
       { name: 'content', type: 'text', description: 'HTML-Inhalt' },
+      { name: 'prompt', type: 'longtext', description: 'Prompt fuer spaetere Auto-Korrektur' },
       { name: 'is_current', type: 'bool', description: 'Aktive Version' }
     ],
     relations: ['n:1 user', '1:n classroom_sheet (via sheet_key)', '1:n answer (via sheet key)']
@@ -65,7 +67,8 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
       { name: 'id', type: 'int', description: 'Primarschluessel' },
       { name: 'user', type: 'fkey user.id', description: 'Besitzender User' },
       { name: 'name', type: 'word', description: 'Schulname' },
-      { name: 'ci_css', type: 'text', description: 'CI CSS' }
+      { name: 'ci_css', type: 'text', description: 'CI CSS' },
+      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext fuer Schule' }
     ],
     relations: ['n:1 user', '1:n classroom']
   },
@@ -80,7 +83,8 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
       { name: 'name', type: 'word', description: 'Klassenname' },
       { name: 'year', type: 'word', description: 'Jahrgang' },
       { name: 'profession', type: 'word', description: 'Beruf/Fachrichtung' },
-      { name: 'notes', type: 'text', description: 'Notizen' }
+      { name: 'notes', type: 'text', description: 'Notizen' },
+      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext fuer Klasse' }
     ],
     relations: ['n:1 user', 'n:1 school', '1:n learner', '1:n classroom_sheet']
   },
@@ -95,7 +99,8 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
       { name: 'name', type: 'word', description: 'Anzeigename' },
       { name: 'email', type: 'email', description: 'Optionale Email' },
       { name: 'code', type: 'token', description: '12-stelliger Lernenden-Code' },
-      { name: 'notes', type: 'text', description: 'Notizen' }
+      { name: 'notes', type: 'text', description: 'Notizen' },
+      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext fuer Lernende' }
     ],
     relations: ['n:1 user', 'n:1 classroom']
   },
@@ -108,8 +113,9 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
       { name: 'user', type: 'fkey user.id', description: 'Besitzender User' },
       { name: 'classroom', type: 'fkey classroom.id', description: 'Klassen-ID' },
       { name: 'sheet_key', type: 'word', description: 'Sheet key' },
-      { name: 'status', type: 'word', description: 'aktiv|freiwillig|archiviert' },
-      { name: 'assignment_form', type: 'word', description: 'personal|anonym' }
+      { name: 'status', type: 'word', description: 'aktiv|freiwillig|vergangen|archiviert' },
+      { name: 'assignment_form', type: 'word', description: 'personal|anonym' },
+      { name: 'prompt', type: 'longtext', description: 'Prompt fuer diese Zuweisung' }
     ],
     relations: ['n:1 user', 'n:1 classroom', 'n:1 sheet (via key)']
   },

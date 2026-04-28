@@ -7,6 +7,7 @@ $sheetConfig = [
         'key' => [],
         'name' => [],
         'content' => [],
+        'prompt' => [],
         'is_current' => [],
         'created_at' => [],
         'updated_at' => [],
@@ -20,8 +21,12 @@ if (!isset($user['id'])) {
 }
 
 if ($method === 'GET') {
-    $where = ['user = ' . intval($user['id'])];
     $key = isset($_GET['key']) ? trim($_GET['key']) : '';
+    $where = [];
+    $scopeToCurrentUser = !user_is_admin() || !empty($paras[0]) || $key !== '';
+    if ($scopeToCurrentUser) {
+        $where[] = 'user = ' . intval($user['id']);
+    }
     if (!empty($paras[0])) {
         $where[] = 'id = ' . intval($paras[0]);
     } elseif ($key !== '') {
@@ -70,6 +75,7 @@ if ($method === 'POST') {
         'key' => $key,
         'name' => $name,
         'content' => $data['content'] ?? '',
+        'prompt' => (string) ($data['prompt'] ?? ''),
         'is_current' => 1,
         'created_at' => $now,
         'updated_at' => $now,
@@ -82,6 +88,7 @@ if ($method === 'POST') {
             'key' => [],
             'name' => [],
             'content' => [],
+            'prompt' => [],
             'is_current' => [],
             'created_at' => [],
             'updated_at' => [],
@@ -102,7 +109,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
     }
 
     $current = sql_get(
-        'SELECT id, `key`, `name`, content FROM `sheet` WHERE id = ' .
+        'SELECT id, `key`, `name`, content, prompt FROM `sheet` WHERE id = ' .
             intval($id) .
             ' AND user = ' .
             intval($user['id']) .
@@ -147,6 +154,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
         'key' => $current['key'],
         'name' => trim($data['name'] ?? $current['name']),
         'content' => $data['content'],
+        'prompt' => array_key_exists('prompt', $data) ? (string) ($data['prompt'] ?? '') : (string) ($current['prompt'] ?? ''),
         'is_current' => 1,
         'created_at' => $now,
         'updated_at' => $now,
@@ -159,6 +167,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
             'key' => [],
             'name' => [],
             'content' => [],
+            'prompt' => [],
             'is_current' => [],
             'created_at' => [],
             'updated_at' => [],
@@ -206,6 +215,13 @@ if ($method === 'DELETE') {
 
     sql_set(
         'DELETE FROM `classroom_sheet` WHERE user = ' .
+            intval($user['id']) .
+            ' AND sheet_key = "' .
+            sql_escape($current['key']) .
+            '";'
+    );
+    sql_set(
+        'DELETE FROM `collection_sheet` WHERE user = ' .
             intval($user['id']) .
             ' AND sheet_key = "' .
             sql_escape($current['key']) .

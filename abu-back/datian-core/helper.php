@@ -2,6 +2,7 @@
 $db = mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME);
 if ($db) {
     mysqli_set_charset($db, 'utf8mb4');
+    mysqli_query($db, "SET time_zone = '+00:00'");
 }
 
 function sql_escape($string){
@@ -17,6 +18,10 @@ function sql_set($sql, $return_id=false)
     $message=mysqli_query($db, $sql);
     // Surface DB errors to the response for quicker debugging
     if ($message === false) {
+        global $return;
+        if (!isset($return['status']) || intval($return['status']) < 400) {
+            $return['status'] = 500;
+        }
         warning('SQL error: ' . mysqli_error($db));
     }
     if ($return_id){
@@ -29,14 +34,18 @@ function sql_set($sql, $return_id=false)
 //executes sql command and returns result as an array
 function sql_get($sql)
 {
-    echo $sql;
     inf ($sql, 'SQL get');
     global $db;
     $daten=mysqli_query($db, $sql);
     $return=[];
 
-    if (mysqli_error($db)){
-        echo (mysqli_error($db));
+    if ($daten === false) {
+        global $return;
+        if (!isset($return['status']) || intval($return['status']) < 400) {
+            $return['status'] = 500;
+        }
+        warning('SQL error: ' . mysqli_error($db));
+        return [];
     }
     while ($daten && $entry = (mysqli_fetch_assoc($daten)))
     {
@@ -103,8 +112,38 @@ function select2string($array, $table){
         return $select;
 }
 
+function normalize_api_timestamps($value, $key = null)
+{
+    if (is_array($value)) {
+        $normalized = [];
+        foreach ($value as $childKey => $childValue) {
+            $normalized[$childKey] = normalize_api_timestamps(
+                $childValue,
+                is_string($childKey) ? $childKey : null
+            );
+        }
+        return $normalized;
+    }
+
+    if (!is_string($key) || !is_string($value)) {
+        return $value;
+    }
+
+    if (!preg_match('/(?:_at|valid_until)$/', $key)) {
+        return $value;
+    }
+
+    $trimmed = trim($value);
+    if (!preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $trimmed)) {
+        return $value;
+    }
+
+    return str_replace(' ', 'T', $trimmed) . 'Z';
+}
+
 function json($array) 
 {
+    $array = normalize_api_timestamps($array);
     $options = JSON_UNESCAPED_UNICODE;
     if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
         $options |= JSON_INVALID_UTF8_SUBSTITUTE;
@@ -118,6 +157,100 @@ function json($array)
     }
     header('Content-Type: application/json; charset=utf-8');
     echo $json;
+}
+
+function request_headers() {
+    if (function_exists('getallheaders')) {
+        $headers = getallheaders();
+        if (is_array($headers)) {
+            return $headers;
+        }
+    }
+    if (function_exists('apache_request_headers')) {
+        $headers = apache_request_headers();
+        if (is_array($headers)) {
+            return $headers;
+        }
+    }
+
+    $headers = [];
+    foreach ($_SERVER as $key => $value) {
+        if (!is_string($key)) {
+            continue;
+        }
+        if (strpos($key, 'HTTP_') === 0) {
+            $name = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($key, 5)))));
+            $headers[$name] = $value;
+            continue;
+        }
+        if (in_array($key, ['CONTENT_TYPE', 'CONTENT_LENGTH', 'CONTENT_MD5'], true)) {
+            $name = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', $key))));
+            $headers[$name] = $value;
+        }
+    }
+    return $headers;
+}
+
+function get_learner_session() {
+    static $resolved = false;
+    static $session = [];
+
+    if ($resolved) {
+        return $session;
+    }
+    $resolved = true;
+
+    global $data;
+    $payload = is_array($data ?? null) ? $data : [];
+    $headers = request_headers();
+
+    $submittedUser = trim((string)($payload['user'] ?? ($_GET['user'] ?? '')));
+    $code = trim((string)($payload['code'] ?? ($_GET['code'] ?? '')));
+    if (
+        $code === '' &&
+        $submittedUser !== '' &&
+        strpos($submittedUser, 'anon_') !== 0 &&
+        strpos($submittedUser, 'preview:') !== 0
+    ) {
+        $code = $submittedUser;
+    }
+    if ($code === '') {
+        $code = trim((string)($headers['X-Learner-Code'] ?? ($headers['x-learner-code'] ?? '')));
+    }
+
+    if ($code === '' || strpos($code, 'anon_') === 0 || strpos($code, 'preview:') === 0) {
+        return [];
+    }
+
+    $classroomRaw =
+        $payload['classroom'] ??
+        ($_GET['classroom'] ?? ($headers['X-Learner-Classroom'] ?? ($headers['x-learner-classroom'] ?? null)));
+    $classroomId = is_numeric($classroomRaw) ? intval($classroomRaw) : 0;
+
+    $sql =
+        'SELECT id, user, classroom, code, name FROM `learner` WHERE code = "' .
+        sql_escape($code) .
+        '"';
+    if ($classroomId > 0) {
+        $sql .= ' AND classroom = ' . $classroomId;
+    }
+    $sql .= ' LIMIT 1;';
+
+    $rows = sql_get($sql);
+    if (empty($rows)) {
+        return [];
+    }
+
+    $row = $rows[0];
+    $session = [
+        'id' => isset($row['id']) ? intval($row['id']) : null,
+        'user' => isset($row['user']) ? intval($row['user']) : null,
+        'classroom' => isset($row['classroom']) ? intval($row['classroom']) : null,
+        'code' => (string)($row['code'] ?? ''),
+        'name' => (string)($row['name'] ?? ''),
+    ];
+
+    return $session;
 }
 
 //********************** */
@@ -175,8 +308,18 @@ function subarray_search($needle, $array, $field=false)
 
 //returns user by token in authorisation header (token is requzested by user/login.php)
 function get_user(){
-    $headers = apache_request_headers();
-    inf($headers, 'headers');
+    $headers = request_headers();
+    // Never leak auth secrets into DEBUG output.
+    if (defined('DEBUG') && DEBUG) {
+        $safeHeaders = is_array($headers) ? $headers : [];
+        if (isset($safeHeaders['Authorization'])) {
+            $safeHeaders['Authorization'] = 'Bearer [redacted]';
+        }
+        if (isset($safeHeaders['authorization'])) {
+            $safeHeaders['authorization'] = 'Bearer [redacted]';
+        }
+        inf($safeHeaders, 'headers');
+    }
     $token=$headers['Authorization'] ?? ($headers['authorization'] ?? null);
     if ($token)
     {
@@ -186,7 +329,11 @@ function get_user(){
         $token=sql_escape($token);
         $return = sql_get('SELECT * FROM `user` WHERE token = "'.$token.'" AND valid_until>=NOW();');
         if (count($return)){
-            inf ($return[0], 'user');
+            if (defined('DEBUG') && DEBUG) {
+                $safeUser = $return[0];
+                unset($safeUser['password'], $safeUser['token']);
+                inf($safeUser, 'user');
+            }
             return $return[0];
         }
         else{
@@ -207,6 +354,23 @@ function user_role($role){
     else{
         abort('You don\'t have the permission to access this resource.');
     }
+}
+
+function user_role_value($userRow) {
+    if (!is_array($userRow)) return 0;
+    $role = $userRow['role'] ?? null;
+    if ($role === null || $role === '') return 1;
+    return intval($role);
+}
+
+function user_is_admin() {
+    global $user;
+    return user_role_value($user) >= 3;
+}
+
+function user_is_activated() {
+    global $user;
+    return user_role_value($user) >= 1;
 }
 
 //snippet: include file: snippets/$snippet.php

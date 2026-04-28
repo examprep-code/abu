@@ -31,30 +31,36 @@ if (!empty($exists)) {
 }
 
 $now = date('Y-m-d H:i:s');
+$roleColumn = sql_get('SHOW COLUMNS FROM `user` LIKE "role";');
+$hasRole = !empty($roleColumn);
 $payload = [
     'email' => $email,
     'password' => $password,
     'created_at' => $now,
     'updated_at' => $now,
 ];
+if ($hasRole) {
+    $payload['role'] = 0;
+}
 
-set(
-    'user',
-    [
-        'email' => [],
-        'password' => [],
-        'created_at' => [],
-        'updated_at' => [],
-    ],
-    [$payload],
-    'POST'
-);
+$setConfig = [
+    'email' => [],
+    'password' => [],
+    'created_at' => [],
+    'updated_at' => [],
+];
+if ($hasRole) {
+    $setConfig['role'] = [];
+}
+
+set('user', $setConfig, [$payload], 'POST');
 
 $userId = $return['data']['id'] ?? null;
 $return['data'] = [
     'user' => [
         'id' => $userId,
         'email' => $email,
+        'role' => $hasRole ? 0 : 1,
     ],
 ];
 ?>

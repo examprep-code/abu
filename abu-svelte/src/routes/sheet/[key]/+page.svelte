@@ -6,8 +6,10 @@
   import { page } from '$app/stores';
   import { loadConfig } from '$lib/config';
   import { createLueckeRuntime, ensureLueckeElements } from '$lib/custom-elements/luecke';
+  import { createFreitextRuntime, ensureFreitextElements } from '$lib/custom-elements/freitext';
   import { createUmfrageRuntime, ensureUmfrageElements } from '$lib/custom-elements/umfrage';
   import { applySchoolCiCss } from '$lib/ci';
+  import { formatSwissDateTime, formatSwissTime } from '$lib/date';
 
   const STORAGE_KEY = 'abu.learner';
   const ANON_RUNTIME_TOKEN_PREFIX = 'abu.anon.runtime';
@@ -29,12 +31,15 @@
   let anonymousSessionCode = '';
 
   let progress = { percent: 0, answered: 0, total: 0 };
+  let lueckeProgress = { percent: 0, answered: 0, total: 0 };
+  let freitextProgress = { percent: 0, answered: 0, total: 0 };
   let saveStatus = '';
   let saveMessage = '';
   let saveAt = 0;
 
   let contentEl;
   let lueckeRuntime = null;
+  let freitextRuntime = null;
   let umfrageRuntime = null;
   let lastLoadedKey = '';
   let lastLoadedClassroom = null;
@@ -47,9 +52,23 @@
   let authReady = false;
   let classroomHint = null;
 
-  const updateProgress = (next) => {
-    progress = next;
+  const updateLueckeProgress = (next) => {
+    lueckeProgress = next;
   };
+
+  const updateFreitextProgress = (next) => {
+    freitextProgress = next;
+  };
+
+  $: {
+    const total = (lueckeProgress?.total ?? 0) + (freitextProgress?.total ?? 0);
+    const answered = (lueckeProgress?.answered ?? 0) + (freitextProgress?.answered ?? 0);
+    progress = {
+      total,
+      answered,
+      percent: total ? Math.round((answered / total) * 100) : 0
+    };
+  }
 
   const readPayload = async (res) => {
     try {
@@ -179,11 +198,7 @@
     if (saveStatus === 'saved') {
       if (saveAt) {
         try {
-          const formatted = new Intl.DateTimeFormat('de-CH', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-          }).format(new Date(saveAt));
+          const formatted = formatSwissTime(saveAt);
           return `Gespeichert um ${formatted}`;
         } catch {
           return 'Gespeichert';
@@ -195,6 +210,8 @@
     return '';
   };
 
+  const formatSheetTimestamp = (value) => formatSwissDateTime(value);
+
   const persistLearner = (nextLearner) => {
     learner = nextLearner;
     applyLearnerCi(nextLearner);
@@ -205,6 +222,21 @@
         localStorage.removeItem(STORAGE_KEY);
       }
     }
+  };
+
+  const getUrlLearnerCode = () => {
+    if (typeof window === 'undefined') return '';
+    const params = new URL(window.location.href).searchParams;
+    return (params.get('token') || params.get('code') || '').trim();
+  };
+
+  const clearLearnerCodeFromUrl = () => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('token');
+    url.searchParams.delete('code');
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState({}, document.title, nextUrl);
   };
 
   const validateLearner = async (code) => {
@@ -265,6 +297,8 @@
         sheetHtml = '';
         assignmentForm = '';
         classroomSchoolCss = '';
+        lueckeProgress = { percent: 0, answered: 0, total: 0 };
+        freitextProgress = { percent: 0, answered: 0, total: 0 };
         loading = false;
         return;
       }
@@ -272,6 +306,8 @@
       sheetHtml = sheet?.content ?? '';
       assignmentForm = sheet?.assignment_form ?? '';
       classroomSchoolCss = typeof sheet?.school_css === 'string' ? sheet.school_css : '';
+      lueckeProgress = { percent: 0, answered: 0, total: 0 };
+      freitextProgress = { percent: 0, answered: 0, total: 0 };
       saveStatus = '';
       saveMessage = '';
       saveAt = 0;
@@ -283,6 +319,8 @@
     } catch (err) {
       loadError = err?.message ?? 'Sheet konnte nicht geladen werden';
       classroomSchoolCss = '';
+      lueckeProgress = { percent: 0, answered: 0, total: 0 };
+      freitextProgress = { percent: 0, answered: 0, total: 0 };
       loading = false;
     }
   }
@@ -294,28 +332,32 @@
         ? config.apiBaseUrl
         : `${config.apiBaseUrl}/`;
       ensureLueckeElements();
+      ensureFreitextElements();
       ensureUmfrageElements();
     } catch (err) {
       configError = err?.message ?? 'config konnte nicht geladen werden';
     }
     authReady = true;
     if (typeof localStorage !== 'undefined') {
+      let shouldUseStoredLearner = true;
       if (typeof window !== 'undefined') {
         const params = new URL(window.location.href).searchParams;
         const hadPersonalParam = params.has('personal');
         params.delete('personal');
         classroomHint = normalizeClassroomId(params.get('classroom'));
-        const urlCode = (params.get('code') || '').trim();
+        const urlCode = getUrlLearnerCode();
         if (urlCode) {
+          shouldUseStoredLearner = false;
+          loginCode = urlCode;
           const validated = await validateLearner(urlCode.replace(/\s+/g, ''));
-          params.delete('code');
-          const newUrl =
-            window.location.pathname +
-            (params.toString() ? `?${params.toString()}` : '') +
-            window.location.hash;
-          window.history.replaceState({}, document.title, newUrl);
+          clearLearnerCodeFromUrl();
           if (validated) {
             persistLearner(validated);
+            loginCode = '';
+            loginError = '';
+          } else {
+            persistLearner(null);
+            loginError = 'Code ungueltig.';
           }
         } else if (hadPersonalParam) {
           const newUrl =
@@ -325,20 +367,22 @@
           window.history.replaceState({}, document.title, newUrl);
         }
       }
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        try {
-          const stored = JSON.parse(raw);
-          if (stored?.code) {
-            const validated = await validateLearner(stored.code);
-            if (validated) {
-              persistLearner(validated);
-            } else {
-              persistLearner(null);
+      if (shouldUseStoredLearner) {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          try {
+            const stored = JSON.parse(raw);
+            if (stored?.code) {
+              const validated = await validateLearner(stored.code);
+              if (validated) {
+                persistLearner(validated);
+              } else {
+                persistLearner(null);
+              }
             }
+          } catch {
+            persistLearner(null);
           }
-        } catch {
-          persistLearner(null);
         }
       }
     }
@@ -382,12 +426,14 @@
     }
 
     const signature = `${runtimeUser}::${runtimeClassroom ?? ''}::${assignmentForm}`;
-    if (lueckeRuntime && umfrageRuntime && lastRuntimeSignature === signature) {
+    if (lueckeRuntime && freitextRuntime && umfrageRuntime && lastRuntimeSignature === signature) {
       await lueckeRuntime.refresh();
+      await freitextRuntime.refresh();
       await umfrageRuntime.refresh();
       return;
     }
     lueckeRuntime?.destroy();
+    freitextRuntime?.destroy();
     umfrageRuntime?.destroy();
     lueckeRuntime = createLueckeRuntime({
       root: contentEl,
@@ -395,7 +441,16 @@
       sheetKey,
       user: runtimeUser,
       classroom: runtimeClassroom,
-      onProgress: updateProgress,
+      onProgress: updateLueckeProgress,
+      onSaveState: updateSaveState
+    });
+    freitextRuntime = createFreitextRuntime({
+      root: contentEl,
+      apiBaseUrl,
+      sheetKey,
+      user: runtimeUser,
+      classroom: runtimeClassroom,
+      onProgress: updateFreitextProgress,
       onSaveState: updateSaveState
     });
     umfrageRuntime = createUmfrageRuntime({
@@ -408,11 +463,13 @@
     });
     lastRuntimeSignature = signature;
     await lueckeRuntime.refresh();
+    await freitextRuntime.refresh();
     await umfrageRuntime.refresh();
   };
 
   onDestroy(() => {
     lueckeRuntime?.destroy();
+    freitextRuntime?.destroy();
     umfrageRuntime?.destroy();
   });
 </script>
@@ -420,11 +477,11 @@
 <div class="page">
   <header class="hero">
     <div class="hero-text">
-      <p class="eyebrow">ABU - Lueckentext</p>
-      <h1 class="ci-title">{sheet?.name || (sheetKey ? `Sheet ${sheetKey}` : 'Lueckentext')}</h1>
+      <p class="eyebrow">ABU - Arbeitsblatt</p>
+      <h1 class="ci-title">{sheet?.name || (sheetKey ? `Sheet ${sheetKey}` : 'Arbeitsblatt')}</h1>
       <p class="meta">
         Key: {sheetKey || '-'}
-        {sheet?.updated_at ? `- Stand ${sheet.updated_at}` : ''}
+        {sheet?.updated_at ? `- Stand ${formatSheetTimestamp(sheet.updated_at)}` : ''}
       </p>
     </div>
     <div class="progress-card">
@@ -468,6 +525,7 @@
     <div class="login-card">
       <h2>Identifikationscode</h2>
       <p>Bitte gib deinen 12-stelligen Code ein, um Antworten zu speichern.</p>
+      <p class="login-card__hint">Direktlinks mit `?token=123456789012` funktionieren ebenfalls.</p>
       <div class="login-row">
         <input
           type="text"
@@ -530,7 +588,7 @@
       {:else}
         Bitte einloggen, damit deine Antworten gespeichert werden.
       {/if}
-      Lueckentext-Antworten werden beim Klick auf ? gespeichert, Umfrage-Antworten direkt bei Auswahl.
+      Rueckmeldungen werden beim Klick auf ? erstellt; Umfrage-Antworten werden direkt bei Auswahl gespeichert.
     </div>
   </footer>
 </div>
@@ -550,10 +608,10 @@
 
   .page {
     min-height: 100vh;
-    padding: 32px clamp(16px, 4vw, 56px) 64px;
+    padding: 27px clamp(14px, 4vw, 48px) 54px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
     font-family: var(--ci-font-body, 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif);
   }
 
@@ -562,84 +620,84 @@
     flex-wrap: wrap;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 24px;
+    gap: 20px;
   }
 
   .eyebrow {
-    margin: 0 0 8px;
+    margin: 0 0 7px;
     text-transform: uppercase;
     letter-spacing: 0.28em;
-    font-size: 11px;
+    font-size: 10px;
     color: #7a6f62;
   }
 
   h1 {
     margin: 0;
-    font-size: clamp(30px, 4vw, 44px);
+    font-size: clamp(26px, 4vw, 37px);
     letter-spacing: -0.02em;
   }
 
   .meta {
-    margin: 8px 0 0;
+    margin: 7px 0 0;
     color: #6f6a60;
-    font-size: 14px;
+    font-size: 12px;
   }
 
   .progress-card {
     background: #fff;
-    border-radius: 18px;
-    padding: 18px 22px;
+    border-radius: 15px;
+    padding: 15px 19px;
     border: 1px solid #eadfd3;
-    box-shadow: 0 12px 26px rgba(26, 25, 23, 0.08);
-    min-width: 220px;
+    box-shadow: 0 10px 22px rgba(26, 25, 23, 0.08);
+    min-width: 187px;
     display: grid;
-    gap: 8px;
+    gap: 7px;
   }
 
   .login-card {
     background: #fff;
-    border-radius: 16px;
-    padding: 18px 22px;
+    border-radius: 14px;
+    padding: 15px 19px;
     border: 1px solid #eadfd3;
-    box-shadow: 0 10px 22px rgba(26, 25, 23, 0.08);
+    box-shadow: 0 9px 19px rgba(26, 25, 23, 0.08);
     display: grid;
-    gap: 10px;
-    max-width: 520px;
+    gap: 9px;
+    max-width: 442px;
   }
 
   .login-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 10px;
   }
 
   .login-row input {
     flex: 1 1 220px;
-    padding: 10px 12px;
-    border-radius: 10px;
+    padding: 9px 10px;
+    border-radius: 9px;
     border: 1px solid #cbd5e1;
-    font-size: 16px;
+    font-size: 14px;
   }
 
   .progress-label {
     text-transform: uppercase;
     letter-spacing: 0.2em;
-    font-size: 11px;
+    font-size: 10px;
     color: #7a6f62;
   }
 
   .progress-value {
-    font-size: 28px;
+    font-size: 24px;
     font-weight: 600;
   }
 
   .progress-meta {
-    font-size: 13px;
+    font-size: 11px;
     color: #6f6a60;
   }
 
   .progress-bar {
-    height: 6px;
+    height: 5px;
     background: #f0e7dc;
     border-radius: 999px;
     overflow: hidden;
@@ -653,12 +711,12 @@
   }
 
   .progress-hint {
-    font-size: 12px;
+    font-size: 10px;
     color: #8a847b;
   }
 
   .save-state {
-    font-size: 12px;
+    font-size: 10px;
     color: #4d463d;
   }
 
@@ -667,26 +725,26 @@
   }
 
   .anonymous-symbol {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     display: inline-flex;
     vertical-align: text-bottom;
-    margin-right: 4px;
+    margin-right: 3px;
     color: #6f6a60;
   }
 
   .anonymous-symbol svg {
-    width: 14px;
-    height: 14px;
+    width: 12px;
+    height: 12px;
   }
 
   .state {
-    padding: 18px 20px;
-    border-radius: 14px;
+    padding: 15px 17px;
+    border-radius: 12px;
     background: #fff;
     border: 1px solid #e7dfd2;
     color: #5e554a;
-    box-shadow: 0 12px 24px rgba(26, 25, 23, 0.06);
+    box-shadow: 0 10px 20px rgba(26, 25, 23, 0.06);
   }
 
   .state.error {
@@ -697,27 +755,298 @@
 
   .sheet {
     background: #fff;
-    border-radius: 22px;
-    padding: clamp(20px, 4vw, 34px);
+    border-radius: 19px;
+    padding: clamp(17px, 4vw, 29px);
     border: 1px solid #eadfd3;
-    box-shadow: 0 18px 40px rgba(26, 25, 23, 0.1);
+    box-shadow: 0 15px 34px rgba(26, 25, 23, 0.1);
     line-height: 1.65;
   }
 
   .sheet :global(p) {
-    margin: 0 0 1rem;
+    margin: 0 0 0.85rem;
+  }
+
+  .sheet :global(h1),
+  .sheet :global(h2),
+  .sheet :global(h3) {
+    margin: 0 0 0.72rem;
+    color: #132238;
+    font-family: var(--ci-font-title, 'Arial Black', Arial, sans-serif);
+    font-weight: 800;
+    line-height: 1.16;
+    letter-spacing: 0;
+  }
+
+  .sheet :global(h1) {
+    font-size: 1.7rem;
   }
 
   .sheet :global(h2) {
-    margin: 1.6rem 0 0.8rem;
+    font-size: 1.23rem;
+    margin-top: 1.23rem;
+  }
+
+  .sheet :global(h3) {
+    font-size: 0.95rem;
+    margin-top: 1.02rem;
+  }
+
+  .sheet :global(freitext-block) {
+    display: block;
+    margin: 1.36rem 0;
+  }
+
+  .sheet :global(.freitext) {
+    display: grid;
+    gap: 12px;
+    padding: 15px;
+    border-radius: 15px;
+    background: linear-gradient(180deg, #fffdf8 0%, #f7f1e7 100%);
+    border: 1px solid #eadfd3;
+  }
+
+  .sheet :global(.freitext__intro) {
+    display: grid;
+    gap: 9px;
+  }
+
+  .sheet :global(.freitext__instruction) {
+    display: grid;
+    gap: 9px;
+  }
+
+  .sheet :global(.freitext__instruction > :first-child) {
+    margin-top: 0;
+  }
+
+  .sheet :global(.freitext__instruction > :last-child) {
+    margin-bottom: 0;
+  }
+
+  .sheet :global(.freitext__title) {
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.25;
+  }
+
+  .sheet :global(.freitext__task),
+  .sheet :global(.freitext__meta) {
+    margin: 0;
+    color: #5e554a;
+    font-size: 12px;
+  }
+
+  .sheet :global(.freitext__criteria-wrap) {
+    display: grid;
+    gap: 2px;
+  }
+
+  .sheet :global(.freitext__criteria-label) {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #7a6f62;
+  }
+
+  .sheet :global(.freitext__criteria) {
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0;
+    list-style: none;
+  }
+
+  .sheet :global(.freitext__criterion) {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr);
+    gap: 5px;
+    align-items: start;
+    padding: 2px 5px;
+    border: 1px solid #eadfd3;
+    border-radius: 0;
+    background: #fffdf8;
+  }
+
+  .sheet :global(.freitext__criterion + .freitext__criterion) {
+    border-top: 0;
+  }
+
+  .sheet :global(.freitext__criterion-label) {
+    min-width: 0;
+    font-weight: 700;
+    color: #1c232f;
+    overflow-wrap: anywhere;
+  }
+
+  .sheet :global(.freitext__criterion-description) {
+    min-width: 0;
+    color: #5e554a;
+    font-size: 12px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .sheet :global(.freitext__premises-wrap) {
+    display: grid;
+    gap: 2px;
+  }
+
+  .sheet :global(.freitext__premises) {
+    display: grid;
+    gap: 0;
+  }
+
+  .sheet :global(.freitext__premise) {
+    display: grid;
+    grid-template-columns: minmax(160px, 0.42fr) minmax(180px, 0.58fr);
+    gap: 5px;
+    align-items: center;
+    padding: 2px 5px;
+    border-radius: 0;
+    border: 1px solid #eadfd3;
+    background: #fffdf8;
+  }
+
+  .sheet :global(.freitext__premise + .freitext__premise) {
+    border-top: 0;
+  }
+
+  .sheet :global(.freitext__premise-label) {
+    min-width: 0;
+    font-weight: 700;
+    color: #1c232f;
+    overflow-wrap: anywhere;
+  }
+
+  .sheet :global(.freitext__premise-hint) {
+    min-width: 0;
+    color: #5e554a;
+    font-size: 11px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .sheet :global(.freitext__premise-hint a) {
+    color: #25636a;
+    font-weight: 700;
+  }
+
+  .sheet :global(.freitext__premise-input-row) {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .sheet :global(.freitext__premise-input) {
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 9px;
+    border-radius: 9px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    font: inherit;
+  }
+
+  .sheet :global(.freitext__premise-input:focus) {
+    outline: 2px solid rgba(47, 143, 131, 0.18);
+    border-color: #2f8f83;
+  }
+
+  .sheet :global(.freitext__textarea) {
+    width: 100%;
+    min-height: 187px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    font: inherit;
+    line-height: 1.6;
+    resize: vertical;
+  }
+
+  .sheet :global(.freitext__textarea:focus) {
+    outline: 2px solid rgba(47, 143, 131, 0.18);
+    border-color: #2f8f83;
+  }
+
+  .sheet :global(.freitext__question) {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+  }
+
+  .sheet :global(.freitext__question-label) {
+    font-size: 11px;
+    font-weight: 700;
+    color: #5e554a;
+  }
+
+  .sheet :global(.freitext__question-field) {
+    width: 100%;
+    height: 34px;
+    min-height: 34px;
+    padding: 0 10px;
+    border-radius: 10px;
+    border: 1px solid #d6cdc1;
+    background: #fff;
+    font: inherit;
+    line-height: 1.2;
+    resize: none;
+  }
+
+  .sheet :global(.freitext__question-field:focus) {
+    outline: 2px solid rgba(47, 143, 131, 0.18);
+    border-color: #2f8f83;
+  }
+
+  .sheet :global(.freitext--richtig) {
+    border-color: #1c8f4a;
+    background: #f4fbf5;
+  }
+
+  .sheet :global(.freitext--teilweise) {
+    border-color: #d98a1a;
+    background: #fff9ef;
+  }
+
+  .sheet :global(.freitext--falsch) {
+    border-color: #c33b3b;
+    background: #fff5f5;
+  }
+
+  .sheet :global(.freitext__actions) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 9px;
+  }
+
+  .sheet :global(.freitext__actions .check-btn) {
+    width: 34px;
+    height: 34px;
+    margin-left: 0;
+  }
+
+  .sheet :global(.freitext__action-hint) {
+    display: none;
+    font-size: 11px;
+    color: #6f6a60;
+  }
+
+  @media (max-width: 640px) {
+    .sheet :global(.freitext__criterion),
+    .sheet :global(.freitext__premise) {
+      grid-template-columns: 1fr;
+    }
   }
 
   .sheet :global(.video-container) {
     position: relative;
     padding-bottom: 56.25%;
     height: 0;
-    margin: 1.5rem 0;
-    border-radius: 16px;
+    margin: 1.27rem 0;
+    border-radius: 14px;
     overflow: hidden;
     background: #0f141a;
   }
@@ -731,15 +1060,15 @@
   }
 
   .sheet :global(.next-step) {
-    margin-top: 1.75rem;
-    padding-top: 1.25rem;
+    margin-top: 1.49rem;
+    padding-top: 1.06rem;
     border-top: 1px solid #e2d8cc;
     text-align: center;
   }
 
   .sheet :global(.next-step__link) {
     display: inline-block;
-    padding: 0.65rem 1rem;
+    padding: 0.55rem 0.85rem;
     border-radius: 999px;
     text-decoration: none;
     font-weight: 600;
@@ -756,13 +1085,13 @@
 
   .footer-card {
     background: #f6f0e6;
-    border-radius: 14px;
-    padding: 12px 16px;
+    border-radius: 12px;
+    padding: 10px 14px;
     color: #6a6156;
     border: 1px solid #eadfd3;
-    font-size: 13px;
+    font-size: 11px;
     display: grid;
-    gap: 6px;
+    gap: 5px;
   }
 
   :global(.luecke) {
@@ -798,10 +1127,10 @@
   .sheet :global(textarea)::before {
     content: '|';
     position: absolute;
-    top: -14px;
+    top: -12px;
     left: 2px;
     font-weight: 700;
-    font-size: 16px;
+    font-size: 14px;
     line-height: 1;
     color: #0f172a;
     pointer-events: none;
@@ -824,31 +1153,31 @@
     display: inline-block;
   }
 
-  :global(luecke-gap-wide) {
+  :global(luecke-gap[width='100%']) {
     position: relative;
     display: block;
-    margin: 0.6rem 0 1rem;
+    margin: 0.51rem 0 0.85rem;
   }
 
-  :global(luecke-gap-wide .luecke) {
+  :global(luecke-gap[width='100%'] .luecke) {
     display: block;
     width: 100%;
     min-width: 0;
     border: 1px solid #d6cdc1;
-    border-radius: 10px;
-    padding: 0.5rem 0.65rem;
+    border-radius: 9px;
+    padding: 0.43rem 0.55rem;
     background: #fff;
   }
 
-  :global(luecke-gap-wide .luecke--richtig) {
+  :global(luecke-gap[width='100%'] .luecke--richtig) {
     border-color: #1c8f4a;
   }
 
-  :global(luecke-gap-wide .luecke--teilweise) {
+  :global(luecke-gap[width='100%'] .luecke--teilweise) {
     border-color: #d98a1a;
   }
 
-  :global(luecke-gap-wide .luecke--falsch) {
+  :global(luecke-gap[width='100%'] .luecke--falsch) {
     border-color: #c33b3b;
   }
 
@@ -873,13 +1202,13 @@
     left: auto;
     top: calc(100% + 0.25rem);
     z-index: 5;
-    max-width: min(28rem, 90vw);
-    padding: 0.35rem 0.5rem;
-    border-radius: 6px;
+    max-width: min(23.8rem, 90vw);
+    padding: 0.3rem 0.43rem;
+    border-radius: 5px;
     border: 1px solid #e2e8f0;
     background: #fff;
-    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
-    font-size: 0.85rem;
+    box-shadow: 0 9px 20px rgba(15, 23, 42, 0.12);
+    font-size: 0.72rem;
     color: #4d463d;
     opacity: 0;
     transform: translateY(-4px);
@@ -891,7 +1220,7 @@
     display: none;
   }
 
-  :global(luecke-gap-wide .feedback) {
+  :global(luecke-gap[width='100%'] .feedback) {
     left: 0;
     right: auto;
   }
@@ -900,8 +1229,8 @@
   :global(.feedback::after) {
     content: '';
     position: absolute;
-    top: -8px;
-    right: 0.9rem;
+    top: -7px;
+    right: 0.77rem;
     border-style: solid;
     border-color: transparent;
   }
@@ -912,15 +1241,15 @@
   }
 
   :global(.feedback::after) {
-    top: -7px;
+    top: -6px;
     border-width: 0 6px 7px 6px;
     border-bottom-color: #fff;
   }
 
-  :global(luecke-gap-wide .feedback::before),
-  :global(luecke-gap-wide .feedback::after) {
+  :global(luecke-gap[width='100%'] .feedback::before),
+  :global(luecke-gap[width='100%'] .feedback::after) {
     right: auto;
-    left: 0.9rem;
+    left: 0.77rem;
   }
 
   :global(.feedback--visible),
@@ -974,7 +1303,7 @@
 
   :global(umfrage-matrix) {
     display: block;
-    margin: 1.5rem 0;
+    margin: 1.27rem 0;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scroll) {
@@ -986,7 +1315,7 @@
     position: relative;
     display: inline-block;
     min-width: 100%;
-    padding-right: 2.2rem;
+    padding-right: 1.87rem;
     box-sizing: border-box;
   }
 
@@ -994,17 +1323,17 @@
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
-    min-width: 520px;
+    min-width: 442px;
   }
 
   :global(umfrage-matrix .umfrage-matrix__col-statement) {
-    min-width: 220px;
+    min-width: 187px;
   }
 
   :global(umfrage-matrix th),
   :global(umfrage-matrix td) {
     border: 1px solid #e2d8cc;
-    padding: 0.55rem 0.7rem;
+    padding: 0.47rem 0.6rem;
     text-align: center;
   }
 
@@ -1029,13 +1358,13 @@
   :global(umfrage-matrix .umfrage-save-indicator) {
     position: absolute;
     top: 50%;
-    right: -1.25rem;
-    min-width: 0.9rem;
+    right: -1.06rem;
+    min-width: 0.77rem;
     padding: 0;
     border: 0;
     background: transparent;
     text-align: center;
-    font-size: 0.72rem;
+    font-size: 0.65rem;
     font-weight: 700;
     font-family: inherit;
     line-height: 1;
@@ -1077,12 +1406,12 @@
 
   :global(umfrage-matrix .umfrage-matrix__scale-value) {
     display: block;
-    font-size: 1rem;
+    font-size: 0.85rem;
   }
 
   :global(umfrage-matrix .umfrage-matrix__scale-label) {
     display: block;
-    font-size: 0.75rem;
+    font-size: 0.65rem;
     color: #8a8072;
     margin-top: 2px;
   }
@@ -1096,8 +1425,8 @@
   }
 
   :global(umfrage-matrix .umfrage-matrix__option input) {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     margin: 0;
     accent-color: #2f8f83;
   }
@@ -1109,7 +1438,7 @@
 
   @media (max-width: 720px) {
     :global(umfrage-matrix .umfrage-matrix__table) {
-      min-width: 420px;
+      min-width: 357px;
     }
   }
 

@@ -9,6 +9,7 @@ $classConfig = [
         'year' => [],
         'profession' => [],
         'notes' => [],
+        'prompt' => [],
         'created_at' => [],
         'updated_at' => [],
     ],
@@ -21,7 +22,11 @@ if (!isset($user['id'])) {
 }
 
 if ($method === 'GET') {
-    $where = ['user = ' . intval($user['id'])];
+    $where = [];
+    $scopeToCurrentUser = !user_is_admin() || !empty($paras[0]);
+    if ($scopeToCurrentUser) {
+        $where[] = 'user = ' . intval($user['id']);
+    }
     if (!empty($paras[0])) {
         $where[] = 'id = ' . intval($paras[0]);
     }
@@ -66,6 +71,7 @@ if ($method === 'POST') {
         'year' => trim($data['year'] ?? ''),
         'profession' => trim($data['profession'] ?? ''),
         'notes' => trim($data['notes'] ?? ''),
+        'prompt' => trim((string) ($data['prompt'] ?? '')),
         'created_at' => $now,
         'updated_at' => $now,
     ];
@@ -82,6 +88,7 @@ if ($method === 'POST') {
             'year' => [],
             'profession' => [],
             'notes' => [],
+            'prompt' => [],
             'created_at' => [],
             'updated_at' => [],
         ],
@@ -117,6 +124,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
     if (array_key_exists('year', $data)) $update['year'] = trim($data['year']);
     if (array_key_exists('profession', $data)) $update['profession'] = trim($data['profession']);
     if (array_key_exists('notes', $data)) $update['notes'] = trim($data['notes']);
+    if (array_key_exists('prompt', $data)) $update['prompt'] = trim((string) ($data['prompt'] ?? ''));
     if (array_key_exists('school', $data)) {
         $rawSchool = $data['school'];
         if ($rawSchool === null || $rawSchool === '') {

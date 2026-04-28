@@ -53,7 +53,8 @@
         registerError = payload?.warning || 'Registrierung fehlgeschlagen';
         return;
       }
-      registerSuccess = 'Registrierung erfolgreich. Du kannst dich jetzt einloggen.';
+      registerSuccess =
+        'Registrierung erfolgreich. Du kannst dich jetzt einloggen; dein Account muss ggf. noch aktiviert werden (Rolle 1 oder 3).';
       password = '';
     } catch (err) {
       registerError = err?.message ?? 'Registrierung fehlgeschlagen';
@@ -120,7 +121,7 @@
         <ul>
           <li>Deine Daten bleiben lokal in deiner DB.</li>
           <li>Passwort wird sicher gehasht gespeichert.</li>
-          <li>Nach der Registrierung kannst du dich sofort einloggen.</li>
+          <li>Neue Accounts starten standardmaessig mit Rolle 0 (warte auf Aktivierung).</li>
         </ul>
       </div>
     </div>
@@ -140,49 +141,49 @@
 
   .app {
     min-height: 100vh;
-    padding: 32px clamp(20px, 4vw, 48px) 48px;
+    padding: 27px clamp(17px, 4vw, 41px) 41px;
   }
 
   .topbar {
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
-    gap: 24px;
-    margin-bottom: 32px;
+    gap: 20px;
+    margin-bottom: 27px;
   }
 
   .topbar h1 {
     margin: 0;
     font-family: 'Space Grotesk', sans-serif;
-    font-size: clamp(28px, 4vw, 40px);
+    font-size: clamp(24px, 4vw, 34px);
     letter-spacing: -0.02em;
   }
 
   .eyebrow {
     text-transform: uppercase;
     letter-spacing: 0.24em;
-    font-size: 12px;
-    margin: 0 0 6px;
+    font-size: 10px;
+    margin: 0 0 5px;
     color: #5c6370;
   }
 
   .status {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 14px;
   }
 
   .hint {
     color: #6f7682;
-    font-size: 14px;
+    font-size: 12px;
   }
 
   .card {
     background: #ffffffcc;
-    backdrop-filter: blur(12px);
-    padding: 24px;
-    border-radius: 18px;
-    box-shadow: 0 12px 30px rgba(20, 24, 40, 0.12);
+    backdrop-filter: blur(10px);
+    padding: 20px;
+    border-radius: 15px;
+    box-shadow: 0 10px 26px rgba(20, 24, 40, 0.12);
     border: 1px solid rgba(255, 255, 255, 0.6);
   }
 
@@ -197,7 +198,7 @@
 
   .card.highlight ul {
     margin: 0;
-    padding-left: 18px;
+    padding-left: 15px;
   }
 
   .card.error {
@@ -206,27 +207,27 @@
 
   .register {
     display: grid;
-    grid-template-columns: minmax(260px, 360px) minmax(260px, 1fr);
-    gap: 24px;
+    grid-template-columns: minmax(221px, 306px) minmax(221px, 1fr);
+    gap: 20px;
   }
 
   label {
     display: grid;
-    gap: 8px;
-    margin-bottom: 16px;
+    gap: 7px;
+    margin-bottom: 14px;
     font-weight: 500;
   }
 
   input {
     font: inherit;
-    padding: 12px 14px;
-    border-radius: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
     border: 1px solid #d9dee7;
     background: #ffffff;
   }
 
   button {
-    padding: 12px 18px;
+    padding: 10px 15px;
     border-radius: 999px;
     font-weight: 600;
     cursor: pointer;
@@ -235,7 +236,7 @@
 
   button:hover:enabled {
     transform: translateY(-1px);
-    box-shadow: 0 10px 18px rgba(15, 23, 42, 0.16);
+    box-shadow: 0 9px 15px rgba(15, 23, 42, 0.16);
   }
 
   button:disabled {
@@ -246,7 +247,7 @@
   a.ghost {
     display: inline-flex;
     align-items: center;
-    padding: 10px 16px;
+    padding: 9px 14px;
     border-radius: 999px;
     font-weight: 600;
     text-decoration: none;
@@ -263,7 +264,7 @@
   }
 
   .link-row {
-    margin-top: 16px;
+    margin-top: 14px;
   }
 
   .link-row a {

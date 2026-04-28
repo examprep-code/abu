@@ -336,8 +336,14 @@ const normalizeModelIntentKind = (value = '') => {
 };
 
 const mapPromptToTab = (normalizedPrompt = '') => {
+  if (/\b(sammlung|sammlungen|collection|collections|ordner|ordnern)\b/.test(normalizedPrompt)) {
+    return 'collections';
+  }
   if (/\b(klasse|klassen|class)\b/.test(normalizedPrompt)) return 'classes';
   if (/\b(schule|schulen|school|schools)\b/.test(normalizedPrompt)) return 'schools';
+  if (/\b(shop|braintrade|materialtausch|materialportal)\b/.test(normalizedPrompt)) {
+    return 'shop';
+  }
   if (/\b(einstellung|einstellungen|settings|setup|konfiguration)\b/.test(normalizedPrompt)) {
     return 'settings';
   }
@@ -626,8 +632,10 @@ const buildVisibleItemsMessage = (context: string, visibleItems: string[] = []) 
     preview: ['Editor: Preview', 'Aktuelles Sheet'],
     answers: ['Editor: Antworten', 'Aktuelles Sheet'],
     sheets: ['Sheet-Liste', 'Suche/Sortierung'],
+    collections: ['Sammlungen', 'Collection-Details'],
     classes: ['Klassenliste', 'Klassen-Details'],
     schools: ['Schulenliste', 'Schul-Details'],
+    shop: ['Shop-Katalog', 'Didaktische Filter'],
     settings: ['CI-Einstellungen'],
     app: ['App-Navigation']
   };
@@ -648,8 +656,10 @@ export const resolveAgentContext = (params: {
     if (!params.selectedId) return 'sheets';
     return params.editorView;
   }
+  if (params.activeTab === 'collections') return 'collections';
   if (params.activeTab === 'classes') return 'classes';
   if (params.activeTab === 'schools') return 'schools';
+  if (params.activeTab === 'shop') return 'shop';
   if (params.activeTab === 'settings') return 'settings';
   return 'app';
 };
@@ -660,8 +670,10 @@ export const describeAgentContext = (context: string) => {
   if (context === 'preview') return 'Kontext: Editor / Preview';
   if (context === 'answers') return 'Kontext: Editor / Antworten';
   if (context === 'sheets') return 'Kontext: Inhalt / Sheet-Liste';
+  if (context === 'collections') return 'Kontext: Sammlungen';
   if (context === 'classes') return 'Kontext: Klassen';
   if (context === 'schools') return 'Kontext: Schulen';
+  if (context === 'shop') return 'Kontext: Shop';
   if (context === 'settings') return 'Kontext: Einstellungen';
   return 'Kontext: App';
 };
@@ -1476,10 +1488,17 @@ export const resolveAgentNavigationIntent = async (
         requestedTab =
           intentTab === 'editor' || intentTab === 'inhalt'
             ? 'editor'
+            : intentTab === 'collections' ||
+              intentTab === 'collection' ||
+              intentTab === 'sammlungen' ||
+              intentTab === 'sammlung'
+            ? 'collections'
             : intentTab === 'classes' || intentTab === 'klassen'
             ? 'classes'
             : intentTab === 'schools' || intentTab === 'schulen'
             ? 'schools'
+            : intentTab === 'shop' || intentTab === 'braintrade'
+            ? 'shop'
             : intentTab === 'settings' || intentTab === 'einstellungen'
             ? 'settings'
             : requestedTab;
@@ -1841,10 +1860,14 @@ export const resolveAgentNavigationIntent = async (
         const tabLabel =
           nextTab === 'editor'
             ? 'Inhalt'
+            : nextTab === 'collections'
+            ? 'Sammlungen'
             : nextTab === 'classes'
             ? 'Klassen'
             : nextTab === 'schools'
             ? 'Schulen'
+            : nextTab === 'shop'
+            ? 'Shop'
             : 'Einstellungen';
         return done({ handled: true, status: `Navigation ausgefuehrt: ${tabLabel}.` });
       }
