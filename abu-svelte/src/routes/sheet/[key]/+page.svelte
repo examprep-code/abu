@@ -1319,6 +1319,7 @@
     box-shadow: 0 9px 20px rgba(15, 23, 42, 0.12);
     font-size: 0.72rem;
     color: #4d463d;
+    white-space: pre-wrap;
     opacity: 0;
     transform: translateY(-4px);
     transition: opacity 160ms ease, transform 160ms ease;
