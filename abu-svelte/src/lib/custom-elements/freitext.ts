@@ -67,6 +67,13 @@ export type FreitextRuntimeOptions = {
 };
 
 type ClassificationLabel = 'RICHTIG' | 'TEILWEISE' | 'FALSCH' | null;
+type PremiseFulfillmentState = {
+  value: string;
+  ready: boolean;
+  status: 'ready' | 'missing' | 'unchecked' | 'partial' | 'wrong';
+  label: string;
+  promptStatus: string;
+};
 const FREITEXT_INSTRUCTION_SELECTOR = 'freitext-anweisung, freitext-instruction';
 const FREITEXT_QUESTION_PLACEHOLDER =
   'Optional: Was soll beim Prüfen besonders beachtet werden?';
@@ -314,16 +321,10 @@ function updateProgress(
     ) as HTMLTextAreaElement | null;
     if (!textarea || textarea.value.trim() === '') return false;
 
-    const requiredPremises = Array.from(
-      block.querySelectorAll<HTMLInputElement>('.freitext__premise-input[data-required="1"]')
-    );
     const requiredReferences = Array.from(
       block.querySelectorAll<HTMLElement>('.freitext__reference[data-required="1"]')
     );
-    return (
-      requiredPremises.every((input) => input.value.trim() !== '') &&
-      requiredReferences.every((entry) => entry.dataset.ready === '1')
-    );
+    return requiredReferences.every((entry) => entry.dataset.ready === '1');
   }).length;
   const percent = total ? Math.round((answered / total) * 100) : 0;
   const progress = { percent, answered, total };
@@ -817,8 +818,13 @@ export function ensureFreitextElements(): void {
           premiseGrid.className = 'freitext__premises';
 
           premises.forEach((premise) => {
-            const field = document.createElement('label');
-            field.className = 'freitext__premise';
+            const hasLinkedSource = premise.sourceKey.trim() !== '';
+            const field = document.createElement(hasLinkedSource ? 'div' : 'label');
+            field.className = hasLinkedSource
+              ? 'freitext__premise freitext__premise--linked'
+              : 'freitext__premise';
+            field.dataset.premiseId = premise.id;
+            if (hasLinkedSource) field.dataset.sourceKey = premise.sourceKey;
 
             const labelEl = document.createElement('span');
             labelEl.className = 'freitext__premise-label';
@@ -840,20 +846,33 @@ export function ensureFreitextElements(): void {
             const inputRow = document.createElement('span');
             inputRow.className = 'freitext__premise-input-row';
 
-            const input = document.createElement('input');
-            input.className = 'freitext__premise-input';
-            input.type = premise.type;
-            input.name = `${nameAttr}__${premise.id}`;
-            input.dataset.premiseId = premise.id;
-            input.dataset.required = premise.required ? '1' : '0';
-            input.required = premise.required;
-            input.setAttribute('aria-label', premise.label);
-            input.placeholder = 'Wert eintragen';
-            if (premise.type === 'number') {
-              input.inputMode = 'decimal';
-              input.step = 'any';
+            if (hasLinkedSource) {
+              const status = document.createElement('span');
+              status.className = 'freitext__premise-status freitext__premise-status--missing';
+              status.dataset.premiseId = premise.id;
+              status.dataset.sourceKey = premise.sourceKey;
+              status.dataset.required = premise.required ? '1' : '0';
+              status.dataset.ready = '0';
+              status.dataset.value = '';
+              status.setAttribute('role', 'status');
+              status.textContent = 'Wartet auf verknüpftes Feld.';
+              inputRow.appendChild(status);
+            } else {
+              const input = document.createElement('input');
+              input.className = 'freitext__premise-input';
+              input.type = premise.type;
+              input.name = `${nameAttr}__${premise.id}`;
+              input.dataset.premiseId = premise.id;
+              input.dataset.required = premise.required ? '1' : '0';
+              input.required = premise.required;
+              input.setAttribute('aria-label', premise.label);
+              input.placeholder = 'Wert eintragen';
+              if (premise.type === 'number') {
+                input.inputMode = 'decimal';
+                input.step = 'any';
+              }
+              inputRow.appendChild(input);
             }
-            inputRow.appendChild(input);
 
             field.appendChild(inputRow);
             premiseGrid.appendChild(field);
@@ -1097,6 +1116,141 @@ function readReferencesFromTextarea(textarea: HTMLTextAreaElement | null): Freit
   }
 }
 
+function readPremisesFromTextarea(textarea: HTMLTextAreaElement | null): FreitextPremise[] {
+  if (!textarea) return [];
+  try {
+    const parsed = JSON.parse(textarea.dataset.premises || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function sourceAnswerText(entry: AnswerEntry | null | undefined): string {
+  if (!entry) return '';
+  const raw = String(entry.value || '');
+  const stored = parseStoredFreitextValue(raw);
+  if (stored.answer) return stored.answer;
+  return raw.trim().startsWith('{') ? '' : raw.trim();
+}
+
+function premiseFulfillmentFromEntry(
+  entry: AnswerEntry | null | undefined
+): PremiseFulfillmentState {
+  const value = sourceAnswerText(entry);
+  if (!value.trim()) {
+    return {
+      value: '',
+      ready: false,
+      status: 'missing',
+      label: 'Fehlt.',
+      promptStatus: 'fehlt'
+    };
+  }
+
+  const { score, label } = classificationInfo(entry?.classification, entry?.classification_label);
+  if (score === null) {
+    return {
+      value,
+      ready: false,
+      status: 'unchecked',
+      label: 'Wartet auf Prüfung.',
+      promptStatus: 'eingetragen, aber noch nicht geprüft'
+    };
+  }
+  if (score >= 900) {
+    return {
+      value,
+      ready: true,
+      status: 'ready',
+      label: 'Erfüllt.',
+      promptStatus: label || 'RICHTIG'
+    };
+  }
+  if (score >= 101) {
+    return {
+      value,
+      ready: false,
+      status: 'partial',
+      label: 'Teilweise erfüllt.',
+      promptStatus: label || 'TEILWEISE'
+    };
+  }
+  return {
+    value,
+    ready: false,
+    status: 'wrong',
+    label: 'Nicht erfüllt.',
+    promptStatus: label || 'FALSCH'
+  };
+}
+
+function draftPremiseFulfillment(value: string): PremiseFulfillmentState {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return {
+      value: '',
+      ready: false,
+      status: 'missing',
+      label: 'Fehlt.',
+      promptStatus: 'fehlt'
+    };
+  }
+  return {
+    value: trimmed,
+    ready: false,
+    status: 'unchecked',
+    label: 'Wartet auf Prüfung.',
+    promptStatus: 'eingetragen, aber noch nicht geprüft'
+  };
+}
+
+function applyPremiseStatus(status: HTMLElement, state: PremiseFulfillmentState): void {
+  status.dataset.value = state.value;
+  status.dataset.ready = state.ready ? '1' : '0';
+  status.dataset.status = state.status;
+  status.dataset.promptStatus = state.promptStatus;
+  status.title = state.ready || state.value ? state.value : '';
+  status.textContent = state.label;
+  status.classList.toggle('freitext__premise-status--ready', state.ready);
+  status.classList.toggle('freitext__premise-status--missing', state.status === 'missing');
+  status.classList.toggle(
+    'freitext__premise-status--warning',
+    state.status === 'unchecked' || state.status === 'partial'
+  );
+  status.classList.toggle('freitext__premise-status--invalid', state.status === 'wrong');
+  status.closest('.freitext__premise')?.classList.toggle('freitext__premise--fulfilled', state.ready);
+}
+
+function updateLinkedPremiseSourceDraft(root: HTMLElement, sourceKey: string, value: string): void {
+  if (!sourceKey) return;
+  const state = draftPremiseFulfillment(value);
+  Array.from(root.querySelectorAll<HTMLElement>('.freitext__premise-status'))
+    .filter((status) => status.dataset.sourceKey === sourceKey)
+    .forEach((status) => {
+      applyPremiseStatus(status, state);
+    });
+}
+
+function updatePremiseStates(root: HTMLElement, latestByKey: Record<string, AnswerEntry>): void {
+  const blocks = Array.from(root.querySelectorAll('freitext-block')) as HTMLElement[];
+  blocks.forEach((block) => {
+    const textarea = block.querySelector('textarea.freitext__textarea') as HTMLTextAreaElement | null;
+    const premises = readPremisesFromTextarea(textarea).filter((premise) => premise.sourceKey);
+    if (!premises.length) return;
+
+    premises.forEach((premise) => {
+      const status = Array.from(
+        block.querySelectorAll<HTMLElement>('.freitext__premise-status')
+      ).find((entry) => entry.dataset.premiseId === premise.id);
+      if (!status) return;
+
+      const state = premiseFulfillmentFromEntry(latestByKey[premise.sourceKey]);
+      applyPremiseStatus(status, state);
+    });
+  });
+}
+
 function referenceSnapshot(
   reference: FreitextReference,
   latestByKey: Record<string, AnswerEntry>
@@ -1223,6 +1377,7 @@ async function prefillAnswers(options: FreitextRuntimeOptions): Promise<void> {
       const feedback = wrapper?.querySelector('.feedback') as HTMLElement | null;
       setClasses(textarea, button, feedback, label);
     });
+    updatePremiseStates(root, latestByKey);
     updateReferenceStates(root, latestByKey);
     await saveReferenceSnapshots(options, latestByKey);
   } catch {
@@ -1251,23 +1406,80 @@ function collectPremiseValues(wrapper: HTMLElement | null): Record<string, strin
       const key = input.dataset.premiseId || input.name;
       values[key] = input.value.trim();
     });
+  wrapper
+    .querySelectorAll<HTMLElement>('.freitext__premise-status')
+    .forEach((status) => {
+      const key = status.dataset.premiseId || '';
+      if (!key) return;
+      values[key] = String(status.dataset.value || '').trim();
+    });
   return values;
 }
 
-function findMissingPremise(
-  premises: FreitextPremise[],
+function premiseStatusFromDom(
+  wrapper: HTMLElement | null,
+  premise: FreitextPremise,
   values: Record<string, string>
-): FreitextPremise | null {
-  return (
-    premises.find((premise) => premise.required && !String(values[premise.id] || '').trim()) ||
-    null
-  );
+): PremiseFulfillmentState {
+  const value = String(values[premise.id] || '').trim();
+  if (!premise.sourceKey) {
+    if (value) {
+      return {
+        value,
+        ready: true,
+        status: 'ready',
+        label: 'Eingetragen.',
+        promptStatus: 'eingetragen'
+      };
+    }
+    return {
+      value: '',
+      ready: false,
+      status: 'missing',
+      label: 'Fehlt.',
+      promptStatus: 'fehlt'
+    };
+  }
+
+  const statusEl = Array.from(
+    wrapper?.querySelectorAll<HTMLElement>('.freitext__premise-status') ?? []
+  ).find((entry) => entry.dataset.premiseId === premise.id);
+  const status = (statusEl?.dataset.status || 'missing') as PremiseFulfillmentState['status'];
+  const label = (statusEl?.textContent || '').replace(/\s+/g, ' ').trim();
+  return {
+    value,
+    ready: statusEl?.dataset.ready === '1',
+    status,
+    label: label || (value ? 'Wartet auf Prüfung.' : 'Fehlt.'),
+    promptStatus: statusEl?.dataset.promptStatus || (value ? 'eingetragen' : 'fehlt')
+  };
 }
 
-function premisesText(premises: FreitextPremise[], values: Record<string, string>): string {
+function premiseFeedbackNotice(
+  premises: FreitextPremise[],
+  states: Record<string, PremiseFulfillmentState>
+): string {
+  const missing = premises
+    .filter((premise) => premise.required && !states[premise.id]?.ready)
+    .map((premise) => {
+      const state = states[premise.id];
+      return `${premise.label}: ${state?.label || 'Fehlt.'}`;
+    });
+  if (!missing.length) return '';
+  return `Hinweis: Folgende Prämisse${missing.length === 1 ? '' : 'n'} ${
+    missing.length === 1 ? 'ist' : 'sind'
+  } nicht erfüllt: ${missing.join('; ')}. Die Rückmeldung berücksichtigt das.`;
+}
+
+function premisesText(
+  premises: FreitextPremise[],
+  values: Record<string, string>,
+  states: Record<string, PremiseFulfillmentState> = {}
+): string {
   if (!premises.length) return '';
   return premises
     .map((premise, index) => {
+      const state = states[premise.id] || premiseStatusFromDom(null, premise, values);
       const parts = [`${index + 1}. ${premise.label}`];
       if (premise.description) parts.push(`KI-Hinweis: ${premise.description}`);
       if (premise.sourceKey) {
@@ -1279,7 +1491,13 @@ function premisesText(premises: FreitextPremise[], values: Record<string, string
       }
       if (premise.sourceUrl) parts.push(`Quelle: ${premise.sourceUrl}`);
       const learnerValue = String(values[premise.id] || '').trim();
-      parts.push(`Eingabe Lernende: ${learnerValue !== '' ? learnerValue : '[fehlt]'}`);
+      parts.push(
+        premise.sourceKey
+          ? `Automatisch übernommener Wert: ${learnerValue !== '' ? learnerValue : '[fehlt]'}`
+          : `Eingabe Lernende: ${learnerValue !== '' ? learnerValue : '[fehlt]'}`
+      );
+      parts.push(`Status Prämisse: ${state.promptStatus}`);
+      parts.push(`Prämisse erfüllt: ${state.ready ? 'ja' : 'nein'}`);
       parts.push(`Pflichtfeld: ${premise.required ? 'ja' : 'nein'}`);
       return parts.join(' | ');
     })
@@ -1505,6 +1723,13 @@ async function checkFreitext(
   });
 
   const premiseValues = collectPremiseValues(wrapper);
+  const premiseStates = Object.fromEntries(
+    premises.map((premise) => [
+      premise.id,
+      premiseStatusFromDom(wrapper, premise, premiseValues)
+    ])
+  ) as Record<string, PremiseFulfillmentState>;
+  const premiseNotice = premiseFeedbackNotice(premises, premiseStates);
   const additionalQuestion = questionField?.value.trim() || '';
   const missingReference = referenceSnapshots.find(
     (snapshot) => snapshot.required && !snapshot.ready
@@ -1521,24 +1746,9 @@ async function checkFreitext(
     button.dataset.freitextBusy = '';
     return;
   }
-  const missingPremise = findMissingPremise(premises, premiseValues);
-  if (missingPremise) {
-    notifySaveState(options, 'error', `Bitte zuerst "${missingPremise.label}" ausfüllen.`);
-    setClasses(textarea, button, feedback, null);
-    button.classList.remove('check-btn--loading');
-    button.disabled = false;
-    showFeedback(feedback, `Bitte zuerst "${missingPremise.label}" ausfüllen.`);
-    button.dataset.freitextBusy = '';
-    return;
-  }
 
-  const hasPremiseValue = Object.values(premiseValues).some(
-    (value) => String(value || '').trim() !== ''
-  );
-  if (!answer && (!premises.length || !hasPremiseValue)) {
-    const message = premises.length
-      ? 'Bitte zuerst Prämissen ausfüllen oder einen Text schreiben.'
-      : 'Bitte zuerst einen Text schreiben.';
+  if (!answer) {
+    const message = 'Bitte zuerst einen Text schreiben.';
     notifySaveState(options, 'error', message);
     setClasses(textarea, button, feedback, null);
     showFeedback(feedback, message);
@@ -1571,7 +1781,7 @@ async function checkFreitext(
     criteria_text: criteriaText(criteria),
     criteria_json: JSON.stringify(criteria),
     additional_question: additionalQuestion,
-    premises_text: [premisesText(premises, premiseValues), referencesText(referenceSnapshots)]
+    premises_text: [premisesText(premises, premiseValues, premiseStates), referencesText(referenceSnapshots)]
       .filter(Boolean)
       .join('\n\n'),
     premises_json: JSON.stringify(premises),
@@ -1600,7 +1810,7 @@ async function checkFreitext(
 
   const info = classificationInfo(chatgpt?.classification, chatgpt?.classification_label);
   setClasses(textarea, button, feedback, info.label);
-  showFeedback(feedback, chatgpt?.explanation || rawText);
+  showFeedback(feedback, [premiseNotice, chatgpt?.explanation || rawText].filter(Boolean).join('\n\n'));
 
   button.classList.remove('check-btn--loading');
   button.disabled = false;
@@ -1632,6 +1842,12 @@ export function createFreitextRuntime(options: FreitextRuntimeOptions): {
   const textareaHandlers = new Map<HTMLTextAreaElement, EventListener>();
   const premiseHandlers = new Map<HTMLInputElement, EventListener>();
   let refreshTimer: number | null = null;
+  const sourceDraftHandler = (event: Event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
+    if (!target.matches('input.luecke, textarea.freitext__textarea')) return;
+    updateLinkedPremiseSourceDraft(options.root, target.name || '', target.value || '');
+  };
 
   const bindButtons = () => {
     const buttons = Array.from(
@@ -1682,6 +1898,8 @@ export function createFreitextRuntime(options: FreitextRuntimeOptions): {
   bindButtons();
   bindTextareas();
   bindPremiseInputs();
+  options.root.addEventListener('input', sourceDraftHandler);
+  options.root.addEventListener('change', sourceDraftHandler);
   const observer = new MutationObserver(() => {
     bindButtons();
     bindTextareas();
@@ -1710,6 +1928,8 @@ export function createFreitextRuntime(options: FreitextRuntimeOptions): {
       observer.disconnect();
       if (refreshTimer) window.clearTimeout(refreshTimer);
       options.root.removeEventListener('abu-answer-saved', answerSavedHandler as EventListener);
+      options.root.removeEventListener('input', sourceDraftHandler);
+      options.root.removeEventListener('change', sourceDraftHandler);
       buttonHandlers.forEach((handler, btn) => {
         btn.removeEventListener('click', handler);
       });
