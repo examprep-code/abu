@@ -57,6 +57,7 @@ export type FreitextRuntimeOptions = {
   sheetKey: string;
   user: string;
   classroom?: string | number | null;
+  previewMode?: boolean;
   onProgress?: (progress: FreitextProgress) => void;
   onSaveState?: (event: {
     status: 'saving' | 'saved' | 'error';
@@ -82,6 +83,10 @@ function notifySaveState(
     message,
     at: status === 'saved' ? Date.now() : undefined
   });
+}
+
+function previewPayload(options: FreitextRuntimeOptions): Record<string, string> {
+  return options.previewMode ? { preview_mode: '1' } : {};
 }
 
 function classificationInfo(
@@ -1424,7 +1429,8 @@ async function saveReferenceSnapshots(
         sheet: options.sheetKey,
         user: options.user,
         value: buildStoredFreitextValue(answer, premises, premiseValues, snapshots),
-        save_only: '1'
+        save_only: '1',
+        ...previewPayload(options)
       };
       if (options.classroom) payload.classroom = String(options.classroom);
       if (score !== null) payload.classification = String(score);
@@ -1552,6 +1558,7 @@ async function checkFreitext(
     value: buildStoredFreitextValue(answer, premises, premiseValues, referenceSnapshots),
     answer_text: answer,
     ...(options.classroom ? { classroom: String(options.classroom) } : {}),
+    ...previewPayload(options),
     exercise_type: 'freitext',
     task_prompt: textarea.dataset.task || '',
     instruction_text: textarea.dataset.task || '',

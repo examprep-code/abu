@@ -12,6 +12,7 @@ export type LueckeRuntimeOptions = {
   sheetKey: string;
   user: string;
   classroom?: string | number | null;
+  previewMode?: boolean;
   onProgress?: (progress: LueckeProgress) => void;
   onSaveState?: (event: {
     status: 'saving' | 'saved' | 'error';
@@ -296,7 +297,8 @@ function setClasses(
   input: HTMLInputElement | null,
   button: HTMLButtonElement | null,
   feedback: HTMLElement | null,
-  label: 'RICHTIG' | 'TEILWEISE' | 'FALSCH' | null
+  label: 'RICHTIG' | 'TEILWEISE' | 'FALSCH' | null,
+  lockCorrectAnswer = true
 ): void {
   if (input) {
     input.classList.remove('luecke--richtig', 'luecke--teilweise', 'luecke--falsch');
@@ -323,8 +325,8 @@ function setClasses(
     input?.classList.add('luecke--richtig');
     button?.classList.add('check-btn--richtig');
     feedback?.classList.add('feedback--richtig');
-    if (input) input.disabled = true;
-    if (button) button.disabled = true;
+    if (input) input.disabled = lockCorrectAnswer;
+    if (button) button.disabled = lockCorrectAnswer;
   } else if (label === 'TEILWEISE') {
     input?.classList.add('luecke--teilweise');
     button?.classList.add('check-btn--teilweise');
@@ -366,6 +368,10 @@ function notifySaveState(
     message,
     at: status === 'saved' ? Date.now() : undefined
   });
+}
+
+function previewPayload(options: LueckeRuntimeOptions): Record<string, string> {
+  return options.previewMode ? { preview_mode: '1' } : {};
 }
 
 export function ensureLueckeElements(): void {
@@ -521,7 +527,7 @@ async function prefillAnswers(options: LueckeRuntimeOptions): Promise<void> {
       const button = input.parentElement?.querySelector('.check-btn') as HTMLButtonElement | null;
       const feedback = input.parentElement?.querySelector('.feedback') as HTMLElement | null;
       clearFeedback(feedback);
-      setClasses(input, button, feedback, label);
+      setClasses(input, button, feedback, label, !options.previewMode);
     });
   } catch {
     // ignore prefill errors
@@ -568,6 +574,7 @@ async function checkGap(
     user: options.user,
     value: answer,
     ...(options.classroom ? { classroom: String(options.classroom) } : {}),
+    ...previewPayload(options),
     lueckentext,
     musterloesung,
     prompt
@@ -631,7 +638,7 @@ async function checkGap(
   }
   showFeedback(feedback, explanation);
 
-  setClasses(input, button, feedback, label);
+  setClasses(input, button, feedback, label, !options.previewMode);
   button.disabled = false;
   updateProgress(options.root, options.onProgress);
   notifySaveState(options, 'saved');

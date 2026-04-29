@@ -7007,19 +7007,22 @@
       root: previewEl,
       apiBaseUrl,
       sheetKey: selectedKey || 'draft',
-      user: nextUser
+      user: nextUser,
+      previewMode: true
     });
     previewFreitextRuntime = createFreitextRuntime({
       root: previewEl,
       apiBaseUrl,
       sheetKey: selectedKey || 'draft',
-      user: nextUser
+      user: nextUser,
+      previewMode: true
     });
     previewUmfrageRuntime = createUmfrageRuntime({
       root: previewEl,
       apiBaseUrl,
       sheetKey: selectedKey || 'draft',
-      user: nextUser
+      user: nextUser,
+      previewMode: true
     });
     previewUser = nextUser;
     await previewLueckeRuntime.refresh();

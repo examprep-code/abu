@@ -7,6 +7,7 @@ export type UmfrageRuntimeOptions = {
   sheetKey: string;
   user: string;
   classroom?: string | number | null;
+  previewMode?: boolean;
   onSaveState?: (event: {
     status: 'saving' | 'saved' | 'error';
     message?: string;
@@ -250,6 +251,10 @@ function notifySaveState(
     message,
     at: status === 'saved' ? Date.now() : undefined
   });
+}
+
+function previewPayload(options: UmfrageRuntimeOptions): Record<string, string> {
+  return options.previewMode ? { preview_mode: '1' } : {};
 }
 
 type RowSaveState = 'saving' | 'saved' | 'error';
@@ -843,7 +848,8 @@ export function createUmfrageRuntime(options: UmfrageRuntimeOptions): {
       key,
       sheet: options.sheetKey,
       user: options.user,
-      value: input.value
+      value: input.value,
+      ...previewPayload(options)
     };
     if (options.classroom) {
       payload.classroom = String(options.classroom);

@@ -11,12 +11,16 @@ if (is_readable($modelPolicyModule)) {
 
 // POST: speichern und KI-Bewertung zurückgeben
 if ($method === 'POST') {
+    if (!is_array($data)) {
+        $data = [];
+    }
     $saveOnly = !empty($data['save_only']) || !empty($data['saveOnly']);
     $chatgpt = $saveOnly ? [] : bewerteAntwortMitKI($data);
     $submittedUser = trim((string)($data['user'] ?? ''));
+    $isPreviewMode = is_preview_answer_request($data, $submittedUser);
     $isAnonymousRuntimeUser = strpos($submittedUser, 'anon_') === 0;
 
-    if (!$isAnonymousRuntimeUser && !empty($learnerSession['code'])) {
+    if (!$isAnonymousRuntimeUser && !$isPreviewMode && !empty($learnerSession['code'])) {
         $data['user'] = $learnerSession['code'];
     } elseif (empty($data['user'])) {
         $data['user'] = 'testnutzer';
@@ -76,7 +80,11 @@ if ($method === 'POST') {
     $data['created_at'] = $now;
     $data['updated_at'] = $now;
 
-    serve($answerConfig, ['POST']);
+    if ($isPreviewMode) {
+        $return['data'] = ['id' => upsert_preview_answer($data)];
+    } else {
+        serve($answerConfig, ['POST']);
+    }
 
     if ($saveOnly) {
         return;
@@ -1642,6 +1650,111 @@ function freitext_premise_values_text($values)
         $index++;
     }
     return implode("\n", $lines);
+}
+
+function is_preview_answer_request($payload, $submittedUser = '')
+{
+    if (!is_array($payload)) {
+        return false;
+    }
+
+    $flag = strtolower(trim((string)($payload['preview_mode'] ?? $payload['previewMode'] ?? '')));
+    if (in_array($flag, ['1', 'true', 'yes', 'preview'], true)) {
+        return true;
+    }
+
+    $answerUser = trim((string)($submittedUser !== '' ? $submittedUser : ($payload['user'] ?? '')));
+    return strpos($answerUser, 'preview:') === 0;
+}
+
+function answer_storage_payload($payload)
+{
+    $fields = answer_payload_fields();
+    $storage = [];
+    foreach ($fields as $column => $_) {
+        if ($column === 'id') {
+            continue;
+        }
+        if (array_key_exists($column, $payload)) {
+            $storage[$column] = $payload[$column];
+        }
+    }
+    return $storage;
+}
+
+function preview_answer_where_clauses($payload)
+{
+    $sheet = trim((string)($payload['sheet'] ?? ''));
+    $key = trim((string)($payload['key'] ?? ''));
+    $answerUser = trim((string)($payload['user'] ?? ''));
+    if ($sheet === '' || $key === '' || $answerUser === '') {
+        return [];
+    }
+
+    $where = [
+        '`sheet` = "' . sql_escape($sheet) . '"',
+        '`key` = "' . sql_escape($key) . '"',
+        '`user` = "' . sql_escape($answerUser) . '"',
+    ];
+    if (answer_table_has_column('classroom')) {
+        if (array_key_exists('classroom', $payload) && trim((string)$payload['classroom']) !== '') {
+            $where[] = '`classroom` = ' . intval($payload['classroom']);
+        } else {
+            $where[] = '(`classroom` IS NULL OR `classroom` = 0)';
+        }
+    }
+    return $where;
+}
+
+function latest_preview_answer_id($payload)
+{
+    $where = preview_answer_where_clauses($payload);
+    if (empty($where)) {
+        return 0;
+    }
+
+    $rows = sql_get(
+        'SELECT `id` FROM `answer` WHERE ' .
+        implode(' AND ', $where) .
+        ' ORDER BY `updated_at` DESC, `id` DESC LIMIT 1;'
+    );
+    return intval($rows[0]['id'] ?? 0);
+}
+
+function delete_preview_answer_duplicates($payload, $keepId)
+{
+    $id = intval($keepId);
+    if ($id <= 0) {
+        return;
+    }
+
+    $where = preview_answer_where_clauses($payload);
+    if (empty($where)) {
+        return;
+    }
+    $where[] = '`id` <> ' . $id;
+    sql_set('DELETE FROM `answer` WHERE ' . implode(' AND ', $where) . ';');
+}
+
+function upsert_preview_answer($payload)
+{
+    $storage = answer_storage_payload($payload);
+    if (empty($storage)) {
+        return null;
+    }
+
+    $existingId = latest_preview_answer_id($storage);
+    if ($existingId > 0) {
+        $update = $storage;
+        unset($update['created_at']);
+        sql_update('answer', $update, $existingId);
+        delete_preview_answer_duplicates($storage, $existingId);
+        return $existingId;
+    }
+
+    $id = sql_create('answer', $storage);
+    delete_preview_answer_duplicates($storage, $id);
+    return $id;
 }
 
 function latest_answer_classification($sheet, $key, $answerUser, $classroom = null)
