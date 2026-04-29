@@ -2140,7 +2140,7 @@
     versionsLoading = true;
     versionsError = '';
     try {
-      const res = await apiFetch(`sheet?key=${encodeURIComponent(key)}`);
+      const res = await apiFetch(`sheet?key=${encodeURIComponent(key)}&summary=1`);
       const payload = await readPayload(res);
       if (!res.ok) {
         versionsError = payload?.warning || 'Versionen konnten nicht geladen werden';
