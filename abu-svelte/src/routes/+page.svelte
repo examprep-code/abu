@@ -12238,9 +12238,6 @@
   .app {
     min-height: 100vh;
     padding: 4px clamp(17px, 4vw, 41px) 41px;
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden;
   }
 
   .app.app--ci-zag {
@@ -12260,8 +12257,6 @@
     padding-left: 4px;
     padding-right: 4px;
     height: 100vh;
-    width: 100%;
-    max-width: 100%;
     overflow: hidden;
   }
 
@@ -12278,33 +12273,6 @@
     overflow-x: hidden;
   }
 
-  .app.app--with-agent,
-  .app.app--with-agent > :not(.agent-sidebar),
-  .app.app--with-agent .workspace,
-  .app.app--with-agent .panel,
-  .app.app--with-agent .panel-header,
-  .app.app--with-agent .manage-card,
-  .app.app--with-agent .editor,
-  .app.app--with-agent .editor-header,
-  .app.app--with-agent .editor-body,
-  .app.app--with-agent .fields,
-  .app.app--with-agent .editor-columns,
-  .app.app--with-agent .editor-main,
-  .app.app--with-agent .preview,
-  .app.app--with-agent .visual-layout,
-  .app.app--with-agent .visual-edit-panel,
-  .app.app--with-agent .block-editors,
-  .app.app--with-agent .block-editor {
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .app.app--with-agent > .topbar,
-  .app.app--with-agent > .workspace,
-  .app.app--with-agent > .panel {
-    width: auto;
-  }
-
   .topbar {
     display: flex;
     justify-content: space-between;
@@ -12313,8 +12281,6 @@
     gap: 20px;
     margin-bottom: 4px;
     grid-column: 1 / -1;
-    min-width: 0;
-    max-width: 100%;
   }
 
   .app.app--with-agent .topbar {
@@ -12326,8 +12292,6 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    flex: 0 1 auto;
-    min-width: 0;
   }
 
   .brand-logo img {
@@ -12361,8 +12325,6 @@
     align-items: center;
     gap: 14px;
     flex-wrap: nowrap;
-    flex: 0 1 auto;
-    min-width: 0;
   }
 
   .status-user {
@@ -12371,25 +12333,17 @@
     flex-direction: column;
     justify-content: center;
     gap: 2px;
-    min-width: 0;
-    max-width: clamp(120px, 18vw, 260px);
   }
 
   .status .value {
     margin: 0;
     font-weight: 600;
     line-height: 1.1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .status .hint {
     margin: 0;
     line-height: 1.1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .settings-btn {
@@ -12684,14 +12638,6 @@
     margin-bottom: 0;
     flex: 1 1 360px;
     justify-content: center;
-    min-width: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-  }
-
-  .topbar-tabs::-webkit-scrollbar {
-    display: none;
   }
 
   .topbar-tabs .topbar-tab-btn {
@@ -12832,7 +12778,6 @@
     gap: 7px;
     margin-bottom: 14px;
     font-weight: 500;
-    min-width: 0;
   }
 
   input,
@@ -12873,8 +12818,6 @@
     background: #f8fafc;
     overflow: hidden;
     isolation: isolate;
-    min-width: 0;
-    max-width: 100%;
   }
 
   .code-highlight,
