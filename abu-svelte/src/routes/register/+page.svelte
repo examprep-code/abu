@@ -86,7 +86,7 @@
   {:else if configError}
     <div class="card error">
       <p>{configError}</p>
-      <p class="hint">Bitte config.json pruefen.</p>
+      <p class="hint">Bitte config.json prüfen.</p>
     </div>
   {:else}
     <div class="register">
@@ -121,7 +121,7 @@
         <ul>
           <li>Deine Daten bleiben lokal in deiner DB.</li>
           <li>Passwort wird sicher gehasht gespeichert.</li>
-          <li>Neue Accounts starten standardmaessig mit Rolle 0 (warte auf Aktivierung).</li>
+          <li>Neue Accounts starten standardmäßig mit Rolle 0 (warte auf Aktivierung).</li>
         </ul>
       </div>
     </div>

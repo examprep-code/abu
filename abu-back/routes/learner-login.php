@@ -1,5 +1,5 @@
 <?php
-// Login fuer Lernende ueber 12-stelligen Identifikationscode.
+// Login für Lernende über 12-stelligen Identifikationscode.
 
 $code = null;
 if (is_array($data) && isset($data['code'])) {

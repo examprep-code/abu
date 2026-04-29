@@ -3,7 +3,7 @@
 Dieses Projekt speichert Agent-Requests/Responses als JSONL-Dateien, damit du:
 
 - Chatverlauf und Kontext lokal persistierst
-- Datensaetze fuer Fine-Tuning vorbereitest
+- Datensätze für Fine-Tuning vorbereitest
 - RAG-Importdateien aus denselben Logs erstellst
 
 ## 1) Speicherort
@@ -16,7 +16,7 @@ Jede Zeile ist ein JSON-Objekt (`event = "agent_chat"`), inkl. Prompt, Kontext, 
 
 ## 2) Datenschutz / Redaction
 
-Folgende Felder werden standardmaessig redaktiert:
+Folgende Felder werden standardmäßig redaktiert:
 
 - E-Mail-Adressen
 - Telefonnummern
@@ -31,7 +31,7 @@ Steuerung per Env-Variablen:
 - `AGENT_LOG_MAX_ITEMS=250`
 - `AGENT_LOG_MAX_DEPTH=10`
 
-## 3) Export fuer Training / RAG
+## 3) Export für Training / RAG
 
 Script:
 
@@ -47,16 +47,16 @@ php abu-back/scripts/export_agent_training.php \
 
 Output:
 
-- `agent-openai-YYYYmmdd-HHMMSS.jsonl` (Chat-Format fuer Fine-Tuning)
-- `agent-rag-YYYYmmdd-HHMMSS.jsonl` (Prompt/Kontext/Antwort fuer RAG)
+- `agent-openai-YYYYmmdd-HHMMSS.jsonl` (Chat-Format für Fine-Tuning)
+- `agent-rag-YYYYmmdd-HHMMSS.jsonl` (Prompt/Kontext/Antwort für RAG)
 
 Optionen:
 
 - `--input-dir=/pfad/zu/logs`
-- `--output-dir=/pfad/fuer/exports`
+- `--output-dir=/pfad/für/exports`
 - `--include-errors=1` (auch fehlgeschlagene Events exportieren)
 
 ## 4) Hinweise
 
-- Das Modell in dieser Laufzeit trainiert sich nicht selbst; Export-Dateien sind fuer ein separates Training bzw. RAG gedacht.
-- Logs koennen sensible Nutzerdaten enthalten. Falls noetig, vor Weitergabe zusaetzlich anonymisieren.
+- Das Modell in dieser Laufzeit trainiert sich nicht selbst; Export-Dateien sind für ein separates Training bzw. RAG gedacht.
+- Logs können sensible Nutzerdaten enthalten. Falls nötig, vor Weitergabe zusätzlich anonymisieren.

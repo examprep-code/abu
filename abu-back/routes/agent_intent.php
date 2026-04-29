@@ -81,7 +81,7 @@ foreach ($historyTurnsRaw as $entry) {
 }
 
 $systemMessage =
-    'Du klassifizierst Nutzeranfragen fuer eine Lernplattform als Intent-JSON. ' .
+    'Du klassifizierst Nutzeranfragen für eine Lernplattform als Intent-JSON. ' .
     'Antworte AUSSCHLIESSLICH als JSON mit Feldern: ' .
     'kind, confidence, topic, tab, view, reference. ' .
     'kind muss eines von diesen sein: ' .
@@ -90,11 +90,11 @@ $systemMessage =
     'explain_data_model, suggest_data_fetch, analyze_exercises, analyze_assignment_completion, identify_struggling_learners, ' .
     'open_largest_class_by_learners, none. ' .
     'confidence ist 0 bis 1. ' .
-    'Synonyme: "schueler" = "lernende"; "uebung"/"arbeitsblatt" = "sheet". ' .
-    'Nutze open_sheet_by_reference fuer Nachfragen wie "diese oeffnen" oder "die erste". ' .
-    'Nutze analyze_assignment_completion fuer Fragen, ob Lernende zugewiesene Blaetter eines Themas erledigt haben. ' .
-    'Nutze open_largest_class_by_learners fuer Anfragen wie "oeffne die Klasse mit den meisten Schuelern". ' .
-    'Nutze none wenn unklar. Keine Erklaertexte ausserhalb JSON.';
+    'Synonyme: "schüler" = "lernende"; "uebung"/"arbeitsblatt" = "sheet". ' .
+    'Nutze open_sheet_by_reference für Nachfragen wie "diese öffnen" oder "die erste". ' .
+    'Nutze analyze_assignment_completion für Fragen, ob Lernende zugewiesene Blätter eines Themas erledigt haben. ' .
+    'Nutze open_largest_class_by_learners für Anfragen wie "öffne die Klasse mit den meisten Schülern". ' .
+    'Nutze none wenn unklar. Keine Erklärtexte ausserhalb JSON.';
 
 $userMessage = json_encode([
     'prompt' => $prompt,
@@ -107,7 +107,7 @@ $userMessage = json_encode([
         'summary' => $historySummary,
         'turns' => $historyTurns,
     ],
-    'goal' => 'Intent fuer lokale Navigation/Suche bestimmen',
+    'goal' => 'Intent für lokale Navigation/Suche bestimmen',
 ], JSON_UNESCAPED_UNICODE);
 
 $messages = [
@@ -233,7 +233,7 @@ foreach ($modelCandidates as $index => $modelName) {
 
     if (!is_array($candidate)) {
         $finalStatus = 500;
-        $finalWarning = 'Antwort der OpenAI-API ist kein gueltiges JSON.';
+        $finalWarning = 'Antwort der OpenAI-API ist kein gültiges JSON.';
         if ($hasMoreCandidates) {
             continue;
         }

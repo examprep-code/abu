@@ -2,20 +2,20 @@
 
 ## Zweck des Projekts
 
-ABU ist eine Lernplattform fuer allgemeinbildenden Unterricht. Das System richtet sich primaer an Lehrpersonen und deckt drei Hauptaufgaben ab:
+ABU ist eine Lernplattform für allgemeinbildenden Unterricht. Das System richtet sich primär an Lehrpersonen und deckt drei Hauptaufgaben ab:
 
-1. Arbeitsblaetter erstellen und verwalten
-2. Arbeitsblaetter Klassen zuweisen
+1. Arbeitsblätter erstellen und verwalten
+2. Arbeitsblätter Klassen zuweisen
 3. Antworten von Lernenden erfassen, bewerten und auswerten
 
-Inhaltlich verbindet das Projekt klassische Lernplattform-Funktionen mit KI-Unterstuetzung:
+Inhaltlich verbindet das Projekt klassische Lernplattform-Funktionen mit KI-Unterstützung:
 
 - Lehrpersonen verwalten Schulen, Klassen und Lernende.
-- Arbeitsblaetter werden als HTML-basierte "Sheets" gespeichert.
-- Lernende oeffnen zugewiesene Sheets ueber einen Code, nicht ueber ein klassisches Benutzerkonto.
-- Antworten werden gespeichert und koennen automatisch durch ein LLM grob klassifiziert werden.
-- Lehrpersonen koennen Antworten gesammelt pro Sheet und Klasse pruefen.
-- Zusaetzlich gibt es einen KI-Agenten fuer Navigation, Analyse und einen Material-Import von `pdf`/`docx` zu neuen Sheets.
+- Arbeitsblätter werden als HTML-basierte "Sheets" gespeichert.
+- Lernende öffnen zugewiesene Sheets über einen Code, nicht über ein klassisches Benutzerkonto.
+- Antworten werden gespeichert und können automatisch durch ein LLM grob klassifiziert werden.
+- Lehrpersonen können Antworten gesammelt pro Sheet und Klasse prüfen.
+- Zusätzlich gibt es einen KI-Agenten für Navigation, Analyse und einen Material-Import von `pdf`/`docx` zu neuen Sheets.
 
 ## Fachlicher Kern
 
@@ -28,9 +28,9 @@ Das System ist fachlich um vier Ebenen aufgebaut:
 
 Dazu kommen technische bzw. erweiternde Bereiche:
 
-- `log`: einfache Protokollierung von Antwortbewertung/KI-Rueckgaben
+- `log`: einfache Protokollierung von Antwortbewertung/KI-Rückgaben
 - `agent_chat_log`: persistente Protokollierung der Agent-Interaktionen
-- `migration`: technische Tabelle des Datian-Frameworks fuer Schema-Aenderungen
+- `migration`: technische Tabelle des Datian-Frameworks für Schema-Änderungen
 
 ## Datenbankmodell
 
@@ -41,15 +41,15 @@ Der `user` ist die Lehrperson oder ein Admin. Fast alle fachlichen Daten sind ei
 Wichtige Felder:
 
 - `id`: technische Primar-ID
-- `role`: Rollenmodell, im Code verwendet fuer normale User, noch nicht aktivierte User und Admins
+- `role`: Rollenmodell, im Code verwendet für normale User, noch nicht aktivierte User und Admins
 - `email`, `password`: Login-Daten
-- `token`, `valid_until`: API-Session fuer das Frontend
-- `ai_*`: Nutzungs- und Kostenzaehler fuer KI-Aufrufe
+- `token`, `valid_until`: API-Session für das Frontend
+- `ai_*`: Nutzungs- und Kostenzähler für KI-Aufrufe
 
 Logische Rolle:
 
 - Ein `user` besitzt Sheets, Schulen, Klassen und Lernende.
-- Zugriffe im Backend werden fast immer auf `user = eingeloggter User` eingeschraenkt.
+- Zugriffe im Backend werden fast immer auf `user = eingeloggter User` eingeschränkt.
 
 ### 2. `school`
 
@@ -59,13 +59,13 @@ Wichtige Felder:
 
 - `user`: Besitzer
 - `name`: Schulname
-- `ci_css`: individuelles CSS fuer CI/Branding
-- `prompt`: zusaetzlicher Kontext fuer KI-Funktionen
+- `ci_css`: individuelles CSS für CI/Branding
+- `prompt`: zusätzlicher Kontext für KI-Funktionen
 
 Logische Rolle:
 
 - Eine Schule kann mehrere Klassen enthalten.
-- Die CI wird bis in das Lernendenportal und die oeffentliche Sheet-Ansicht durchgereicht.
+- Die CI wird bis in das Lernendenportal und die öffentliche Sheet-Ansicht durchgereicht.
 
 ### 3. `classroom`
 
@@ -77,23 +77,23 @@ Wichtige Felder:
 - `school`: optionale Zuordnung zu einer Schule
 - `name`, `year`, `profession`: fachliche Stammdaten
 - `notes`: freie Notizen
-- `prompt`: KI-Kontext fuer diese Klasse
+- `prompt`: KI-Kontext für diese Klasse
 
 Logische Rolle:
 
-- Eine Klasse gehoert genau einem User.
+- Eine Klasse gehört genau einem User.
 - Eine Klasse kann optional einer Schule zugeordnet sein.
 - Eine Klasse hat viele Lernende.
-- Einer Klasse koennen viele Sheets zugewiesen werden.
+- Einer Klasse können viele Sheets zugewiesen werden.
 
 ### 4. `learner`
 
-`learner` repraesentiert eine lernende Person. Lernende haben kein Passwortkonto, sondern einen Identifikationscode.
+`learner` repräsentiert eine lernende Person. Lernende haben kein Passwortkonto, sondern einen Identifikationscode.
 
 Wichtige Felder:
 
 - `user`: Besitzer auf Lehrpersonen-Seite
-- `classroom`: Zugehoerige Klasse
+- `classroom`: Zugehörige Klasse
 - `name`, `email`
 - `code`: 12-stelliger Login-/Zugriffscode
 - `notes`, `prompt`
@@ -101,8 +101,8 @@ Wichtige Felder:
 Logische Rolle:
 
 - Lernende werden von Lehrpersonen angelegt.
-- Der `code` ist die zentrale Bruecke zwischen Admin-Welt und Lernendenportal.
-- Ueber den Code werden Zuweisungen und eigene Antworten geladen.
+- Der `code` ist die zentrale Brücke zwischen Admin-Welt und Lernendenportal.
+- Über den Code werden Zuweisungen und eigene Antworten geladen.
 
 ### 5. `sheet`
 
@@ -111,22 +111,22 @@ Logische Rolle:
 Wichtige Felder:
 
 - `user`: Besitzer
-- `key`: fachlicher, stabiler Sheet-Schluessel
+- `key`: fachlicher, stabiler Sheet-Schlüssel
 - `name`: Anzeigename
 - `content`: HTML-Inhalt des Arbeitsblatts
-- `prompt`: Kontext fuer KI/Folgebearbeitung
+- `prompt`: Kontext für KI/Folgebearbeitung
 - `is_current`: kennzeichnet die aktive Version
 
 Besonderheit: Versionierung
 
-Ein Sheet ist fachlich nicht ueber `id`, sondern ueber `key` definiert. Jede Aenderung erzeugt im Backend eine neue Zeile mit derselben `key`. Die aktuelle Version wird ueber `is_current = 1` markiert.
+Ein Sheet ist fachlich nicht über `id`, sondern über `key` definiert. Jede Änderung erzeugt im Backend eine neue Zeile mit derselben `key`. Die aktuelle Version wird über `is_current = 1` markiert.
 
 Das bedeutet:
 
 - `id` = technische Versions-ID
-- `key` = fachliche Identitaet des Arbeitsblatts
+- `key` = fachliche Identität des Arbeitsblatts
 
-Diese Entscheidung ist zentral fuer das gesamte Projekt, weil Zuweisungen und Antworten auf `sheet.key` referenzieren und dadurch auch bei neuen Versionen stabil bleiben.
+Diese Entscheidung ist zentral für das gesamte Projekt, weil Zuweisungen und Antworten auf `sheet.key` referenzieren und dadurch auch bei neuen Versionen stabil bleiben.
 
 ### 6. `classroom_sheet`
 
@@ -136,14 +136,14 @@ Wichtige Felder:
 
 - `user`: Besitzer
 - `classroom`: Klasse
-- `sheet_key`: referenziertes Sheet ueber den stabilen `sheet.key`
+- `sheet_key`: referenziertes Sheet über den stabilen `sheet.key`
 - `status`: z. B. `aktiv`, `freiwillig`, `archiviert`
 - `assignment_form`: `personal` oder `anonym`
 
 Logische Rolle:
 
 - Diese Tabelle bildet die n:m-Beziehung zwischen `classroom` und `sheet`.
-- Hier wird nicht nur verknuepft, sondern auch gesteuert, wie ein Blatt fuer eine Klasse verwendet wird.
+- Hier wird nicht nur verknüpft, sondern auch gesteuert, wie ein Blatt für eine Klasse verwendet wird.
 - `assignment_form` entscheidet, ob Antworten personenbezogen oder anonym laufen.
 
 ### 7. `answer`
@@ -152,8 +152,8 @@ Logische Rolle:
 
 Wichtige Felder:
 
-- `key`: Schluessel der konkreten Luecke / Frage im Sheet
-- `sheet`: referenziertes Arbeitsblatt ueber `sheet.key`
+- `key`: Schlüssel der konkreten Lücke / Frage im Sheet
+- `sheet`: referenziertes Arbeitsblatt über `sheet.key`
 - `value`: gegebene Antwort
 - `user`: Lernendenkennung oder anonymer Laufzeit-Identifier
 - `classroom`: optionale Klassen-ID
@@ -162,13 +162,13 @@ Wichtige Felder:
 
 Logische Rolle:
 
-- Eine Antwort gehoert logisch zu einem Sheet und zu einem konkreten Feld innerhalb des Sheets.
+- Eine Antwort gehört logisch zu einem Sheet und zu einem konkreten Feld innerhalb des Sheets.
 - Antworten werden nicht gegen `sheet.id`, sondern gegen `sheet.key` gespeichert.
 - Dadurch bleiben Antworten auch bei neuen Sheet-Versionen referenzierbar.
 
 Besonderheit bei personenbezogen vs. anonym:
 
-- Bei `personal` wird fuer Lernende typischerweise deren `learner.code` als `answer.user` verwendet.
+- Bei `personal` wird für Lernende typischerweise deren `learner.code` als `answer.user` verwendet.
 - Bei `anonym` wird ein anonymer Laufzeit-Token verwendet.
 
 ### 8. `log`
@@ -182,11 +182,11 @@ Inhalt:
 
 Logische Rolle:
 
-- Debugging und Nachvollziehbarkeit fuer die automatische Antwortbewertung
+- Debugging und Nachvollziehbarkeit für die automatische Antwortbewertung
 
 ### 9. `agent_chat_log`
 
-`agent_chat_log` ist die ausgebautere Logtabelle fuer den KI-Agenten.
+`agent_chat_log` ist die ausgebautere Logtabelle für den KI-Agenten.
 
 Wichtige Inhalte:
 
@@ -198,19 +198,19 @@ Wichtige Inhalte:
 
 Logische Rolle:
 
-- Qualitaetssicherung fuer den Agenten
+- Qualitätssicherung für den Agenten
 - Nachvollziehbarkeit von Entscheidungen und Modellausgaben
 
-## Logische Zusammenhaenge
+## Logische Zusammenhänge
 
 ### Mandantenlogik
 
-Das Projekt ist stark mandantenorientiert. Fast alle fachlichen Tabellen tragen ein `user`-Feld. Dadurch gehoeren Daten immer einer Lehrperson bzw. einem Admin-Kontext.
+Das Projekt ist stark mandantenorientiert. Fast alle fachlichen Tabellen tragen ein `user`-Feld. Dadurch gehören Daten immer einer Lehrperson bzw. einem Admin-Kontext.
 
 Praktische Folge:
 
 - Ein User sieht in der Regel nur seine eigenen Schulen, Klassen, Lernenden und Sheets.
-- Admins koennen teilweise breiter sehen, aber die Fachlogik ist klar um Besitzverhaeltnisse gebaut.
+- Admins können teilweise breiter sehen, aber die Fachlogik ist klar um Besitzverhältnisse gebaut.
 
 ### Organisationslogik
 
@@ -226,7 +226,7 @@ Die Inhaltsstruktur ist:
 
 `user -> sheet`
 
-Ein Sheet ist ein HTML-Arbeitsblatt mit interaktiven Spezialelementen wie Luecken, Antworttexten oder Umfragen. Es wird im Editor gepflegt und versioniert gespeichert.
+Ein Sheet ist ein HTML-Arbeitsblatt mit interaktiven Spezialelementen wie Lücken, Freitexten oder Umfragen. Es wird im Editor gepflegt und versioniert gespeichert.
 
 ### Zuweisungslogik
 
@@ -242,11 +242,11 @@ Das ist kein reiner technischer Join, sondern ein fachliches Steuerobjekt:
 
 ### Bearbeitungslogik
 
-Die Bearbeitung laeuft so:
+Die Bearbeitung läuft so:
 
 1. Lernende melden sich mit `learner.code` an.
-2. Das System laedt ueber `sheet/public-list` die fuer ihre Klasse freigegebenen Sheets.
-3. Ein Sheet wird ueber `sheet/public` geladen.
+2. Das System lädt über `sheet/public-list` die für ihre Klasse freigegebenen Sheets.
+3. Ein Sheet wird über `sheet/public` geladen.
 4. Einzelne Antworten werden als `answer` gespeichert.
 5. Das Backend kann direkt beim Speichern eine KI-Klassifikation erzeugen.
 
@@ -258,39 +258,39 @@ Lehrpersonen betrachten Antworten gesammelt nach:
 - Klasse
 - Lernendenkennung
 
-Die Review-Ansicht visualisiert Antworten direkt an den Luecken des Sheets. Dadurch ist die Plattform weniger ein klassisches Testsystem und mehr ein arbeitsblattorientiertes Korrektur- und Uebersichtssystem.
+Die Review-Ansicht visualisiert Antworten direkt an den Lücken des Sheets. Dadurch ist die Plattform weniger ein klassisches Testsystem und mehr ein arbeitsblattorientiertes Korrektur- und Übersichtssystem.
 
 ## Wichtigste fachliche Designentscheidungen
 
 ### 1. Lernende ohne klassisches Benutzerkonto
 
-Lernende verwenden einen Code statt E-Mail/Passwort. Das senkt die Einstiegshuerde und passt zu Unterrichtssituationen mit schnellen Zugriffen.
+Lernende verwenden einen Code statt E-Mail/Passwort. Das senkt die Einstiegshürde und passt zu Unterrichtssituationen mit schnellen Zugriffen.
 
-### 2. Sheets werden ueber `key` versioniert
+### 2. Sheets werden über `key` versioniert
 
 Das ist eine der wichtigsten Architekturentscheidungen des Projekts.
 
 Vorteile:
 
-- neue Versionen koennen gespeichert werden, ohne Zuweisungen neu zu verdrahten
+- neue Versionen können gespeichert werden, ohne Zuweisungen neu zu verdrahten
 - Antworten bleiben logisch beim selben Arbeitsblatt
-- die Plattform kann Bearbeitungsstaende historisieren
+- die Plattform kann Bearbeitungsstände historisieren
 
-### 3. Antworten referenzieren fachliche Identitaeten
+### 3. Antworten referenzieren fachliche Identitäten
 
 `answer` verweist auf:
 
-- das Sheet ueber `sheet.key`
-- das konkrete Feld ueber `answer.key`
-- den Bearbeiter ueber `answer.user`
+- das Sheet über `sheet.key`
+- das konkrete Feld über `answer.key`
+- den Bearbeiter über `answer.user`
 
-Dadurch ist die Antwortspeicherung sehr flexibel, aber auch weniger strikt relational als bei einem voll normalisierten Pruefungssystem.
+Dadurch ist die Antwortspeicherung sehr flexibel, aber auch weniger strikt relational als bei einem voll normalisierten Prüfungssystem.
 
 ### 4. KI ist Zusatzschicht, nicht Kernspeicher
 
 Die KI-Funktionen erweitern das System, ersetzen aber das Fachmodell nicht.
 
-KI wird genutzt fuer:
+KI wird genutzt für:
 
 - automatische Grobbewertung von Antworten
 - Material-Import von `pdf`/`docx` in neue Sheets
@@ -307,7 +307,7 @@ Das Kernmodell bleibt trotzdem klassisch relational.
 3. User legt eine oder mehrere Klassen an.
 4. User legt Lernende je Klasse an.
 5. User erstellt oder importiert Sheets.
-6. User weist Sheets Klassen ueber `classroom_sheet` zu.
+6. User weist Sheets Klassen über `classroom_sheet` zu.
 
 ### Ablauf B: Lernende bearbeiten ein Arbeitsblatt
 
@@ -315,20 +315,20 @@ Das Kernmodell bleibt trotzdem klassisch relational.
 2. Das System erkennt die Klasse und optional die Schul-CI.
 3. Zuweisbare Sheets werden geladen.
 4. Ein Sheet wird angezeigt.
-5. Antworten werden einzeln gespeichert und koennen sofort klassifiziert werden.
+5. Antworten werden einzeln gespeichert und können sofort klassifiziert werden.
 
 ### Ablauf C: Lehrperson wertet aus
 
-1. Lehrperson oeffnet ein Sheet im Review-/Antwortmodus.
+1. Lehrperson öffnet ein Sheet im Review-/Antwortmodus.
 2. Antworten werden pro Klasse und Lernendenkontext geladen.
-3. Klassifikationen koennen geprueft und manuell angepasst werden.
+3. Klassifikationen können geprüft und manuell angepasst werden.
 4. Der aktuelle Lernstand wird direkt im Kontext des Arbeitsblatts sichtbar.
 
-### Ablauf D: Material wird KI-gestuetzt umgewandelt
+### Ablauf D: Material wird KI-gestützt umgewandelt
 
-1. Lehrperson laedt `pdf` oder `docx` hoch.
+1. Lehrperson lädt `pdf` oder `docx` hoch.
 2. Das Backend extrahiert Text.
-3. Ein LLM wandelt das Material in ein HTML-Sheet mit Luecken um.
+3. Ein LLM wandelt das Material in ein HTML-Sheet mit Lücken um.
 4. Das neue Sheet wird direkt in der Datenbank gespeichert.
 
 ## Einfache ER-Sicht
@@ -347,13 +347,13 @@ school
 
 classroom
   1 -> n learner
-  n -> m sheet   (ueber classroom_sheet)
+  n -> m sheet   (über classroom_sheet)
 
 sheet
-  1 -> n answer  (fachlich ueber sheet.key)
+  1 -> n answer  (fachlich über sheet.key)
 
 answer
-  gehoert logisch zu:
+  gehört logisch zu:
   - einem sheet
   - einem Feld im sheet
   - einem Bearbeiter
@@ -364,23 +364,23 @@ answer
 
 ### Fachlich relevant
 
-- `product.php` wirkt wie ein altes Beispielmodell und gehoert nicht zum eigentlichen ABU-Fachmodell.
+- `product.php` wirkt wie ein altes Beispielmodell und gehört nicht zum eigentlichen ABU-Fachmodell.
 - Die Tabelle `migration` ist rein technisch und nicht fachlich.
 
 ### Modellgrenzen
 
-- `answer.user` ist kein echter Fremdschluessel auf `learner.id`, sondern ein flexibler Identifier.
-- `classroom_sheet.sheet_key` referenziert bewusst nicht `sheet.id`, sondern den stabilen fachlichen Schluessel.
-- Das Modell bevorzugt praktische Unterrichtsprozesse gegenueber maximal strikter relationaler Normierung.
+- `answer.user` ist kein echter Fremdschlüssel auf `learner.id`, sondern ein flexibler Identifier.
+- `classroom_sheet.sheet_key` referenziert bewusst nicht `sheet.id`, sondern den stabilen fachlichen Schlüssel.
+- Das Modell bevorzugt praktische Unterrichtsprozesse gegenüber maximal strikter relationaler Normierung.
 
 ## Kurzfazit
 
-Inhaltlich ist ABU eine arbeitsblattzentrierte Unterrichtsplattform fuer Lehrpersonen und Lernende. Das Datenmodell ist darauf optimiert,
+Inhaltlich ist ABU eine arbeitsblattzentrierte Unterrichtsplattform für Lehrpersonen und Lernende. Das Datenmodell ist darauf optimiert,
 
-- Unterricht organisatorisch ueber Schulen, Klassen und Lernende abzubilden,
-- Arbeitsblaetter versionierbar und stabil zu halten,
+- Unterricht organisatorisch über Schulen, Klassen und Lernende abzubilden,
+- Arbeitsblätter versionierbar und stabil zu halten,
 - Zuweisungen pro Klasse zu steuern,
 - Antworten einfach zu erfassen und auszuwerten,
-- KI als produktive Zusatzschicht fuer Bewertung, Import und Assistenz einzusetzen.
+- KI als produktive Zusatzschicht für Bewertung, Import und Assistenz einzusetzen.
 
 Der wichtigste fachliche Gedanke des Systems ist dabei: Das Arbeitsblatt ist das Zentrum, und alles andere organisiert, verteilt, bearbeitet oder analysiert dieses Arbeitsblatt.

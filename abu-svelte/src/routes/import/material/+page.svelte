@@ -61,7 +61,7 @@
       return;
     }
     if (!files.length) {
-      errorText = 'Bitte .pdf oder .docx auswaehlen.';
+      errorText = 'Bitte .pdf oder .docx auswählen.';
       return;
     }
 
@@ -102,10 +102,10 @@
     <div>
       <p class="eyebrow">ABU</p>
       <h1>Material importieren</h1>
-      <p class="hint">Lade .docx oder .pdf hoch und erzeuge automatisch ein Sheet mit Luecken.</p>
+      <p class="hint">Lade .docx oder .pdf hoch und erzeuge automatisch ein Sheet mit Lücken.</p>
     </div>
     <div class="status">
-      <a class="ghost" href="/">&larr; Zurueck</a>
+      <a class="ghost" href="/">&larr; Zurück</a>
     </div>
   </header>
 
@@ -116,7 +116,7 @@
   {:else if configError}
     <div class="card error">
       <p>{configError}</p>
-      <p class="hint">Bitte config.json pruefen.</p>
+      <p class="hint">Bitte config.json prüfen.</p>
     </div>
   {:else if !token}
     <div class="card error">
@@ -132,7 +132,7 @@
           <input type="file" multiple accept=".pdf,.docx" on:change={onPickFiles} />
         </label>
         {#if files.length}
-          <p class="hint">{files.length} Datei(en) ausgewaehlt</p>
+          <p class="hint">{files.length} Datei(en) ausgewählt</p>
         {/if}
         {#if errorText}
           <p class="error-text">{errorText}</p>

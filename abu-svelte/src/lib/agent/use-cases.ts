@@ -42,7 +42,7 @@ type AgentPrimaryUseCaseDeps = {
 };
 
 // Zentrale Registry der wichtigsten Agent-Use-Cases.
-// Neue Faelle hier ergaenzen (match + run), statt in der Router-If-Kette.
+// Neue Fälle hier ergänzen (match + run), statt in der Router-If-Kette.
 export const buildAgentPrimaryUseCases = ({
   options,
   buildVisibleItemsMessage,

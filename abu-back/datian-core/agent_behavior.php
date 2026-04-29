@@ -25,8 +25,8 @@ if (!function_exists('agent_normalize_heading_key')) {
             'ausgabeformat' => 'output_format',
             'outputformat' => 'output_format',
             'format' => 'output_format',
-            'qualitaetskriterien' => 'quality',
-            'qualitaet' => 'quality',
+            'qualitätskriterien' => 'quality',
+            'qualität' => 'quality',
             'quality' => 'quality',
             'sprache' => 'language',
             'language' => 'language',
@@ -175,7 +175,7 @@ if (!function_exists('agent_build_request_schema')) {
             $role = (string)$parsed['role'][0];
         }
         if ($role === '') {
-            $role = 'Vielseitiger KI-Assistent fuer Analyse, Recherche, Sprache und HTML/CSS/JS.';
+            $role = 'Vielseitiger KI-Assistent für Analyse, Recherche, Sprache und HTML/CSS/JS.';
         }
 
         $goal = agent_schema_lines($schema, ['goal', 'ziel', 'objective']);
@@ -183,7 +183,7 @@ if (!function_exists('agent_build_request_schema')) {
             $goal = $parsed['goal'];
         }
         if (empty($goal)) {
-            $goal = ['Die Nutzeranfrage praezise und umsetzbar bearbeiten.'];
+            $goal = ['Die Nutzeranfrage präzise und umsetzbar bearbeiten.'];
         }
 
         $context = agent_schema_lines($schema, ['context', 'kontext']);
@@ -216,11 +216,11 @@ if (!function_exists('agent_build_request_schema')) {
         }
         if (empty($rules)) {
             $rules = [
-                'Wenn Informationen fehlen, zuerst kurze Annahmen und dann gezielte Rueckfrage.',
+                'Wenn Informationen fehlen, zuerst kurze Annahmen und dann gezielte Rückfrage.',
                 'Bei Unsicherheit sinnvolle Alternativen mit Vor- und Nachteilen nennen.',
                 'Bei Recherche nur belastbare Quellen verwenden, mit Datum und Links.',
-                'Bei Code oder HTML lauffaehige Loesung liefern und keine stillen Platzhalter nutzen.',
-                'Aenderungen klar kennzeichnen.',
+                'Bei Code oder HTML lauffähige Lösung liefern und keine stillen Platzhalter nutzen.',
+                'Änderungen klar kennzeichnen.',
             ];
         }
 
@@ -230,18 +230,18 @@ if (!function_exists('agent_build_request_schema')) {
         }
         if (empty($outputFormat)) {
             $outputFormat = [
-                'Kurze Zusammenfassung (maximal 5 Saetze).',
+                'Kurze Zusammenfassung (maximal 5 Sätze).',
                 'Ergebnis (Analyse, Recherche oder Code).',
-                'Naechste sinnvolle Schritte als nummerierte Liste.',
+                'Nächste sinnvolle Schritte als nummerierte Liste.',
             ];
         }
 
-        $quality = agent_schema_lines($schema, ['quality', 'qualitaetskriterien', 'qualitaet']);
+        $quality = agent_schema_lines($schema, ['quality', 'qualitätskriterien', 'qualität']);
         if (empty($quality)) {
             $quality = $parsed['quality'];
         }
         if (empty($quality)) {
-            $quality = ['Korrektheit', 'Verstaendlichkeit', 'Technische Sauberkeit'];
+            $quality = ['Korrektheit', 'Verständlichkeit', 'Technische Sauberkeit'];
         }
 
         $language = agent_schema_text($schema, ['language', 'sprache']);
@@ -324,7 +324,7 @@ if (!function_exists('agent_render_prompt_schema')) {
             $lines[] = '- ' . $line;
         }
         $lines[] = '';
-        $lines[] = 'Qualitaetskriterien:';
+        $lines[] = 'Qualitätskriterien:';
         foreach ($schema['quality'] as $line) {
             $lines[] = '- ' . $line;
         }
@@ -384,7 +384,7 @@ if (!function_exists('agent_prompt_prefers_document_scope')) {
             'pruef',
             'ist es geeignet',
             'passt das',
-            'qualitaet',
+            'qualität',
         ];
         $documentTokens = [
             'uebung',
@@ -396,12 +396,12 @@ if (!function_exists('agent_prompt_prefers_document_scope')) {
             'abu',
         ];
         $editTokens = [
-            'fuege',
+            'füge',
             'insert',
             'erstelle',
             'generiere',
             'ersetze',
-            'aendere',
+            'ändere',
             'formatiere',
             'schreibe',
             'setze',
@@ -441,23 +441,23 @@ if (!function_exists('agent_prompt_prefers_document_scope')) {
 if (!function_exists('agent_get_system_message')) {
     function agent_get_system_message()
     {
-        return 'Du bist ein Assistent fuer Lehrpersonen und bearbeitest Arbeitsblaetter im HTML-Format. ' .
+        return 'Du bist ein Assistent für Lehrpersonen und bearbeitest Arbeitsblätter im HTML-Format. ' .
             'Die Nutzeranfrage wurde bereits durch ein Vormodul in ein Prompt-Schema normalisiert. ' .
-            'Du erhaeltst eine Benutzeranfrage und einen Kontext-Scope (block oder document). ' .
+            'Du erhältst eine Benutzeranfrage und einen Kontext-Scope (block oder document). ' .
             'Antworte AUSSCHLIESSLICH als JSON mit diesen Feldern: ' .
             '"action" (replace_html | insert_html | message), ' .
-            '"html" (string, leer falls keine Aenderung), ' .
-            '"message" (deutsche Kurzantwort mit bis zu 8 Saetzen; Zeilenumbrueche sind erlaubt), ' .
+            '"html" (string, leer falls keine Änderung), ' .
+            '"message" (deutsche Kurzantwort mit bis zu 8 Sätzen; Zeilenumbrüche sind erlaubt), ' .
             '"block_level" (true/false, ob html ein eigener Block ist), ' .
-            '"view" (html | visual, welche Editor-Ansicht sich fuer das Snippet eignet). ' .
-            'Nutze replace_html nur wenn wirklich noetig. Nutze sonst insert_html mit einem kleinen, gezielten Snippet. ' .
-            'Nutze message, wenn die Anfrage nur Analyse oder Fehlersuche erfordert und keine Aenderung. ' .
-            'Wenn fuer eine Analyse Informationen fehlen, liefere zuerst eine vorlaeufige Einschaetzung aus dem vorhandenen Kontext und stelle danach maximal 3 gezielte Rueckfragen. ' .
-            'Bei Anfragen zur ABU-Eignung oder Aufgabenqualitaet nenne konkrete Kriterien statt nur nach dem Volltext zu fragen. ' .
-            'Gib bei insert_html nur das Snippet zur Einfuegung zurueck, kein komplettes Dokument. ' .
+            '"view" (html | visual, welche Editor-Ansicht sich für das Snippet eignet). ' .
+            'Nutze replace_html nur wenn wirklich nötig. Nutze sonst insert_html mit einem kleinen, gezielten Snippet. ' .
+            'Nutze message, wenn die Anfrage nur Analyse oder Fehlersuche erfordert und keine Änderung. ' .
+            'Wenn für eine Analyse Informationen fehlen, liefere zuerst eine vorläufige Einschätzung aus dem vorhandenen Kontext und stelle danach maximal 3 gezielte Rückfragen. ' .
+            'Bei Anfragen zur ABU-Eignung oder Aufgabenqualität nenne konkrete Kriterien statt nur nach dem Volltext zu fragen. ' .
+            'Gib bei insert_html nur das Snippet zur Einfügung zurück, kein komplettes Dokument. ' .
             'Bei scope=block darf replace_html nur den aktualisierten Block liefern, nicht das gesamte Dokument. ' .
             'Bei scope=document darf replace_html den aktualisierten Gesamtinhalt liefern. ' .
-            'Behalte bestehende Spezial-Tags (z.B. luecke-gap) bei und veraendere sie nur, wenn die Anfrage es erfordert. ' .
+            'Behalte bestehende Spezial-Tags (z.B. luecke-gap) bei und verändere sie nur, wenn die Anfrage es erfordert. ' .
             'Kein Markdown, kein Code-Fence, nur JSON.';
     }
 }
@@ -485,7 +485,7 @@ if (!function_exists('agent_build_runtime_context')) {
             'Scope: ' . $scope,
         ];
         if ($visualTarget !== '') {
-            $runtimeContextLines[] = 'Einfuegen: ' . $visualTarget;
+            $runtimeContextLines[] = 'Einfügen: ' . $visualTarget;
         }
         if ($activeBlockIndex !== null && $activeBlockIndex !== '') {
             $runtimeContextLines[] = 'Aktiver Block Index: ' . $activeBlockIndex;
@@ -497,7 +497,7 @@ if (!function_exists('agent_build_runtime_context')) {
             $runtimeContextLines[] = 'Block-Anzahl: ' . $blockCount;
         }
         if ($documentLength !== null && $documentLength !== '') {
-            $runtimeContextLines[] = 'Dokument-Laenge: ' . $documentLength;
+            $runtimeContextLines[] = 'Dokument-Länge: ' . $documentLength;
         }
 
         $effectiveHtml = $html;
@@ -515,7 +515,7 @@ if (!function_exists('agent_build_runtime_context')) {
             }
             $runtimeContextLines[] = "Aktueller HTML-Inhalt:\n" . $effectiveHtml;
             if ($scope === 'block' && $activeBlockHtml !== '') {
-                $runtimeContextLines[] = "Aktiver Block HTML (zusaetzlich):\n" . $activeBlockHtml;
+                $runtimeContextLines[] = "Aktiver Block HTML (zusätzlich):\n" . $activeBlockHtml;
             }
         }
 

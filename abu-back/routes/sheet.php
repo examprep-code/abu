@@ -14,6 +14,12 @@ $sheetConfig = [
     ],
 ];
 
+function sheet_strip_empty_freitext_premise_placeholders($content)
+{
+    $pattern = '~[ \t]*<freitext-(prämisse|praemisse)\b(?=[^>]*\blabel\s*=\s*(["\'])(?:Prämisse|Praemisse)\s+1\2)(?![^>]*\b(?:key|name|source-key|answer-key|target|ref|source|href|url|source-label|link-label|type|required|optional)\s*=)[^>]*(?:/\s*>|>\s*</freitext-\1\s*>)[ \t]*(?:\R)?~iu';
+    return preg_replace($pattern, '', (string) $content);
+}
+
 if (!isset($user['id'])) {
     $return['status'] = 401;
     warning('nicht eingeloggt');
@@ -22,6 +28,7 @@ if (!isset($user['id'])) {
 
 if ($method === 'GET') {
     $key = isset($_GET['key']) ? trim($_GET['key']) : '';
+    $summary = isset($_GET['summary']) && intval($_GET['summary']) === 1;
     $where = [];
     $scopeToCurrentUser = !user_is_admin() || !empty($paras[0]) || $key !== '';
     if ($scopeToCurrentUser) {
@@ -34,6 +41,9 @@ if ($method === 'GET') {
         $sheetConfig['sheet']['_append'] = ['ORDER BY created_at DESC'];
     } else {
         $where[] = 'is_current = 1';
+    }
+    if ($key !== '' && $summary) {
+        unset($sheetConfig['sheet']['content'], $sheetConfig['sheet']['prompt']);
     }
     $sheetConfig['sheet']['_where'] = $where;
     $result = get($sheetConfig);
@@ -74,7 +84,7 @@ if ($method === 'POST') {
         'user' => ['id' => $user['id']],
         'key' => $key,
         'name' => $name,
-        'content' => $data['content'] ?? '',
+        'content' => sheet_strip_empty_freitext_premise_placeholders($data['content'] ?? ''),
         'prompt' => (string) ($data['prompt'] ?? ''),
         'is_current' => 1,
         'created_at' => $now,
@@ -125,6 +135,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
     $restore = isset($data['is_current']) && intval($data['is_current']) === 1;
     if ($restore && !array_key_exists('content', $data) && !array_key_exists('name', $data)) {
         $now = date('Y-m-d H:i:s');
+        $restoredContent = sheet_strip_empty_freitext_premise_placeholders($current['content'] ?? '');
         sql_set(
             'UPDATE `sheet` SET is_current = 0 WHERE user = ' .
                 intval($user['id']) .
@@ -133,7 +144,9 @@ if ($method === 'PUT' || $method === 'PATCH') {
                 '";'
         );
         sql_set(
-            'UPDATE `sheet` SET is_current = 1, updated_at = "' .
+            'UPDATE `sheet` SET is_current = 1, content = "' .
+                sql_escape($restoredContent) .
+                '", updated_at = "' .
                 sql_escape($now) .
                 '" WHERE id = ' .
                 intval($id) .
@@ -153,7 +166,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
         'user' => ['id' => $user['id']],
         'key' => $current['key'],
         'name' => trim($data['name'] ?? $current['name']),
-        'content' => $data['content'],
+        'content' => sheet_strip_empty_freitext_premise_placeholders($data['content']),
         'prompt' => array_key_exists('prompt', $data) ? (string) ($data['prompt'] ?? '') : (string) ($current['prompt'] ?? ''),
         'is_current' => 1,
         'created_at' => $now,

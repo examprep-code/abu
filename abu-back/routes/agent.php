@@ -141,7 +141,7 @@ $mergeHistoryMessages = function ($messages, $history) {
     if ($summary !== '') {
         $merged[] = [
             'role' => 'system',
-            'content' => "Kurzverlauf frueherer Turns (kompakt):\n" . $summary,
+            'content' => "Kurzverlauf früherer Turns (kompakt):\n" . $summary,
         ];
     }
 
@@ -285,7 +285,7 @@ if (empty($openaiResult['ok'])) {
     if ($kind === 'assistant_invalid_json') {
         $return['status'] = 500;
         $assistantRaw = (string)($openaiResult['assistant_raw'] ?? '');
-        warning('Antwort der OpenAI-API ist kein gueltiges JSON.');
+        warning('Antwort der OpenAI-API ist kein gültiges JSON.');
         $agentFinalizeLog('assistant_invalid_json', [
             'http_status' => 500,
             'assistant_raw' => $assistantRaw,

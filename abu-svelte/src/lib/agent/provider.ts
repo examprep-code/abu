@@ -186,11 +186,11 @@ const buildResult = (payload: Partial<AgentTurnResult>): AgentTurnResult => ({
 const hasOpenDraft = (draft: AgentDraftState): boolean => Boolean(draft.mode && draft.html);
 
 const buildDraftConfirmationMessage = (draft: AgentDraftState): string => {
-  const mode = draft.mode === 'insert' ? 'Einfuegen' : 'Ersetzen';
+  const mode = draft.mode === 'insert' ? 'Einfügen' : 'Ersetzen';
   const target = draft.view === 'visual' ? 'visuellen Editor' : 'HTML-Editor';
-  const summary = `Geplante Aenderung: ${mode} (${draft.html.length} Zeichen) im ${target}.`;
+  const summary = `Geplante Änderung: ${mode} (${draft.html.length} Zeichen) im ${target}.`;
   const detail = draft.message ? `${draft.message}\n\n` : '';
-  return `${detail}${summary}\nBitte bestaetige oder verwerfe den Vorschlag ueber die Buttons unter "Vorgeschlagene Aenderung".`;
+  return `${detail}${summary}\nBitte bestätige oder verwerfe den Vorschlag über die Buttons unter "Vorgeschlagene Änderung".`;
 };
 
 export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
@@ -265,7 +265,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
         return buildResult({
           ok: true,
           status: 'Vorschlag kann hier nicht angewendet werden.',
-          message: 'Bitte oeffne zuerst ein Sheet im Editor und wiederhole "anwenden".',
+          message: 'Bitte öffne zuerst ein Sheet im Editor und wiederhole "anwenden".',
           source: 'navigation',
           action: 'draft_apply_blocked',
           changeDecision: 'none',
@@ -282,9 +282,9 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
       ) {
         return buildResult({
           ok: true,
-          status: 'Vorschlag gehoert zu einem anderen Sheet.',
+          status: 'Vorschlag gehört zu einem anderen Sheet.',
           message:
-            'Bitte oeffne das gleiche Sheet wie bei der Vorschlagserstellung oder erstelle einen neuen Vorschlag.',
+            'Bitte öffne das gleiche Sheet wie bei der Vorschlagserstellung oder erstelle einen neuen Vorschlag.',
           source: 'navigation',
           action: 'draft_apply_blocked',
           changeDecision: 'none',
@@ -308,7 +308,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
         addStep('change_decision', { decision: 'pending' });
         return buildResult({
           ok: true,
-          status: 'Bestaetigung erforderlich.',
+          status: 'Bestätigung erforderlich.',
           message: buildDraftConfirmationMessage(nextDraft),
           source: 'navigation',
           action: 'draft_confirm_required',
@@ -327,9 +327,9 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
         addStep('change_decision', { decision: 'pending' });
         return buildResult({
           ok: true,
-          status: 'Bestaetigung erforderlich.',
+          status: 'Bestätigung erforderlich.',
           message:
-            'Der Vorschlag ist noch nicht angewendet. Bitte nutze "Anwenden" oder "Verwerfen" unter "Vorgeschlagene Aenderung".',
+            'Der Vorschlag ist noch nicht angewendet. Bitte nutze "Anwenden" oder "Verwerfen" unter "Vorgeschlagene Änderung".',
           source: 'navigation',
           action: 'draft_confirm_required',
           changeDecision: 'pending',
@@ -432,7 +432,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
     if (navigation?.handled) {
       return buildResult({
         ok: true,
-        status: navigation.status || 'Navigation ausgefuehrt.',
+        status: navigation.status || 'Navigation ausgeführt.',
         message: navigation.message || '',
         source: 'navigation',
         action: 'navigation',
@@ -542,7 +542,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
         selectedSheetId: request.selectedSheetId
       });
       const followup =
-        'Vorschlag gespeichert. Pruefe die aufgelisteten Aenderungen und bestaetige mit "Anwenden" oder "Verwerfen".';
+        'Vorschlag gespeichert. Prüfe die aufgelisteten Änderungen und bestätige mit "Anwenden" oder "Verwerfen".';
       return buildResult({
         ok: true,
         status: 'Vorschlag erstellt (nicht angewendet).',
@@ -580,7 +580,7 @@ export const createDefaultAgentProvider = (deps: AgentProviderDeps) => ({
     });
     return buildResult({
       ok: true,
-      status: 'Keine Aenderung erhalten.',
+      status: 'Keine Änderung erhalten.',
       message,
       source: 'agent_api',
       action: action || 'noop',

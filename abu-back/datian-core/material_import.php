@@ -72,13 +72,13 @@ if (!function_exists('material_import_extract_docx')) {
         $zip = new ZipArchive();
         $open = $zip->open($path);
         if ($open !== true) {
-            return ['text' => '', 'warning' => 'DOCX konnte nicht geoeffnet werden.'];
+            return ['text' => '', 'warning' => 'DOCX konnte nicht geöffnet werden.'];
         }
 
         $xml = $zip->getFromName('word/document.xml');
         $zip->close();
         if (!is_string($xml) || $xml === '') {
-            return ['text' => '', 'warning' => 'DOCX enthaelt kein word/document.xml.'];
+            return ['text' => '', 'warning' => 'DOCX enthält kein word/document.xml.'];
         }
 
         $dom = new DOMDocument();
@@ -86,7 +86,7 @@ if (!function_exists('material_import_extract_docx')) {
         if (!$loaded) {
             // fallback: strip tags from raw xml
             $text = material_import_clean_text(strip_tags($xml));
-            return ['text' => $text, 'warning' => 'DOCX XML konnte nicht vollstaendig geparst werden (Fallback).'];
+            return ['text' => $text, 'warning' => 'DOCX XML konnte nicht vollständig geparst werden (Fallback).'];
         }
 
         $xpath = new DOMXPath($dom);

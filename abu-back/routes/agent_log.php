@@ -14,7 +14,7 @@ if (!isset($user['id'])) {
 $userId = intval($user['id'] ?? 0);
 if ($userId <= 0) {
     $return['status'] = 401;
-    warning('ungueltiger user');
+    warning('ungültiger user');
     return;
 }
 
@@ -324,7 +324,7 @@ if ($method === 'PATCH') {
     $rating = $normalizeRating($data['rating'] ?? null);
     if ($rating === null) {
         $return['status'] = 400;
-        warning('rating fehlt oder ungueltig');
+        warning('rating fehlt oder ungültig');
         return;
     }
 

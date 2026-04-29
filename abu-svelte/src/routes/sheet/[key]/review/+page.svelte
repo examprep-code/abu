@@ -166,13 +166,13 @@
     gaps.forEach((gap, idx) => {
       const key = gap.getAttribute('name') || `gap-${idx + 1}`;
       const tag = gap.tagName.toLowerCase();
+      const isFreitextTag = tag === 'freitext-block';
       const solutionEl =
-        tag === 'freitext-block'
+        isFreitextTag
           ? gap.querySelector('textarea.freitext__textarea')
           : gap.querySelector('input.luecke');
       const solutionSource = solutionEl?.dataset?.solution;
-      const solution =
-        tag === 'freitext-block' ? '' : (solutionSource || gap.textContent || '').trim();
+      const solution = isFreitextTag ? '' : (solutionSource || gap.textContent || '').trim();
       const span = document.createElement('span');
       span.className = 'gap-slot';
       span.dataset.key = key;
@@ -410,7 +410,7 @@
   $: {
     if (!loading && !loadError && sheetKey) {
       const label = resolveClassroomLabel(selectedClassroomId);
-      metaText = `Sheet: ${sheetKey} - ${label} - Antworten geladen (${answers.length} Eintraege)`;
+      metaText = `Sheet: ${sheetKey} - ${label} - Antworten geladen (${answers.length} Einträge)`;
     }
   }
 

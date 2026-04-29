@@ -138,7 +138,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
         } else {
             $email = strtolower($email);
             if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                warning('email ist ungueltig');
+                warning('email ist ungültig');
             }
             $update['email'] = $email;
         }

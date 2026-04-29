@@ -26,21 +26,21 @@
     {
       id: 'K3',
       label: 'K3 Analysieren',
-      keywords: ['analysieren', 'vergleichen', 'begruenden', 'beurteilen', 'identifizieren']
+      keywords: ['analysieren', 'vergleichen', 'begründen', 'beurteilen', 'identifizieren']
     },
     {
       id: 'K4',
       label: 'K4 Entwickeln',
-      keywords: ['entwickeln', 'reflektieren', 'gestalten', 'transfer', 'kritisch', 'loesen']
+      keywords: ['entwickeln', 'reflektieren', 'gestalten', 'transfer', 'kritisch', 'lösen']
     }
   ];
 
   const LANGUAGE_MODES = [
     {
       id: 'rez-mdl',
-      label: 'Rezeption muendlich',
-      shortLabel: 'Rez. muendlich',
-      keywords: ['hoeren', 'audio', 'podcast', 'interview', 'debatte', 'gespraech', 'muendlich']
+      label: 'Rezeption mündlich',
+      shortLabel: 'Rez. mündlich',
+      keywords: ['hören', 'audio', 'podcast', 'interview', 'debatte', 'gespräch', 'mündlich']
     },
     {
       id: 'rez-av',
@@ -56,9 +56,9 @@
     },
     {
       id: 'prod-mdl',
-      label: 'Produktion muendlich',
-      shortLabel: 'Prod. muendlich',
-      keywords: ['praesentieren', 'vortragen', 'statement', 'muendlich', 'rede', 'debattieren']
+      label: 'Produktion mündlich',
+      shortLabel: 'Prod. mündlich',
+      keywords: ['präsentieren', 'vortragen', 'statement', 'mündlich', 'rede', 'debattieren']
     },
     {
       id: 'prod-schr',
@@ -70,19 +70,19 @@
       id: 'prod-mm',
       label: 'Produktion multimedial',
       shortLabel: 'Prod. multimedial',
-      keywords: ['multimedia', 'praesentation', 'kurzvideo', 'video', 'social media', 'kampagne']
+      keywords: ['multimedia', 'präsentation', 'kurzvideo', 'video', 'social media', 'kampagne']
     },
     {
       id: 'ik-mdl',
-      label: 'Interaktion und Kollaboration muendlich',
-      shortLabel: 'I&K muendlich',
-      keywords: ['diskussion', 'austausch', 'feedback', 'rueckmeldung', 'gruppengespraech']
+      label: 'Interaktion und Kollaboration mündlich',
+      shortLabel: 'I&K mündlich',
+      keywords: ['diskussion', 'austausch', 'feedback', 'rückmeldung', 'gruppengespräch']
     },
     {
       id: 'ik-schr',
       label: 'Interaktion und Kollaboration schriftlich',
       shortLabel: 'I&K schriftlich',
-      keywords: ['korrespondenz', 'rueckmeldung verfassen', 'kooperativ', 'reklamation', 'mail']
+      keywords: ['korrespondenz', 'rückmeldung verfassen', 'kooperativ', 'reklamation', 'mail']
     },
     {
       id: 'ik-dig',
@@ -96,12 +96,12 @@
     {
       id: 'argumentation',
       label: 'Argumentation',
-      keywords: ['argument', 'begruenden', 'standpunkt', 'ueberzeugen', 'debatt']
+      keywords: ['argument', 'begründen', 'standpunkt', 'überzeugen', 'debatt']
     },
     {
-      id: 'erklaerung',
-      label: 'Erklaerung',
-      keywords: ['erklaeren', 'erklaerung', 'zusammenhang', 'ursache', 'wirkung']
+      id: 'erklärung',
+      label: 'Erklärung',
+      keywords: ['erklären', 'erklärung', 'zusammenhang', 'ursache', 'wirkung']
     },
     {
       id: 'beschreibung',
@@ -111,12 +111,12 @@
     {
       id: 'analyse',
       label: 'Analyse',
-      keywords: ['analysieren', 'untersuchen', 'einordnen', 'identifizieren', 'kritisch pruefen']
+      keywords: ['analysieren', 'untersuchen', 'einordnen', 'identifizieren', 'kritisch prüfen']
     },
     {
       id: 'vergleich',
       label: 'Vergleich',
-      keywords: ['vergleichen', 'unterschied', 'gemeinsamkeit', 'kontrast', 'abwaegen']
+      keywords: ['vergleichen', 'unterschied', 'gemeinsamkeit', 'kontrast', 'abwägen']
     },
     {
       id: 'stellungnahme',
@@ -135,18 +135,18 @@
     },
     {
       id: 'dialog',
-      label: 'Dialog und Gespraechsfuehrung',
-      keywords: ['gespraech', 'dialog', 'konflikt', 'zuhoeren', 'kommunizieren']
+      label: 'Dialog und Gesprächsführung',
+      keywords: ['gespräch', 'dialog', 'konflikt', 'zuhören', 'kommunizieren']
     },
     {
-      id: 'praesentation',
-      label: 'Praesentation',
-      keywords: ['praesentation', 'vortrag', 'kampagne', 'flyer', 'factsheet', 'video']
+      id: 'präsentation',
+      label: 'Präsentation',
+      keywords: ['präsentation', 'vortrag', 'kampagne', 'flyer', 'factsheet', 'video']
     },
     {
       id: 'reflexion',
       label: 'Reflexion',
-      keywords: ['reflektieren', 'selbst', 'werte', 'rueckblick', 'einschaetzen']
+      keywords: ['reflektieren', 'selbst', 'werte', 'rückblick', 'einschätzen']
     },
     {
       id: 'instruktion',
@@ -178,7 +178,7 @@
     },
     {
       id: 'recht',
-      label: 'Recht und Vertraege',
+      label: 'Recht und Verträge',
       keywords: ['recht', 'vertrag', 'pflicht', 'anspruch', 'gesetz', 'forderung']
     },
     {
@@ -189,17 +189,17 @@
     {
       id: 'nachhaltigkeit',
       label: 'Nachhaltigkeit und Umwelt',
-      keywords: ['nachhaltig', 'oekologie', 'umwelt', 'klima', 'ressourcen', 'energie']
+      keywords: ['nachhaltig', 'ökologie', 'umwelt', 'klima', 'ressourcen', 'energie']
     },
     {
       id: 'gesundheit',
       label: 'Gesundheit',
-      keywords: ['gesundheit', 'wohlbefinden', 'belastung', 'psychisch', 'koerperlich']
+      keywords: ['gesundheit', 'wohlbefinden', 'belastung', 'psychisch', 'körperlich']
     },
     {
       id: 'vorsorge',
       label: 'Versicherungen und Vorsorge',
-      keywords: ['versicherung', 'vorsorge', 'altersvorsorge', 'drei saeulen', 'sozialversicherung']
+      keywords: ['versicherung', 'vorsorge', 'altersvorsorge', 'drei säulen', 'sozialversicherung']
     },
     {
       id: 'medien-digital',
@@ -207,9 +207,9 @@
       keywords: ['medien', 'digital', 'ki', 'algorithmus', 'fake news', 'robotik']
     },
     {
-      id: 'identitaet',
-      label: 'Zusammenleben und Identitaet',
-      keywords: ['identitaet', 'zusammenleben', 'migration', 'vielfalt', 'diskriminierung']
+      id: 'identität',
+      label: 'Zusammenleben und Identität',
+      keywords: ['identität', 'zusammenleben', 'migration', 'vielfalt', 'diskriminierung']
     },
     {
       id: 'kultur',
@@ -217,9 +217,9 @@
       keywords: ['kultur', 'kunst', 'musik', 'film', 'literatur', 'ausdrucksform']
     },
     {
-      id: 'mobilitaet',
-      label: 'Mobilitaet',
-      keywords: ['mobilitaet', 'verkehr', 'reisen', 'oepnv', 'auto', 'alltag']
+      id: 'mobilität',
+      label: 'Mobilität',
+      keywords: ['mobilität', 'verkehr', 'reisen', 'öpnv', 'auto', 'alltag']
     },
     {
       id: 'erben-lebensplanung',
@@ -232,12 +232,12 @@
     {
       id: 'ethik',
       label: 'Ethik',
-      keywords: ['ethik', 'werte', 'moral', 'respekt', 'wuerde', 'verantwortung']
+      keywords: ['ethik', 'werte', 'moral', 'respekt', 'würde', 'verantwortung']
     },
     {
-      id: 'identitaet-sozialisation',
-      label: 'Identitaet und Sozialisation',
-      keywords: ['identitaet', 'rolle', 'selbstbild', 'sozialisation', 'zugehoerigkeit']
+      id: 'identität-sozialisation',
+      label: 'Identität und Sozialisation',
+      keywords: ['identität', 'rolle', 'selbstbild', 'sozialisation', 'zugehörigkeit']
     },
     {
       id: 'kultur',
@@ -245,9 +245,9 @@
       keywords: ['kultur', 'kunst', 'film', 'musik', 'literatur', 'ausdruck']
     },
     {
-      id: 'oekologie',
-      label: 'Oekologie',
-      keywords: ['oekologie', 'umwelt', 'klima', 'ressource', 'energie', 'nachhaltig']
+      id: 'ökologie',
+      label: 'Ökologie',
+      keywords: ['ökologie', 'umwelt', 'klima', 'ressource', 'energie', 'nachhaltig']
     },
     {
       id: 'politik',
@@ -274,11 +274,11 @@
   const KEY_COMPETENCIES = [
     'Quellen unterscheiden',
     'Ziele setzen und anpassen',
-    'Innovation und Problemloesung',
+    'Innovation und Problemlösung',
     'Teamarbeit',
     'Werthaltungen reflektieren',
-    'Standpunkte begruenden',
-    'Verstaendnis foerdern',
+    'Standpunkte begründen',
+    'Verständnis fördern',
     'Lebensphasen planen',
     'Nachhaltigkeit',
     'Anpassung',
@@ -295,11 +295,11 @@
       lessons: '21 Lektionen',
       status: 'ausgearbeitet',
       modes: ['rez-schr', 'ik-mdl', 'ik-dig'],
-      aspects: ['recht', 'ethik', 'identitaet-sozialisation', 'technologie'],
+      aspects: ['recht', 'ethik', 'identität-sozialisation', 'technologie'],
       keyCompetencies: [
         'Ziele setzen und anpassen',
         'Teamarbeit',
-        'Standpunkte begruenden',
+        'Standpunkte begründen',
         'Lebensphasen planen'
       ],
       keywords: [
@@ -316,8 +316,8 @@
           label: '1.1.1 Lehrvertrag, Quellen und Konfliktkommunikation',
           shortLabel: 'Lehrvertrag und Konfliktkommunikation',
           modes: ['rez-schr', 'ik-mdl'],
-          aspects: ['recht', 'ethik', 'identitaet-sozialisation'],
-          keyCompetencies: ['Standpunkte begruenden', 'Teamarbeit'],
+          aspects: ['recht', 'ethik', 'identität-sozialisation'],
+          keyCompetencies: ['Standpunkte begründen', 'Teamarbeit'],
           keywords: ['lehrvertrag', 'rechte', 'pflichten', 'konflikt', 'kommunikation']
         },
         {
@@ -343,7 +343,7 @@
           label: '1.2.1 Lern- und Arbeitszeit planen',
           shortLabel: 'Lern- und Arbeitszeit',
           modes: ['ik-mdl', 'prod-schr'],
-          aspects: ['technologie', 'identitaet-sozialisation'],
+          aspects: ['technologie', 'identität-sozialisation'],
           keyCompetencies: ['Ziele setzen und anpassen', 'Lebensphasen planen'],
           keywords: ['lernzeit', 'arbeitszeit', 'planung', 'ressourcen']
         },
@@ -352,7 +352,7 @@
           label: '1.2.2 Kompetenznachweis mit Lernstrategien und KI vorbereiten',
           shortLabel: 'Kompetenznachweis und KI',
           modes: ['rez-schr', 'ik-dig'],
-          aspects: ['technologie', 'identitaet-sozialisation'],
+          aspects: ['technologie', 'identität-sozialisation'],
           keyCompetencies: ['Ziele setzen und anpassen'],
           keywords: ['kompetenznachweis', 'lernstrategie', 'ki', 'prompt']
         }
@@ -370,8 +370,8 @@
       keyCompetencies: [
         'Quellen unterscheiden',
         'Werthaltungen reflektieren',
-        'Standpunkte begruenden',
-        'Verstaendnis foerdern',
+        'Standpunkte begründen',
+        'Verständnis fördern',
         'Partizipation'
       ],
       keywords: [
@@ -385,8 +385,8 @@
       subthemes: [
         {
           id: 't2-1-1',
-          label: '2.1.1 Politische Audio-Beitraege verstehen',
-          shortLabel: 'Politische Beitraege hoeren',
+          label: '2.1.1 Politische Audio-Beiträge verstehen',
+          shortLabel: 'Politische Beiträge hören',
           modes: ['rez-mdl', 'rez-av'],
           aspects: ['politik'],
           keyCompetencies: ['Quellen unterscheiden'],
@@ -407,7 +407,7 @@
           shortLabel: 'Diskriminierung und Meinungsfreiheit',
           modes: ['rez-mdl', 'rez-av'],
           aspects: ['ethik', 'politik'],
-          keyCompetencies: ['Werthaltungen reflektieren', 'Verstaendnis foerdern'],
+          keyCompetencies: ['Werthaltungen reflektieren', 'Verständnis fördern'],
           keywords: ['ausgrenzung', 'diskriminierung', 'meinungsfreiheit', 'menschenrechte']
         },
         {
@@ -416,7 +416,7 @@
           shortLabel: 'Perspektiven und Standpunkte',
           modes: ['prod-mdl', 'prod-schr', 'ik-mdl'],
           aspects: ['ethik', 'politik'],
-          keyCompetencies: ['Standpunkte begruenden', 'Verstaendnis foerdern'],
+          keyCompetencies: ['Standpunkte begründen', 'Verständnis fördern'],
           keywords: ['perspektive', 'standpunkt', 'kommentar', 'argumentation']
         },
         {
@@ -434,16 +434,16 @@
           shortLabel: 'Anliegen und Mitwirkung',
           modes: ['prod-schr', 'prod-mm'],
           aspects: ['politik'],
-          keyCompetencies: ['Partizipation', 'Standpunkte begruenden'],
+          keyCompetencies: ['Partizipation', 'Standpunkte begründen'],
           keywords: ['anliegen', 'mitwirkung', 'flyer', 'factsheet', 'kampagne']
         },
         {
           id: 't2-3-2',
-          label: '2.3.2 Begruendete Meinung in Diskussionen vertreten',
+          label: '2.3.2 Begründete Meinung in Diskussionen vertreten',
           shortLabel: 'Diskussion und Gruppenentscheid',
           modes: ['ik-mdl', 'prod-mdl'],
           aspects: ['ethik', 'politik'],
-          keyCompetencies: ['Partizipation', 'Standpunkte begruenden'],
+          keyCompetencies: ['Partizipation', 'Standpunkte begründen'],
           keywords: ['diskussion', 'meinung', 'respektvoll', 'gruppenentscheid']
         }
       ]
@@ -456,10 +456,10 @@
       lessons: '33 Lektionen',
       status: 'ausgearbeitet',
       modes: ['rez-av', 'prod-mm', 'ik-schr'],
-      aspects: ['wirtschaft', 'oekologie', 'recht', 'ethik', 'identitaet-sozialisation'],
+      aspects: ['wirtschaft', 'ökologie', 'recht', 'ethik', 'identität-sozialisation'],
       keyCompetencies: [
         'Quellen unterscheiden',
-        'Innovation und Problemloesung',
+        'Innovation und Problemlösung',
         'Werthaltungen reflektieren',
         'Nachhaltigkeit'
       ],
@@ -467,12 +467,12 @@
       subthemes: [
         {
           id: 't3-1-1',
-          label: '3.1.1 Beduerfnisse und Konsumeinfluesse beurteilen',
-          shortLabel: 'Beduerfnisse und Konsum',
+          label: '3.1.1 Bedürfnisse und Konsumeinflüsse beurteilen',
+          shortLabel: 'Bedürfnisse und Konsum',
           modes: ['rez-av', 'prod-schr'],
-          aspects: ['wirtschaft', 'identitaet-sozialisation'],
+          aspects: ['wirtschaft', 'identität-sozialisation'],
           keyCompetencies: ['Werthaltungen reflektieren'],
-          keywords: ['beduerfnis', 'konsum', 'werbung', 'zugehoerigkeit']
+          keywords: ['bedürfnis', 'konsum', 'werbung', 'zugehörigkeit']
         },
         {
           id: 't3-1-2',
@@ -486,7 +486,7 @@
         {
           id: 't3-1-3',
           label: '3.1.3 Verschuldung vermeiden und Konsum reflektieren',
-          shortLabel: 'Schuldenpraevention',
+          shortLabel: 'Schuldenprävention',
           modes: ['rez-av', 'prod-schr'],
           aspects: ['wirtschaft', 'ethik'],
           keyCompetencies: ['Werthaltungen reflektieren'],
@@ -497,8 +497,8 @@
           label: '3.2.1 Nachhaltiger Konsum und Ressourcen',
           shortLabel: 'Nachhaltiger Konsum',
           modes: ['prod-mm', 'rez-av'],
-          aspects: ['oekologie', 'wirtschaft', 'identitaet-sozialisation'],
-          keyCompetencies: ['Nachhaltigkeit', 'Innovation und Problemloesung'],
+          aspects: ['ökologie', 'wirtschaft', 'identität-sozialisation'],
+          keyCompetencies: ['Nachhaltigkeit', 'Innovation und Problemlösung'],
           keywords: ['nachhaltig', 'ressourcen', 'klima', 'energie', 'umwelt']
         },
         {
@@ -507,17 +507,17 @@
           shortLabel: 'Produktwert und Markt',
           modes: ['ik-schr', 'prod-schr'],
           aspects: ['wirtschaft'],
-          keyCompetencies: ['Innovation und Problemloesung', 'Nachhaltigkeit'],
+          keyCompetencies: ['Innovation und Problemlösung', 'Nachhaltigkeit'],
           keywords: ['produktwert', 'herstellung', 'transport', 'angebot', 'nachfrage', 'preis']
         },
         {
           id: 't3-3-1',
-          label: '3.3.1 Kaufvertraege rechtlich beurteilen',
+          label: '3.3.1 Kaufverträge rechtlich beurteilen',
           shortLabel: 'Kaufvertrag',
           modes: ['rez-schr', 'prod-schr'],
           aspects: ['recht'],
           keyCompetencies: ['Quellen unterscheiden'],
-          keywords: ['kaufvertrag', 'vertrag', 'garantie', 'rueckgabe', 'recht']
+          keywords: ['kaufvertrag', 'vertrag', 'garantie', 'rückgabe', 'recht']
         },
         {
           id: 't3-3-2',
@@ -525,29 +525,29 @@
           shortLabel: 'Reklamation und Forderung',
           modes: ['ik-mdl', 'ik-schr'],
           aspects: ['recht'],
-          keyCompetencies: ['Standpunkte begruenden'],
-          keywords: ['reklamation', 'forderung', 'formal', 'korrespondenz', 'konfliktgespraech']
+          keyCompetencies: ['Standpunkte begründen'],
+          keywords: ['reklamation', 'forderung', 'formal', 'korrespondenz', 'konfliktgespräch']
         }
       ]
     },
     {
       id: 't4',
-      label: 'T4 Verantwortung fuer mich und andere uebernehmen',
-      title: 'Verantwortung fuer mich und andere uebernehmen',
+      label: 'T4 Verantwortung für mich und andere übernehmen',
+      title: 'Verantwortung für mich und andere übernehmen',
       year: '2. Lehrjahr',
       lessons: 'Skizze',
       status: 'Skizze',
       modes: ['rez-schr', 'prod-schr', 'ik-mdl'],
-      aspects: ['ethik', 'identitaet-sozialisation', 'kultur', 'recht'],
-      keyCompetencies: ['Werthaltungen reflektieren', 'Verstaendnis foerdern', 'Anpassung'],
+      aspects: ['ethik', 'identität-sozialisation', 'kultur', 'recht'],
+      keyCompetencies: ['Werthaltungen reflektieren', 'Verständnis fördern', 'Anpassung'],
       keywords: ['verantwortung', 'gesundheit', 'vielfalt', 'migration', 'chancengerechtigkeit'],
       subthemes: [
         {
           id: 't4-1',
-          label: '4.1 Koerperliches und psychisches Wohlbefinden',
+          label: '4.1 Körperliches und psychisches Wohlbefinden',
           shortLabel: 'Wohlbefinden und Gesundheit',
           modes: ['rez-schr', 'prod-schr', 'ik-mdl'],
-          aspects: ['ethik', 'identitaet-sozialisation', 'recht'],
+          aspects: ['ethik', 'identität-sozialisation', 'recht'],
           keyCompetencies: ['Werthaltungen reflektieren', 'Anpassung'],
           keywords: ['gesundheit', 'wohlbefinden', 'belastung', 'risiko']
         },
@@ -556,8 +556,8 @@
           label: '4.2 Vielfalt anerkennen und respektvoll handeln',
           shortLabel: 'Vielfalt und Respekt',
           modes: ['ik-mdl', 'prod-schr'],
-          aspects: ['ethik', 'identitaet-sozialisation', 'kultur'],
-          keyCompetencies: ['Verstaendnis foerdern', 'Werthaltungen reflektieren'],
+          aspects: ['ethik', 'identität-sozialisation', 'kultur'],
+          keyCompetencies: ['Verständnis fördern', 'Werthaltungen reflektieren'],
           keywords: ['vielfalt', 'respekt', 'vorurteil', 'rollen']
         },
         {
@@ -566,7 +566,7 @@
           shortLabel: 'Migration und Chancengerechtigkeit',
           modes: ['rez-schr', 'prod-schr', 'ik-mdl'],
           aspects: ['kultur', 'ethik', 'recht'],
-          keyCompetencies: ['Mehrdeutigkeit', 'Verstaendnis foerdern'],
+          keyCompetencies: ['Mehrdeutigkeit', 'Verständnis fördern'],
           keywords: ['migration', 'integration', 'ausgrenzung', 'chancengerechtigkeit']
         }
       ]
@@ -579,13 +579,13 @@
       lessons: 'Skizze',
       status: 'Skizze',
       modes: ['rez-av', 'prod-mdl', 'ik-dig'],
-      aspects: ['politik', 'recht', 'wirtschaft', 'oekologie'],
+      aspects: ['politik', 'recht', 'wirtschaft', 'ökologie'],
       keyCompetencies: ['Partizipation', 'Ziele setzen und anpassen', 'Nachhaltigkeit'],
       keywords: ['staat', 'steuer', 'vorsorge', 'demokratie', 'mitgestaltung'],
       subthemes: [
         {
           id: 't5-1',
-          label: '5.1 Finanzielle Selbststaendigkeit, Steuern und Vorsorge',
+          label: '5.1 Finanzielle Selbstständigkeit, Steuern und Vorsorge',
           shortLabel: 'Steuern und Vorsorge',
           modes: ['rez-schr', 'prod-schr'],
           aspects: ['wirtschaft', 'recht'],
@@ -598,17 +598,17 @@
           shortLabel: 'Mitgestaltung und Rechte',
           modes: ['prod-mdl', 'ik-dig', 'prod-schr'],
           aspects: ['politik', 'recht'],
-          keyCompetencies: ['Partizipation', 'Standpunkte begruenden'],
+          keyCompetencies: ['Partizipation', 'Standpunkte begründen'],
           keywords: ['wahl', 'abstimmung', 'petition', 'mitbestimmen', 'rechte']
         },
         {
           id: 't5-3',
-          label: '5.3 Staatsaufgaben, Umwelt und digitale Oeffentlichkeit',
+          label: '5.3 Staatsaufgaben, Umwelt und digitale Öffentlichkeit',
           shortLabel: 'Staatsaufgaben',
           modes: ['rez-av', 'ik-dig', 'prod-mdl'],
-          aspects: ['politik', 'oekologie', 'technologie'],
+          aspects: ['politik', 'ökologie', 'technologie'],
           keyCompetencies: ['Nachhaltigkeit', 'Mehrdeutigkeit'],
-          keywords: ['staatsaufgaben', 'demokratie', 'umwelt', 'digitalisierung', 'tonalitaet']
+          keywords: ['staatsaufgaben', 'demokratie', 'umwelt', 'digitalisierung', 'tonalität']
         }
       ]
     },
@@ -620,23 +620,23 @@
       lessons: 'Skizze',
       status: 'Skizze',
       modes: ['rez-mdl', 'prod-mm', 'ik-schr'],
-      aspects: ['identitaet-sozialisation', 'recht', 'oekologie', 'wirtschaft'],
+      aspects: ['identität-sozialisation', 'recht', 'ökologie', 'wirtschaft'],
       keyCompetencies: [
-        'Innovation und Problemloesung',
+        'Innovation und Problemlösung',
         'Teamarbeit',
         'Lebensphasen planen',
         'Nachhaltigkeit'
       ],
-      keywords: ['zuhause', 'wohnung', 'miete', 'mobilitaet', 'wohngemeinschaft'],
+      keywords: ['zuhause', 'wohnung', 'miete', 'mobilität', 'wohngemeinschaft'],
       subthemes: [
         {
           id: 't6-1',
           label: '6.1 Wohnung finden und Einzug organisieren',
           shortLabel: 'Wohnung und Einzug',
           modes: ['rez-schr', 'prod-schr'],
-          aspects: ['wirtschaft', 'identitaet-sozialisation'],
-          keyCompetencies: ['Lebensphasen planen', 'Innovation und Problemloesung'],
-          keywords: ['wohnung', 'einzug', 'budget', 'beduerfnisse']
+          aspects: ['wirtschaft', 'identität-sozialisation'],
+          keyCompetencies: ['Lebensphasen planen', 'Innovation und Problemlösung'],
+          keywords: ['wohnung', 'einzug', 'budget', 'bedürfnisse']
         },
         {
           id: 't6-2',
@@ -652,18 +652,18 @@
           label: '6.3 Wohn- und Lebensformen respektvoll gestalten',
           shortLabel: 'Wohnformen',
           modes: ['ik-mdl', 'prod-schr'],
-          aspects: ['identitaet-sozialisation', 'ethik'],
-          keyCompetencies: ['Teamarbeit', 'Verstaendnis foerdern'],
+          aspects: ['identität-sozialisation', 'ethik'],
+          keyCompetencies: ['Teamarbeit', 'Verständnis fördern'],
           keywords: ['wohnform', 'wg', 'zusammenleben', 'partner', 'werte']
         },
         {
           id: 't6-4',
-          label: '6.4 Mobilitaet und ressourcenschonender Alltag',
-          shortLabel: 'Mobilitaet und Ressourcen',
+          label: '6.4 Mobilität und ressourcenschonender Alltag',
+          shortLabel: 'Mobilität und Ressourcen',
           modes: ['prod-mm', 'rez-av'],
-          aspects: ['oekologie', 'recht', 'wirtschaft'],
+          aspects: ['ökologie', 'recht', 'wirtschaft'],
           keyCompetencies: ['Nachhaltigkeit'],
-          keywords: ['mobilitaet', 'strom', 'wasser', 'muell', 'ressourcen']
+          keywords: ['mobilität', 'strom', 'wasser', 'müll', 'ressourcen']
         }
       ]
     },
@@ -675,8 +675,8 @@
       lessons: 'Skizze',
       status: 'Skizze',
       modes: ['rez-schr', 'prod-mm', 'ik-schr'],
-      aspects: ['technologie', 'identitaet-sozialisation', 'recht', 'wirtschaft'],
-      keyCompetencies: ['Innovation und Problemloesung', 'Teamarbeit', 'Lebensphasen planen'],
+      aspects: ['technologie', 'identität-sozialisation', 'recht', 'wirtschaft'],
+      keyCompetencies: ['Innovation und Problemlösung', 'Teamarbeit', 'Lebensphasen planen'],
       keywords: ['zukunft', 'arbeitswelt', 'robotik', 'ki', 'laufbahn', 'arbeitsrecht'],
       subthemes: [
         {
@@ -685,17 +685,17 @@
           shortLabel: 'Digitalisierung und KI',
           modes: ['rez-schr', 'prod-mm'],
           aspects: ['technologie', 'wirtschaft'],
-          keyCompetencies: ['Innovation und Problemloesung', 'Anpassung'],
+          keyCompetencies: ['Innovation und Problemlösung', 'Anpassung'],
           keywords: ['digitalisierung', 'robotik', 'ki', 'branche', 'berufsbild']
         },
         {
           id: 't7-2',
-          label: '7.2 Laufbahn, Weiterbildung und Lebensqualitaet planen',
-          shortLabel: 'Laufbahn und Lebensqualitaet',
+          label: '7.2 Laufbahn, Weiterbildung und Lebensqualität planen',
+          shortLabel: 'Laufbahn und Lebensqualität',
           modes: ['prod-schr', 'prod-mm'],
-          aspects: ['identitaet-sozialisation', 'wirtschaft'],
+          aspects: ['identität-sozialisation', 'wirtschaft'],
           keyCompetencies: ['Lebensphasen planen', 'Ziele setzen und anpassen'],
-          keywords: ['laufbahn', 'weiterbildung', 'staerken', 'work-life-balance', 'ziele']
+          keywords: ['laufbahn', 'weiterbildung', 'stärken', 'work-life-balance', 'ziele']
         },
         {
           id: 't7-3',
@@ -704,7 +704,7 @@
           modes: ['rez-schr', 'ik-schr'],
           aspects: ['recht', 'wirtschaft'],
           keyCompetencies: ['Quellen unterscheiden', 'Anpassung'],
-          keywords: ['arbeitsvertrag', 'kuendigung', 'sozialversicherung', 'vorsorge', 'rechte']
+          keywords: ['arbeitsvertrag', 'kündigung', 'sozialversicherung', 'vorsorge', 'rechte']
         }
       ]
     }
@@ -742,7 +742,7 @@
     'einen',
     'einer',
     'etwas',
-    'fuer',
+    'für',
     'ich',
     'im',
     'in',
@@ -1160,10 +1160,9 @@
     const content = sheet?.content ?? '';
     const plainText = stripHtml(content);
     const lueckeCount = countMatches(content, /name="luecke\d+"/gi);
-    const antworttextCount = countMatches(content, /antworttext/gi);
     const freitextCount = countMatches(content, /freitext/gi);
     const umfrageCount = countMatches(content, /umfrage/gi);
-    const interactionCount = lueckeCount + antworttextCount + freitextCount + umfrageCount;
+    const interactionCount = lueckeCount + freitextCount + umfrageCount;
     const moduleCount = clamp(
       Math.max(1, Math.ceil(plainText.length / 420)) + Math.ceil(interactionCount / 4),
       1,
@@ -1432,7 +1431,7 @@
           id: `generated-${themeId}`,
           name: `${theme.title}: Materialsammlung`,
           description:
-            'Automatisch aus vorhandenen Sheets gebuendelt, bis echte Shop-Sammlungen gepflegt sind.',
+            'Automatisch aus vorhandenen Sheets gebündelt, bis echte Shop-Sammlungen gepflegt sind.',
           generated: true,
           updated_at: group[0]?.updated_at ?? group[0]?.created_at ?? ''
         },
@@ -1581,20 +1580,20 @@
     {
       label: 'Shopartikel',
       value: 'Sammlungen',
-      copy: 'Ein Angebot ist ein Paket mit mehreren indexierten Lernweg-Anknuepfungen.'
+      copy: 'Ein Angebot ist ein Paket mit mehreren indexierten Lernweg-Anknüpfungen.'
     },
     {
       label: 'Index',
       value: 'SLP 2026',
-      copy: 'Sieben Hauptthemen, Unterthemen, Aspekte, Sprachmodi und Schluesselkompetenzen.'
+      copy: 'Sieben Hauptthemen, Unterthemen, Aspekte, Sprachmodi und Schlüsselkompetenzen.'
     },
     {
       label: 'Sprache',
       value: 'Mehrere Modi',
-      copy: 'Jede Sammlung fuehrt mehrere Sprachmodi und Textaufbau-Kompetenzen.'
+      copy: 'Jede Sammlung führt mehrere Sprachmodi und Textaufbau-Kompetenzen.'
     },
     {
-      label: 'Luecken',
+      label: 'Lücken',
       value: `${coverageMissingSubthemes.length}`,
       copy: 'Nicht abgedeckte Unterthemen in der aktuellen Lernweg-Auswahl.'
     }
@@ -1612,7 +1611,7 @@
       <p class="shop-slogan">{SHOP_SLOGAN}</p>
       <p class="shop-copy">
         Das Mockup indexiert Sammlungen nach dem neuen Schullehrplan, klassischen ABU-Themen,
-        K-Stufen, Sprachmodi und Textaufbau. So werden Luecken in Lernwegen sichtbar.
+        K-Stufen, Sprachmodi und Textaufbau. So werden Lücken in Lernwegen sichtbar.
       </p>
       <div class="shop-pill-row" aria-label="Indexkriterien">
         <span class="shop-pill">K1 bis K4</span>
@@ -1638,12 +1637,12 @@
     <article class="shop-stat-card">
       <span class="shop-stat-card__label">Sammlungen</span>
       <strong class="shop-stat-card__value">{shopStats.collections}</strong>
-      <p>Shopangebote sind Pakete, nicht einzelne Arbeitsblaetter.</p>
+      <p>Shopangebote sind Pakete, nicht einzelne Arbeitsblätter.</p>
     </article>
     <article class="shop-stat-card">
       <span class="shop-stat-card__label">Enthaltene Sheets</span>
       <strong class="shop-stat-card__value">{shopStats.sheets}</strong>
-      <p>Vorhandenes Material wird fuer das Mockup gebuendelt.</p>
+      <p>Vorhandenes Material wird für das Mockup gebündelt.</p>
     </article>
     <article class="shop-stat-card">
       <span class="shop-stat-card__label">SLP-Themen</span>
@@ -1693,7 +1692,7 @@
             <span class="shop-ai-card__label">Treffer</span>
             <strong>{aiSearchResults.length ? aiSearchResults[0].item.title : 'Keine passende Sammlung'}</strong>
           </div>
-          <p>{aiSearchResults.length} Resultate fuer "{aiSearchQuery}"</p>
+          <p>{aiSearchResults.length} Resultate für "{aiSearchQuery}"</p>
         </div>
 
         {#if aiSearchResults.length}
@@ -1749,7 +1748,7 @@
         </p>
       </div>
       <button class="shop-reset-btn" type="button" on:click={resetFilters}>
-        Filter zuruecksetzen
+        Filter zurücksetzen
       </button>
     </div>
 
@@ -2025,7 +2024,7 @@
         Nur Sammlungen mit mehreren Sheets
       </button>
       <p class="shop-filter-note">
-        Die Heuristik nutzt Titel, Beschreibungen und Sheet-Inhalte. Spaeter sollten diese
+        Die Heuristik nutzt Titel, Beschreibungen und Sheet-Inhalte. Später sollten diese
         Felder als echte Metadaten beim Import und beim Publizieren gepflegt werden.
       </p>
     </div>
@@ -2046,7 +2045,7 @@
         <p>{shortList(coverageMissingSubthemes.map((entry) => entry.shortLabel), 4)}</p>
       {:else}
         <span>Fehlendes Material</span>
-        <p>Keine Luecke fuer diese Auswahl.</p>
+        <p>Keine Lücke für diese Auswahl.</p>
       {/if}
     </div>
   </div>
@@ -2054,7 +2053,7 @@
   {#if loading}
     <div class="shop-empty-state">
       <h3>Sammlungen werden geladen</h3>
-      <p>Die bestehenden Materialien werden fuer den Braintrade-Katalog vorbereitet.</p>
+      <p>Die bestehenden Materialien werden für den Braintrade-Katalog vorbereitet.</p>
     </div>
   {:else if error && !shopCatalog.length}
     <div class="shop-empty-state shop-empty-state--error">
@@ -2073,9 +2072,9 @@
 
     {#if !visibleShopItems.length}
       <div class="shop-empty-state">
-        <h3>Keine Sammlung fuer diese Lernweg-Kombination</h3>
+        <h3>Keine Sammlung für diese Lernweg-Kombination</h3>
         <p>
-          Diese Filterkombination kann als Materialluecke markiert werden:
+          Diese Filterkombination kann als Materiallücke markiert werden:
           {buildEmptyFilterSummary()}.
         </p>
       </div>
@@ -2140,7 +2139,7 @@
                 <strong>{shortList(item.societyAspects.map((entry) => entry.label), 3)}</strong>
               </div>
               <div class="shop-fact-row">
-                <span>Schluesselkompetenzen</span>
+                <span>Schlüsselkompetenzen</span>
                 <strong>{shortList(item.keyCompetencies, 3)}</strong>
               </div>
               <div class="shop-fact-row">
@@ -2163,7 +2162,7 @@
                   on:click={() => item.primarySheetId && onOpenSheet(item.primarySheetId)}
                   disabled={!item.primarySheetId}
                 >
-                  Erstes Sheet oeffnen
+                  Erstes Sheet öffnen
                 </button>
               </div>
             </aside>

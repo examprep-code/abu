@@ -8,6 +8,7 @@ $planConfig = [
         'sheet_key' => [],
         'assignment_form' => [],
         'status' => [],
+        'prompt' => [],
         'created_at' => [],
         'updated_at' => [],
     ],
@@ -63,6 +64,7 @@ if ($method === 'POST') {
     $status = normalize_plan_status($data['status'] ?? 'aktiv');
     $formRaw = $data['assignment_form'] ?? ($data['form'] ?? '');
     $assignmentForm = $formRaw !== '' ? normalize_plan_form($formRaw) : 'personal';
+    $assignmentPrompt = trim((string)($data['prompt'] ?? ''));
     if (!$classId) {
         $return['status'] = 400;
         warning('classroom fehlt');
@@ -75,12 +77,12 @@ if ($method === 'POST') {
     }
     if ($status === '') {
         $return['status'] = 400;
-        warning('status ungueltig');
+        warning('status ungültig');
         return;
     }
     if ($assignmentForm === '') {
         $return['status'] = 400;
-        warning('form ungueltig');
+        warning('form ungültig');
         return;
     }
 
@@ -120,15 +122,15 @@ if ($method === 'POST') {
             '" LIMIT 1;'
     );
     if (!empty($existing)) {
-        sql_update(
-            'classroom_sheet',
-            [
-                'status' => $status,
-                'assignment_form' => $assignmentForm,
-                'updated_at' => date('Y-m-d H:i:s')
-            ],
-            intval($existing[0]['id'])
-        );
+        $update = [
+            'status' => $status,
+            'assignment_form' => $assignmentForm,
+            'updated_at' => date('Y-m-d H:i:s')
+        ];
+        if (array_key_exists('prompt', $data)) {
+            $update['prompt'] = $assignmentPrompt;
+        }
+        sql_update('classroom_sheet', $update, intval($existing[0]['id']));
         $return['data'] = ['id' => $existing[0]['id']];
         return;
     }
@@ -140,6 +142,7 @@ if ($method === 'POST') {
         'sheet_key' => $sheetKey,
         'assignment_form' => $assignmentForm,
         'status' => $status,
+        'prompt' => $assignmentPrompt,
         'created_at' => $now,
         'updated_at' => $now,
     ];
@@ -152,6 +155,7 @@ if ($method === 'POST') {
             'sheet_key' => [],
             'assignment_form' => [],
             'status' => [],
+            'prompt' => [],
             'created_at' => [],
             'updated_at' => [],
         ],
@@ -173,7 +177,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
         $status = normalize_plan_status($data['status'] ?? '');
         if ($status === '') {
             $return['status'] = 400;
-            warning('status ungueltig');
+            warning('status ungültig');
             return;
         }
     }
@@ -183,14 +187,27 @@ if ($method === 'PUT' || $method === 'PATCH') {
         $assignmentForm = normalize_plan_form($data['assignment_form'] ?? ($data['form'] ?? ''));
         if ($assignmentForm === '') {
             $return['status'] = 400;
-            warning('form ungueltig');
+            warning('form ungültig');
             return;
         }
     }
 
     if ($status === null && $assignmentForm === null) {
+        if (!array_key_exists('prompt', $data)) {
+            $return['status'] = 400;
+            warning('keine änderung übermittelt');
+            return;
+        }
+    }
+
+    $promptValue = null;
+    if (array_key_exists('prompt', $data)) {
+        $promptValue = trim((string)($data['prompt'] ?? ''));
+    }
+
+    if ($status === null && $assignmentForm === null && $promptValue === null) {
         $return['status'] = 400;
-        warning('keine aenderung uebermittelt');
+        warning('keine änderung übermittelt');
         return;
     }
 
@@ -213,6 +230,9 @@ if ($method === 'PUT' || $method === 'PATCH') {
     }
     if ($assignmentForm !== null) {
         $update['assignment_form'] = $assignmentForm;
+    }
+    if ($promptValue !== null) {
+        $update['prompt'] = $promptValue;
     }
 
     sql_update('classroom_sheet', $update, intval($id));

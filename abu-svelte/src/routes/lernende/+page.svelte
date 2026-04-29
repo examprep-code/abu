@@ -175,12 +175,12 @@
     {
       title: 'Freigegeben',
       entries: activeSheets,
-      emptyText: 'Keine freigegebenen Arbeitsblaetter.'
+      emptyText: 'Keine freigegebenen Arbeitsblätter.'
     },
     {
       title: 'Archiviert',
       entries: archivedSheets,
-      emptyText: 'Keine archivierten Arbeitsblaetter.',
+      emptyText: 'Keine archivierten Arbeitsblätter.',
       archived: true
     }
   ];
@@ -227,7 +227,7 @@
       <div>
         <p class="eyebrow">ABU</p>
         <h1>Lernendenportal</h1>
-        <p class="meta">Deine freigegebenen Arbeitsblaetter.</p>
+        <p class="meta">Deine freigegebenen Arbeitsblätter.</p>
       </div>
       {#if learner}
         <div class="status-card">
@@ -247,7 +247,7 @@
     {:else}
       <section class="sheet-section">
         <div class="section-head">
-          <h2>Arbeitsblaetter</h2>
+          <h2>Arbeitsblätter</h2>
           <button
             class="icon-btn ci-btn-outline refresh-btn"
             type="button"
@@ -274,7 +274,7 @@
         {:else if sheetError}
           <p class="state error">{sheetError}</p>
         {:else if sheets.length === 0}
-          <p class="state">Keine Arbeitsblaetter gefunden.</p>
+          <p class="state">Keine Arbeitsblätter gefunden.</p>
         {:else}
           <div class="sheet-groups">
             {#each sheetGroups as group}

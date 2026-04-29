@@ -37,6 +37,7 @@ if (DEBUG) {
         $hasSheetPrompt = !empty(sql_get('SHOW COLUMNS FROM `sheet` LIKE "prompt";'));
         $hasUserRole = !empty(sql_get('SHOW COLUMNS FROM `user` LIKE "role";'));
         $hasClassroomPrompt = !empty(sql_get('SHOW COLUMNS FROM `classroom` LIKE "prompt";'));
+        $hasClassroomSheetPrompt = !empty(sql_get('SHOW COLUMNS FROM `classroom_sheet` LIKE "prompt";'));
         $hasLearnerPrompt = !empty(sql_get('SHOW COLUMNS FROM `learner` LIKE "prompt";'));
         $hasSchoolPrompt = !empty(sql_get('SHOW COLUMNS FROM `school` LIKE "prompt";'));
         $hasCollectionTable = !empty(sql_get("SHOW TABLES LIKE 'collection';"));
@@ -51,6 +52,7 @@ if (DEBUG) {
             !$hasSheetPrompt ||
             !$hasUserRole ||
             !$hasClassroomPrompt ||
+            !$hasClassroomSheetPrompt ||
             !$hasLearnerPrompt ||
             !$hasSchoolPrompt ||
             !$hasCollectionTable ||

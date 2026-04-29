@@ -3,28 +3,40 @@
   margin-top: 0.34rem;
 }
 
-:global(.check-btn) {
+:global(.check-btn.check-btn) {
+  --check-btn-bg: var(--ci-button-secondary, #06b6d4);
+  --check-btn-bg-hover: var(--ci-button-secondary-accent, #0891b2);
+  --check-btn-fg: var(--ci-button-text, #fff);
+  --check-btn-shadow: rgba(8, 145, 178, 0.24);
   margin-left: 0.3rem;
   width: 1.7rem;
   height: 1.7rem;
   padding: 0;
   font-size: 0.77rem;
   border-radius: 999px;
-  border: 1px solid var(--ci-button-secondary);
-  background-color: var(--ci-button-secondary);
-  color: var(--ci-button-text, #fff);
+  border: 1px solid var(--check-btn-bg);
+  background: var(--check-btn-bg);
+  color: var(--check-btn-fg);
   cursor: pointer;
   position: relative;
-  font-weight: 600;
+  font-weight: 800;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  line-height: 1;
+  box-shadow: 0 5px 12px var(--check-btn-shadow);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
-:global(.check-btn::before) {
+:global(.check-btn.check-btn::before) {
   content: '?';
   display: inline-block;
-  font-size: 0.85rem;
+  font-size: 0.98rem;
   line-height: 1;
   opacity: 1;
 }
@@ -40,72 +52,79 @@
   border: 0;
 }
 
-:global(.check-btn:hover:enabled),
-:global(.check-btn:focus-visible) {
-  background-color: var(--ci-button-secondary-accent);
-  border-color: var(--ci-button-secondary-accent);
+:global(.check-btn.check-btn:hover:enabled),
+:global(.check-btn.check-btn:focus-visible) {
+  background: var(--check-btn-bg-hover);
+  border-color: var(--check-btn-bg-hover);
+  color: var(--check-btn-fg);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px var(--check-btn-shadow);
   text-decoration: none;
 }
 
-:global(.check-btn--richtig) {
-  border-color: #1c8f4a;
-  background-color: #e4f5e7;
-  color: #1c8f4a;
+:global(.check-btn.check-btn--richtig) {
+  --check-btn-bg: #16a34a;
+  --check-btn-bg-hover: #15803d;
+  --check-btn-fg: #ffffff;
+  --check-btn-shadow: rgba(22, 163, 74, 0.26);
 }
 
-:global(.check-btn--richtig:hover:enabled),
-:global(.check-btn--richtig:focus-visible) {
-  border-color: #1c8f4a;
-  background-color: #e4f5e7;
-  color: #1c8f4a;
+:global(.check-btn.check-btn--richtig:hover:enabled),
+:global(.check-btn.check-btn--richtig:focus-visible) {
+  background: var(--check-btn-bg-hover);
+  border-color: var(--check-btn-bg-hover);
+  color: var(--check-btn-fg);
 }
 
-:global(.check-btn--richtig::before) {
+:global(.check-btn.check-btn--richtig::before) {
   content: '✓';
   opacity: 1;
 }
 
-:global(.check-btn--teilweise) {
-  border-color: #d98a1a;
-  background-color: #fff4de;
-  color: #d98a1a;
+:global(.check-btn.check-btn--teilweise) {
+  --check-btn-bg: #f59e0b;
+  --check-btn-bg-hover: #d97706;
+  --check-btn-fg: #ffffff;
+  --check-btn-shadow: rgba(245, 158, 11, 0.28);
 }
 
-:global(.check-btn--teilweise:hover:enabled),
-:global(.check-btn--teilweise:focus-visible) {
-  border-color: #d98a1a;
-  background-color: #fff4de;
-  color: #d98a1a;
+:global(.check-btn.check-btn--teilweise:hover:enabled),
+:global(.check-btn.check-btn--teilweise:focus-visible) {
+  background: var(--check-btn-bg-hover);
+  border-color: var(--check-btn-bg-hover);
+  color: var(--check-btn-fg);
 }
 
-:global(.check-btn--teilweise::before) {
+:global(.check-btn.check-btn--teilweise::before) {
   content: '≈';
   opacity: 1;
 }
 
-:global(.check-btn--falsch) {
-  border-color: #c33b3b;
-  background-color: #fde7e7;
-  color: #c33b3b;
+:global(.check-btn.check-btn--falsch) {
+  --check-btn-bg: #dc2626;
+  --check-btn-bg-hover: #b91c1c;
+  --check-btn-fg: #ffffff;
+  --check-btn-shadow: rgba(220, 38, 38, 0.24);
 }
 
-:global(.check-btn--falsch:hover:enabled),
-:global(.check-btn--falsch:focus-visible) {
-  border-color: #c33b3b;
-  background-color: #fde7e7;
-  color: #c33b3b;
+:global(.check-btn.check-btn--falsch:hover:enabled),
+:global(.check-btn.check-btn--falsch:focus-visible) {
+  background: var(--check-btn-bg-hover);
+  border-color: var(--check-btn-bg-hover);
+  color: var(--check-btn-fg);
 }
 
-:global(.check-btn--falsch::before) {
+:global(.check-btn.check-btn--falsch::before) {
   content: '✕';
   opacity: 1;
 }
 
-:global(.check-btn--loading) {
+:global(.check-btn.check-btn--loading) {
   cursor: wait;
+  box-shadow: none;
 }
 
-:global(.check-btn--loading::before) {
+:global(.check-btn.check-btn--loading::before) {
   content: '';
   width: 10px;
   height: 10px;
@@ -116,9 +135,17 @@
   opacity: 1;
 }
 
-:global(.check-btn:disabled) {
-  opacity: 0.65;
+:global(.check-btn.check-btn:disabled) {
+  opacity: 0.72;
   cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+:global(.check-btn.check-btn--richtig:disabled),
+:global(.check-btn.check-btn--teilweise:disabled),
+:global(.check-btn.check-btn--falsch:disabled) {
+  opacity: 1;
 }
 
 @keyframes check-btn-spin {
