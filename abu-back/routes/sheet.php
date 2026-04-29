@@ -28,7 +28,6 @@ if (!isset($user['id'])) {
 
 if ($method === 'GET') {
     $key = isset($_GET['key']) ? trim($_GET['key']) : '';
-    $summary = isset($_GET['summary']) && intval($_GET['summary']) === 1;
     $where = [];
     $scopeToCurrentUser = !user_is_admin() || !empty($paras[0]) || $key !== '';
     if ($scopeToCurrentUser) {
@@ -41,9 +40,6 @@ if ($method === 'GET') {
         $sheetConfig['sheet']['_append'] = ['ORDER BY created_at DESC'];
     } else {
         $where[] = 'is_current = 1';
-    }
-    if ($key !== '' && $summary) {
-        unset($sheetConfig['sheet']['content'], $sheetConfig['sheet']['prompt']);
     }
     $sheetConfig['sheet']['_where'] = $where;
     $result = get($sheetConfig);

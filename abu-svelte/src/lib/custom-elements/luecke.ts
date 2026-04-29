@@ -612,7 +612,7 @@ async function checkGap(
     overrideByAccepted = true;
   }
 
-  if (label === null && isRoughlyCorrect(answer, musterloesung)) {
+  if (isRoughlyCorrect(answer, musterloesung) && label !== 'RICHTIG') {
     label = 'RICHTIG';
     overrideByRough = true;
   }

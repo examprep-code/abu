@@ -131,11 +131,8 @@
   let lueckeInsertWidth = '25ch';
   let topbarMenuEl = null;
   let sheetHtmlTokens = [];
-  let sheetHtmlHighlightContent = '';
-  let sheetHtmlHighlightTimer = null;
   let sheetHtmlInput = null;
   let sheetHtmlHighlight = null;
-  let pendingSaveFocusSnapshot = null;
 
   let adminCiSchoolId = '';
   let adminCiCss = '';
@@ -232,12 +229,9 @@
   let visualBlockHtmlInputs = [];
   let visualBlockHtmlHighlights = [];
   let visualBlockHtmlTokens = [];
-  let visualBlockHtmlHighlightContents = [];
-  let visualBlockHtmlHighlightTimer = null;
   let visualBlockEditors = [];
   let visualBlockSelections = [];
   let visualBlockInputRevisions = [];
-  let visualInputCommitVersion = 0;
   let blockDragImageEl = null;
   let dragIndex = null;
   let dragOverIndex = null;
@@ -254,10 +248,6 @@
   let lueckeSolutionInputEl = null;
   const VISUAL_HISTORY_LIMIT = 200;
   const VISUAL_HISTORY_CHUNK_MS = 900;
-  const VISUAL_INPUT_COMMIT_DELAY_MS = 650;
-  const CODE_HIGHLIGHT_DELAY_MS = 350;
-  const VISUAL_TERMINAL_CARET_TEXT = '\u200b';
-  const VISUAL_TERMINAL_CARET_TEXT_PATTERN = /\u200b/g;
   const AGENT_HISTORY_CONTEXT_MAX_TURNS = 5;
   const AGENT_HISTORY_CONTEXT_MIN_TURNS = 2;
   const AGENT_HISTORY_CONTEXT_MAX_TOTAL_CHARS = 7000;
@@ -761,7 +751,6 @@
   const hasUnsavedSheetChanges = () => {
     if (!selectedId) return false;
     if (lastSavedSheetId !== selectedId) return true;
-    if (visualInputCommitQueue?.size) return true;
     return (
       (editorName ?? '') !== (lastSavedSheetName ?? '') ||
       (editorContent ?? '') !== (lastSavedSheetContent ?? '') ||
@@ -798,48 +787,14 @@
 
   $: schoolCssTokens = buildCssTokens(schoolCss);
   $: newSchoolCssTokens = buildCssTokens(newSchoolCss);
-  $: sheetHtmlTokens = editorView === 'html' ? buildHtmlTokens(sheetHtmlHighlightContent) : [];
+  $: sheetHtmlTokens = buildHtmlTokens(editorContent);
   $: if (editorContent) {
     const sanitizedEditorContent = sanitizeSheetContent(editorContent);
-    const sheetHtmlFocused =
-      browser && typeof document !== 'undefined' && document.activeElement === sheetHtmlInput;
-    if (!sheetHtmlFocused && sanitizedEditorContent !== editorContent) {
+    if (sanitizedEditorContent !== editorContent) {
       editorContent = sanitizedEditorContent;
     }
   }
-  $: visualBlockHtmlTokens = visualBlocks.map((block, idx) =>
-    visualActiveBlock === idx && visualBlockViews[idx] === 'html'
-      ? buildHtmlTokens(visualBlockHtmlHighlightContents[idx] ?? block ?? '')
-      : []
-  );
-  $: if (
-    editorView === 'html' &&
-    !(browser && typeof document !== 'undefined' && document.activeElement === sheetHtmlInput) &&
-    sheetHtmlHighlightContent !== (editorContent || '')
-  ) {
-    sheetHtmlHighlightContent = editorContent || '';
-  }
-  $: if (editorView !== 'html' && sheetHtmlHighlightContent) {
-    sheetHtmlHighlightContent = '';
-  }
-  $: {
-    const activeHtmlIndex =
-      Number.isInteger(visualActiveBlock) && visualBlockViews[visualActiveBlock] === 'html'
-        ? visualActiveBlock
-        : null;
-    if (activeHtmlIndex !== null) {
-      const focused =
-        browser &&
-        typeof document !== 'undefined' &&
-        document.activeElement === visualBlockHtmlInputs[activeHtmlIndex];
-      const activeHtml = visualBlocks[activeHtmlIndex] || '';
-      if (!focused && (visualBlockHtmlHighlightContents[activeHtmlIndex] ?? '') !== activeHtml) {
-        const next = [...visualBlockHtmlHighlightContents];
-        next[activeHtmlIndex] = activeHtml;
-        visualBlockHtmlHighlightContents = next.slice(0, Math.max(next.length, visualBlocks.length));
-      }
-    }
-  }
+  $: visualBlockHtmlTokens = visualBlocks.map((block) => buildHtmlTokens(block || ''));
   $: {
     selectedId;
     editorName;
@@ -852,7 +807,6 @@
     lastSavedSheetContent;
     lastSavedSheetPrompt;
     lastSavedSheetCollectionId;
-    visualInputCommitVersion;
     sheetHasUnsavedChanges = hasUnsavedSheetChanges();
     if (selectedId && !saving && sheetHasUnsavedChanges) {
       scheduleSheetAutosave();
@@ -901,49 +855,6 @@
     highlightEl.scrollLeft = inputEl.scrollLeft;
   };
 
-  const clearSheetHtmlHighlightTimer = () => {
-    if (sheetHtmlHighlightTimer === null) return;
-    window.clearTimeout(sheetHtmlHighlightTimer);
-    sheetHtmlHighlightTimer = null;
-  };
-
-  const scheduleSheetHtmlHighlight = (value) => {
-    if (!browser) {
-      sheetHtmlHighlightContent = String(value ?? '');
-      return;
-    }
-    clearSheetHtmlHighlightTimer();
-    sheetHtmlHighlightTimer = window.setTimeout(() => {
-      sheetHtmlHighlightTimer = null;
-      sheetHtmlHighlightContent = String(value ?? '');
-    }, CODE_HIGHLIGHT_DELAY_MS);
-  };
-
-  const clearVisualBlockHtmlHighlightTimer = () => {
-    if (visualBlockHtmlHighlightTimer === null) return;
-    window.clearTimeout(visualBlockHtmlHighlightTimer);
-    visualBlockHtmlHighlightTimer = null;
-  };
-
-  const setVisualBlockHtmlHighlight = (index, value) => {
-    if (!Number.isInteger(index)) return;
-    const next = [...visualBlockHtmlHighlightContents];
-    next[index] = String(value ?? '');
-    visualBlockHtmlHighlightContents = next.slice(0, Math.max(next.length, visualBlocks.length));
-  };
-
-  const scheduleVisualBlockHtmlHighlight = (index, value) => {
-    if (!browser) {
-      setVisualBlockHtmlHighlight(index, value);
-      return;
-    }
-    clearVisualBlockHtmlHighlightTimer();
-    visualBlockHtmlHighlightTimer = window.setTimeout(() => {
-      visualBlockHtmlHighlightTimer = null;
-      setVisualBlockHtmlHighlight(index, value);
-    }, CODE_HIGHLIGHT_DELAY_MS);
-  };
-
   const syncEditableHtml = (node, params) => {
     const apply = (nextParams) => {
       if (!node) return;
@@ -958,155 +869,6 @@
 
     apply(params);
     return { update: apply };
-  };
-
-  const getTextInputSelectionSnapshot = (node) => {
-    if (!node) return null;
-    try {
-      if (typeof node.selectionStart !== 'number' || typeof node.selectionEnd !== 'number') {
-        return null;
-      }
-      return {
-        start: node.selectionStart,
-        end: node.selectionEnd,
-        direction: node.selectionDirection || 'none',
-        scrollTop: node.scrollTop || 0,
-        scrollLeft: node.scrollLeft || 0
-      };
-    } catch (err) {
-      return null;
-    }
-  };
-
-  const restoreTextInputSelectionSnapshot = (node, selection) => {
-    if (!node || !selection) return;
-    try {
-      node.setSelectionRange(selection.start, selection.end, selection.direction || 'none');
-      node.scrollTop = selection.scrollTop || 0;
-      node.scrollLeft = selection.scrollLeft || 0;
-    } catch (err) {
-      // Some input types do not expose text selection.
-    }
-  };
-
-  const getActiveEditorElement = () => {
-    if (!browser || typeof document === 'undefined') return null;
-    const active = document.activeElement;
-    if (!(active instanceof Element)) return null;
-    if (!active.closest('.editor')) return null;
-    if (active.closest('.editor-action-btn')) return null;
-    return active;
-  };
-
-  const captureEditorFocusSnapshot = () => {
-    const active = getActiveEditorElement();
-    if (!active) return null;
-
-    const htmlBlockIndex = visualBlockHtmlInputs.findIndex((node) => node === active);
-    if (htmlBlockIndex >= 0) {
-      return {
-        type: 'visual-block-html',
-        index: htmlBlockIndex,
-        selection: getTextInputSelectionSnapshot(active)
-      };
-    }
-
-    if (active === sheetHtmlInput) {
-      return {
-        type: 'sheet-html',
-        selection: getTextInputSelectionSnapshot(active)
-      };
-    }
-
-    const visualBlockIndex = visualBlockEditors.findIndex(
-      (node) => node && (node === active || node.contains(active))
-    );
-    if (visualBlockIndex >= 0) {
-      captureVisualSelection(visualBlockIndex);
-      return {
-        type: 'visual-block-visual',
-        index: visualBlockIndex
-      };
-    }
-
-    return {
-      type: 'element',
-      node: active,
-      selection: getTextInputSelectionSnapshot(active)
-    };
-  };
-
-  const shouldRestoreEditorFocusSnapshot = (target) => {
-    if (!browser || typeof document === 'undefined' || !target) return false;
-    const active = document.activeElement;
-    if (!active || active === document.body) return true;
-    if (target === active || target.contains?.(active)) return false;
-    if (active instanceof Element && active.closest('.editor-action-btn')) return true;
-    return false;
-  };
-
-  const restoreEditorFocusSnapshot = async (snapshot) => {
-    if (!snapshot || !browser) return;
-    if (snapshot.type === 'visual-block-html') {
-      if (snapshot.index < 0 || snapshot.index >= visualBlocks.length) return;
-      visualActiveBlock = snapshot.index;
-      if (visualBlockViews[snapshot.index] !== 'html') {
-        setVisualBlockView(snapshot.index, 'html');
-      }
-      await tick();
-      const target = visualBlockHtmlInputs[snapshot.index];
-      if (shouldRestoreEditorFocusSnapshot(target)) {
-        target?.focus?.({ preventScroll: true });
-      }
-      restoreTextInputSelectionSnapshot(target, snapshot.selection);
-      return;
-    }
-
-    if (snapshot.type === 'sheet-html') {
-      await tick();
-      const target = sheetHtmlInput;
-      if (shouldRestoreEditorFocusSnapshot(target)) {
-        target?.focus?.({ preventScroll: true });
-      }
-      restoreTextInputSelectionSnapshot(target, snapshot.selection);
-      return;
-    }
-
-    if (snapshot.type === 'visual-block-visual') {
-      if (snapshot.index < 0 || snapshot.index >= visualBlocks.length) return;
-      visualActiveBlock = snapshot.index;
-      await tick();
-      const target = visualBlockEditors[snapshot.index];
-      if (shouldRestoreEditorFocusSnapshot(target)) {
-        await focusVisualBlockEditor(snapshot.index, 'visual');
-      } else {
-        restoreVisualSelection(snapshot.index);
-      }
-      return;
-    }
-
-    if (snapshot.type === 'element') {
-      await tick();
-      const target = snapshot.node;
-      if (!target?.isConnected) return;
-      if (shouldRestoreEditorFocusSnapshot(target)) {
-        target.focus?.({ preventScroll: true });
-      }
-      restoreTextInputSelectionSnapshot(target, snapshot.selection);
-    }
-  };
-
-  const captureSaveFocusSnapshot = () => {
-    const snapshot = captureEditorFocusSnapshot();
-    if (snapshot) {
-      pendingSaveFocusSnapshot = snapshot;
-    }
-  };
-
-  const handleSaveButtonClick = () => {
-    const focusSnapshot = pendingSaveFocusSnapshot || captureEditorFocusSnapshot();
-    pendingSaveFocusSnapshot = null;
-    saveSheet({ focusSnapshot });
   };
 
   const STORAGE_KEY = 'abu.auth';
@@ -2140,7 +1902,7 @@
     versionsLoading = true;
     versionsError = '';
     try {
-      const res = await apiFetch(`sheet?key=${encodeURIComponent(key)}&summary=1`);
+      const res = await apiFetch(`sheet?key=${encodeURIComponent(key)}`);
       const payload = await readPayload(res);
       if (!res.ok) {
         versionsError = payload?.warning || 'Versionen konnten nicht geladen werden';
@@ -2340,27 +2102,11 @@
 	    }
 	  };
 
-  const saveSheet = async (options = {}) => {
-    flushVisualInputCommits();
-    flushSheetHtmlInputWork();
-    const saveOptions =
-      options && typeof options === 'object' && ('refreshSheetList' in options || 'focusSnapshot' in options)
-        ? options
-        : {};
-    const { focusSnapshot = null } = saveOptions;
-    const restoreSavedFocus = async () => {
-      if (focusSnapshot) {
-        await restoreEditorFocusSnapshot(focusSnapshot);
-      }
-    };
-    if (!selectedId || saving) {
-      await restoreSavedFocus();
-      return false;
-    }
+  const saveSheet = async ({ refreshSheetList = true } = {}) => {
+    if (!selectedId || saving) return false;
     if (sheetReadOnly) {
       sheetSaveStatus = 'error';
       saveState = 'Admin: Fremde Sheets sind schreibgeschützt.';
-      await restoreSavedFocus();
       return false;
     }
     const sanitizedEditorContent = sanitizeSheetContent(editorContent);
@@ -2368,7 +2114,6 @@
       editorContent = sanitizedEditorContent;
     }
     if (!hasUnsavedSheetChanges()) {
-      await restoreSavedFocus();
       return true;
     }
     const targetId = selectedId;
@@ -2386,7 +2131,6 @@
     saving = true;
     sheetSaveStatus = 'saving';
     saveState = '';
-    await restoreSavedFocus();
     try {
       if (hasDocumentChanges) {
         const res = await apiFetch('sheet', {
@@ -2414,7 +2158,15 @@
         sheetSaveStatus = 'error';
         return false;
       }
-      if (hasDocumentChanges) {
+      if (refreshSheetList) {
+        const keepView = editorView;
+        if (hasDocumentChanges) {
+          await fetchSheets({ preserveOpenEditor: true });
+        }
+        if (selectedId) {
+          editorView = keepView;
+        }
+      } else if (hasDocumentChanges) {
         sheets = sheets.map((entry) =>
           entry.id === targetId
             ? {
@@ -2441,7 +2193,6 @@
       if (hasUnsavedSheetChanges()) {
         scheduleSheetAutosave();
       }
-      await restoreSavedFocus();
     }
   };
 
@@ -3617,13 +3368,8 @@
       tag.replace(/\scontenteditable\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     );
 
-  const stripVisualTerminalCaretText = (value = '') =>
-    String(value || '').replace(VISUAL_TERMINAL_CARET_TEXT_PATTERN, '');
-
   const normalizeBlockContent = (value) => {
-    const html = stripVisualTerminalCaretText(
-      stripLueckeEditorOnlyAttributes(value || '')
-    );
+    const html = stripLueckeEditorOnlyAttributes(value || '');
     if (isFreitextBlockHtml(html)) return html.trim();
     return html.replace(/<\/?p\b[^>]*>/gi, '');
   };
@@ -4521,18 +4267,6 @@
     return true;
   };
 
-  const getLueckeGapFromPointerEvent = (index, event) => {
-    const directGap = getLueckeGapElementFromEvent(event);
-    if (directGap) return { gap: directGap, side: getGapCaretSideFromPoint(directGap, event) };
-
-    const editorEl = visualBlockEditors[index];
-    if (visualBlockViews[index] !== 'visual') return null;
-    const pointGap = getLueckeGapAtPoint(editorEl, event);
-    if (pointGap) return pointGap;
-    const terminalGap = getTerminalGapBeforePoint(editorEl, event);
-    return terminalGap ? { gap: terminalGap, side: 'after' } : null;
-  };
-
   const saveLueckeEditor = () => {
     const blockIndex = lueckeEditorBlockIndex;
     if (!Number.isInteger(blockIndex) || blockIndex < 0 || blockIndex >= visualBlocks.length) {
@@ -4556,54 +4290,6 @@
     closeLueckeEditor();
   };
 
-  let visualInputCommitTimer = null;
-  const visualInputCommitQueue = new Map();
-
-  const clearVisualInputCommitTimer = () => {
-    if (visualInputCommitTimer === null) return;
-    window.clearTimeout(visualInputCommitTimer);
-    visualInputCommitTimer = null;
-  };
-
-  const flushVisualInputCommits = () => {
-    clearVisualInputCommitTimer();
-    if (!visualInputCommitQueue.size) return;
-    const commits = Array.from(visualInputCommitQueue.entries());
-    visualInputCommitQueue.clear();
-    visualInputCommitVersion += 1;
-    commits.forEach(([index, commit]) => {
-      updateVisualBlock(index, commit.value, commit.historyOptions || {});
-    });
-  };
-
-  const flushSheetHtmlInputWork = () => {
-    clearSheetHtmlHighlightTimer();
-    sheetHtmlHighlightContent = sheetHtmlInput?.value ?? editorContent ?? '';
-  };
-
-  const flushVisualHtmlInputWork = () => {
-    clearVisualBlockHtmlHighlightTimer();
-    flushVisualInputCommits();
-    const activeIndex = Number.isInteger(visualActiveBlock) ? visualActiveBlock : null;
-    if (activeIndex !== null && visualBlockViews[activeIndex] === 'html') {
-      setVisualBlockHtmlHighlight(
-        activeIndex,
-        visualBlockHtmlInputs[activeIndex]?.value ?? visualBlocks[activeIndex] ?? ''
-      );
-    }
-  };
-
-  const scheduleVisualInputCommit = (index, value, historyOptions = {}) => {
-    if (!Number.isInteger(index)) return;
-    visualInputCommitQueue.set(index, { value, historyOptions });
-    visualInputCommitVersion += 1;
-    clearVisualInputCommitTimer();
-    visualInputCommitTimer = window.setTimeout(
-      flushVisualInputCommits,
-      VISUAL_INPUT_COMMIT_DELAY_MS
-    );
-  };
-
   const commitVisualBlocks = () => {
     const normalized = visualBlocks.map((block) => normalizeBlockContent(block));
     const hasChanges = normalized.some((block, idx) => block !== visualBlocks[idx]);
@@ -4620,9 +4306,6 @@
 
   const updateVisualBlock = (index, value, historyOptions = {}) => {
     if (index < 0 || index >= visualBlocks.length) return;
-    if (visualInputCommitQueue.delete(index)) {
-      visualInputCommitVersion += 1;
-    }
     const normalizedValue = normalizeBlockContent(value);
     if ((visualBlocks[index] ?? '') === normalizedValue) return;
     pushVisualHistorySnapshot(historyOptions);
@@ -4633,7 +4316,6 @@
   };
 
   const deleteVisualBlockAt = (index) => {
-    flushVisualInputCommits();
     if (index < 0 || index >= visualBlocks.length) return;
     pushVisualHistorySnapshot();
     const next = [...visualBlocks];
@@ -4659,7 +4341,6 @@
   };
 
   const moveVisualBlock = (from, to) => {
-    flushVisualInputCommits();
     if (from === null || to === null || from === to) return;
     if (from < 0 || from >= visualBlocks.length) return;
     if (to < 0 || to > visualBlocks.length) return;
@@ -4822,7 +4503,6 @@
   };
 
   const setVisualBlockView = (index, view) => {
-    flushVisualInputCommits();
     const next = [...visualBlockViews];
     next[index] = view;
     visualBlockViews = normalizeVisualBlockViews(next, visualBlocks.length, visualBlocks);
@@ -4893,7 +4573,6 @@
     if (!target) return;
     target.focus?.();
     if (target === visualBlockEditors[index] && view === 'visual') {
-      ensureTerminalCaretTextInEditor(target);
       restoreVisualSelection(index);
     }
   };
@@ -4901,7 +4580,6 @@
   const activateVisualBlock = (index, options = {}) => {
     if (index < 0 || index >= visualBlocks.length) return;
     const wasInactive = visualActiveBlock !== index;
-    if (wasInactive) flushVisualInputCommits();
     visualActiveBlock = index;
     if (wasInactive) blockInsertIndex = null;
     if (options?.focusEditor && wasInactive) {
@@ -4911,34 +4589,13 @@
 
   const handleVisualBlockPointerDown = (event, index) => {
     if (event?.button !== undefined && event.button !== 0) return;
-    const target = event?.target;
-    if (
-      target instanceof Element &&
-      target.closest('.block-format-tools, button, input, textarea, select, a')
-    ) {
-      return;
-    }
-    const pointerGap = getLueckeGapFromPointerEvent(index, event);
-    if (pointerGap?.gap) {
-      if ((event?.detail || 0) > 1 && openLueckeEditorFromElement(index, pointerGap.gap)) {
-        if (visualBlockViews[index] !== 'visual') setVisualBlockView(index, 'visual');
-        event?.preventDefault?.();
-        event?.stopPropagation?.();
-        return;
-      }
+    const gapElement = getLueckeGapElementFromEvent(event);
+    if (gapElement && openLueckeEditorFromElement(index, gapElement)) {
+      if (visualBlockViews[index] !== 'visual') setVisualBlockView(index, 'visual');
       event?.preventDefault?.();
       event?.stopPropagation?.();
-      void placeVisualCaretAroundGapFromEvent(index, pointerGap.gap, event, pointerGap.side);
       return;
     }
-  };
-
-  const handleVisualBlockDoubleClick = (event, index) => {
-    const pointerGap = getLueckeGapFromPointerEvent(index, event);
-    if (!pointerGap?.gap || !openLueckeEditorFromElement(index, pointerGap.gap)) return;
-    if (visualBlockViews[index] !== 'visual') setVisualBlockView(index, 'visual');
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
   };
 
   const handleVisualBlockFocusIn = (event, index) => {
@@ -5359,7 +5016,6 @@
   };
 
   const appendVisualBlock = async (html, view = 'visual') => {
-    flushVisualInputCommits();
     const normalized = normalizeBlockContent(html);
     pushVisualHistorySnapshot();
     const nextBlocks = [...visualBlocks, normalized];
@@ -5385,7 +5041,6 @@
   };
 
   const insertVisualBlockAt = async (index, html = '', view = 'visual') => {
-    flushVisualInputCommits();
     const normalized = normalizeBlockContent(html);
     pushVisualHistorySnapshot();
     const nextBlocks = [...visualBlocks];
@@ -5669,45 +5324,75 @@
     agentInputEl.style.height = `${nextHeight}px`;
   };
 
-  const fitTextareaQueue = new Set();
-  let fitTextareaFrame = null;
-
-  const flushFitTextareaQueue = () => {
-    fitTextareaFrame = null;
-    const nodes = Array.from(fitTextareaQueue).filter((entry) => entry?.isConnected);
-    fitTextareaQueue.clear();
-    nodes.forEach((entry) => {
-      entry.style.height = 'auto';
-    });
-    nodes.forEach((entry) => {
-      entry.style.height = `${entry.scrollHeight}px`;
-    });
-  };
-
-  const scheduleFitTextarea = (node) => {
-    if (!node) return;
-    fitTextareaQueue.add(node);
-    if (fitTextareaFrame !== null) return;
-    if (typeof requestAnimationFrame === 'function') {
-      fitTextareaFrame = requestAnimationFrame(flushFitTextareaQueue);
-      return;
-    }
-    fitTextareaFrame = window.setTimeout(flushFitTextareaQueue, 0);
-  };
-
   const fitTextareaToContent = (node) => {
+    let frame = null;
+    let settleFrame = null;
+    let resizeObserver = null;
+    let mutationObserver = null;
+
+    const resize = () => {
+      frame = null;
+      if (!node.isConnected) return;
+      if (!node.getClientRects().length) {
+        return;
+      }
+      node.style.height = 'auto';
+      node.style.height = `${node.scrollHeight}px`;
+    };
     const resizeSoon = () => {
-      scheduleFitTextarea(node);
+      if (frame !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(frame);
+      }
+      if (settleFrame !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(settleFrame);
+        settleFrame = null;
+      }
+      if (typeof requestAnimationFrame === 'function') {
+        frame = requestAnimationFrame(() => {
+          resize();
+          settleFrame = requestAnimationFrame(() => {
+            settleFrame = null;
+            resize();
+          });
+        });
+        return;
+      }
+      resize();
     };
 
     resizeSoon();
     node.addEventListener('input', resizeSoon);
+    node.addEventListener('focus', resizeSoon);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(resizeSoon);
+      resizeObserver.observe(node);
+    }
+
+    if (typeof MutationObserver !== 'undefined') {
+      const blockEditor = node.closest('.block-editor');
+      if (blockEditor) {
+        mutationObserver = new MutationObserver(resizeSoon);
+        mutationObserver.observe(blockEditor, {
+          attributes: true,
+          attributeFilter: ['class']
+        });
+      }
+    }
 
     return {
       update: resizeSoon,
       destroy() {
-        fitTextareaQueue.delete(node);
+        if (frame !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(frame);
+        }
+        if (settleFrame !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(settleFrame);
+        }
+        resizeObserver?.disconnect();
+        mutationObserver?.disconnect();
         node.removeEventListener('input', resizeSoon);
+        node.removeEventListener('focus', resizeSoon);
       }
     };
   };
@@ -6046,7 +5731,6 @@
   };
 
   const replaceVisualBlockAt = async (index, html, view = 'visual') => {
-    flushVisualInputCommits();
     if (!visualBlocks.length) {
       await appendVisualBlock(html, view === 'html' ? 'html' : 'visual');
       return;
@@ -6412,11 +6096,6 @@
   const isLueckeGapNode = (node) =>
     node instanceof HTMLElement && node.tagName?.toLowerCase() === 'luecke-gap';
 
-  const isLineBreakNode = (node) =>
-    node instanceof HTMLElement && node.tagName?.toLowerCase() === 'br';
-
-  const isVisualAtomicNode = (node) => isLueckeGapNode(node) || isLineBreakNode(node);
-
   const getNodeElement = (node) =>
     node instanceof Element ? node : node?.parentElement || null;
 
@@ -6427,346 +6106,21 @@
     return gap;
   };
 
-  const getVisualTextLength = (text = '') =>
-    stripVisualTerminalCaretText(text).length;
-
-  const getVisualTextOffset = (text = '', offset = 0) =>
-    getVisualTextLength(String(text || '').slice(0, Math.max(0, offset || 0)));
-
-  const getRawVisualTextOffset = (text = '', visibleOffset = 0) => {
-    const source = String(text || '');
-    const targetOffset = Math.max(0, visibleOffset || 0);
-    let rawOffset = 0;
-    let visibleCount = 0;
-    while (rawOffset < source.length) {
-      if (source[rawOffset] === VISUAL_TERMINAL_CARET_TEXT) {
-        rawOffset += 1;
-        continue;
-      }
-      if (visibleCount >= targetOffset) break;
-      visibleCount += 1;
-      rawOffset += 1;
-    }
-    return rawOffset;
-  };
-
-  const hasVisibleVisualContent = (node) => {
-    if (!node) return false;
-    if (isVisualAtomicNode(node)) return true;
-    if (node.nodeType === Node.TEXT_NODE) {
-      return getVisualTextLength(node.textContent || '') > 0;
-    }
-    return Array.from(node.childNodes || []).some((child) => hasVisibleVisualContent(child));
-  };
-
-  const hasVisibleVisualContentAfterNode = (node, root) => {
-    let current = node;
-    while (current && current !== root) {
-      let sibling = current.nextSibling;
-      while (sibling) {
-        if (hasVisibleVisualContent(sibling)) return true;
-        sibling = sibling.nextSibling;
-      }
-      current = current.parentNode;
-    }
-    return false;
-  };
-
-  const getLastVisibleVisualContentNode = (root) => {
-    if (!root) return null;
-    const findLast = (node) => {
-      if (!node) return null;
-      if (node !== root && isVisualAtomicNode(node)) return node;
-      if (node.nodeType === Node.TEXT_NODE) {
-        return getVisualTextLength(node.textContent || '') > 0 ? node : null;
-      }
-      const children = Array.from(node.childNodes || []);
-      for (let idx = children.length - 1; idx >= 0; idx -= 1) {
-        const match = findLast(children[idx]);
-        if (match) return match;
-      }
-      return null;
-    };
-    return findLast(root);
-  };
-
-  const getTerminalLueckeGap = (root) => {
-    const last = getLastVisibleVisualContentNode(root);
-    return isLueckeGapNode(last) ? last : null;
-  };
-
-  const ensureTerminalCaretTextInEditor = (editorEl) => {
-    const terminalGap = getTerminalLueckeGap(editorEl);
-    return terminalGap ? ensureTerminalCaretTextAfterNode(terminalGap, editorEl) : null;
-  };
-
-  const ensureTerminalCaretTextAfterNode = (node, root) => {
-    if (!browser || !node?.parentNode || !root?.contains?.(node)) return null;
-    if (hasVisibleVisualContentAfterNode(node, root)) return null;
-    const next = node.nextSibling;
-    if (next?.nodeType === Node.TEXT_NODE) {
-      if (!String(next.textContent || '').includes(VISUAL_TERMINAL_CARET_TEXT)) {
-        next.textContent = `${VISUAL_TERMINAL_CARET_TEXT}${next.textContent || ''}`;
-      }
-      return next;
-    }
-    const textNode = document.createTextNode(VISUAL_TERMINAL_CARET_TEXT);
-    node.parentNode.insertBefore(textNode, next || null);
-    return textNode;
-  };
-
-  const getBoundaryAfterVisualAtomicNode = (node, root) => {
-    const terminalText = ensureTerminalCaretTextAfterNode(node, root);
-    if (terminalText) {
-      return {
-        node: terminalText,
-        offset: (terminalText.textContent || '').length
-      };
-    }
-    return getBoundaryAfterNode(node);
-  };
-
-  const focusEditableElement = (el) => {
-    if (!el?.focus) return;
-    try {
-      el.focus({ preventScroll: true });
-    } catch {
-      el.focus();
-    }
-  };
-
-  const setVisualCaretAroundGap = (index, gapElement, side = 'after') => {
-    const editorEl = visualBlockEditors[index];
-    if (!editorEl || !gapElement || !editorEl.contains(gapElement)) return false;
-    const selection = window?.getSelection ? window.getSelection() : null;
-    if (!selection) return false;
-
-    focusEditableElement(editorEl);
-    const range = document.createRange();
-    const boundary =
-      side === 'before'
-        ? getBoundaryBeforeNode(gapElement)
-        : getBoundaryAfterVisualAtomicNode(gapElement, editorEl);
-    range.setStart(boundary.node, boundary.offset);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-    const gapStart = getVisualRangeOffset(
-      editorEl,
-      gapElement.parentNode || editorEl,
-      getNodeIndex(gapElement)
-    );
-    const caretOffset = side === 'before' ? gapStart : gapStart + getVisualUnitLength(gapElement);
-    visualBlockSelections[index] = { start: caretOffset, end: caretOffset };
-    return true;
-  };
-
-  const getGapCaretSideFromPoint = (gapElement, event) => {
-    const rect = gapElement?.getBoundingClientRect?.();
-    if (!rect || !Number.isFinite(event?.clientX)) return 'after';
-    return event.clientX < rect.left + rect.width / 2 ? 'before' : 'after';
-  };
-
-  const getCaretRangeFromPoint = (event) => {
-    if (!browser || typeof document === 'undefined') return null;
-    const x = event?.clientX;
-    const y = event?.clientY;
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    if (typeof document.caretRangeFromPoint === 'function') {
-      return document.caretRangeFromPoint(x, y);
-    }
-    if (typeof document.caretPositionFromPoint === 'function') {
-      const position = document.caretPositionFromPoint(x, y);
-      if (!position) return null;
-      const range = document.createRange();
-      range.setStart(position.offsetNode, position.offset);
-      range.collapse(true);
-      return range;
-    }
-    return null;
-  };
-
-  const getLueckeGapAtPoint = (editorEl, event) => {
-    if (!editorEl || !Number.isFinite(event?.clientX) || !Number.isFinite(event?.clientY)) {
-      return null;
-    }
-
-    let candidate = null;
-    Array.from(editorEl.querySelectorAll('luecke-gap')).forEach((gap) => {
-      const rects = Array.from(gap.getClientRects?.() || []);
-      rects.forEach((rect) => {
-        const insideX = event.clientX >= rect.left && event.clientX <= rect.right;
-        const insideY = event.clientY >= rect.top - 3 && event.clientY <= rect.bottom + 3;
-        if (!insideX || !insideY) return;
-        const area = rect.width * rect.height;
-        if (!candidate || area < candidate.area) {
-          candidate = {
-            gap,
-            area,
-            side: event.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
-          };
-        }
-      });
-    });
-
-    return candidate;
-  };
-
-  const getTerminalGapBeforePoint = (editorEl, event) => {
-    if (!editorEl || !Number.isFinite(event?.clientX) || !Number.isFinite(event?.clientY)) {
-      return null;
-    }
-
-    let candidate = null;
-    Array.from(editorEl.querySelectorAll('luecke-gap')).forEach((gap) => {
-      const rects = Array.from(gap.getClientRects?.() || []);
-      rects.forEach((rect) => {
-        const sameLine = event.clientY >= rect.top - 3 && event.clientY <= rect.bottom + 3;
-        const afterGap = event.clientX >= rect.right - 1;
-        if (!sameLine || !afterGap) return;
-        if (!candidate || rect.right > candidate.rect.right) {
-          candidate = { gap, rect };
-        }
-      });
-    });
-
-    if (!candidate) {
-      const terminalGap = getTerminalLueckeGap(editorEl);
-      const terminalRects = Array.from(terminalGap?.getClientRects?.() || []);
-      const terminalRect = terminalRects[terminalRects.length - 1];
-      const editorRect = editorEl.getBoundingClientRect?.();
-      const insideEditor =
-        editorRect &&
-        event.clientX >= editorRect.left &&
-        event.clientX <= editorRect.right &&
-        event.clientY >= editorRect.top &&
-        event.clientY <= editorRect.bottom;
-      if (terminalGap && terminalRect && insideEditor && event.clientY > terminalRect.bottom) {
-        return terminalGap;
-      }
-      return null;
-    }
-
-    const pointRange = getCaretRangeFromPoint(event);
-    if (
-      pointRange &&
-      editorEl.contains(pointRange.startContainer) &&
-      pointRange.startContainer.nodeType === Node.TEXT_NODE &&
-      !getClosestLueckeGap(pointRange.startContainer, editorEl)
-    ) {
-      const pointOffset = getVisualRangeOffset(
-        editorEl,
-        pointRange.startContainer,
-        pointRange.startOffset
-      );
-      const gapEndOffset =
-        getVisualRangeOffset(
-          editorEl,
-          candidate.gap.parentNode || editorEl,
-          getNodeIndex(candidate.gap)
-        ) + getVisualUnitLength(candidate.gap);
-      if (pointOffset > gapEndOffset) return null;
-    }
-
-    return candidate.gap;
-  };
-
-  const placeVisualCaretAroundGapFromEvent = async (
-    index,
-    gapElement,
-    event,
-    sideOverride = null
-  ) => {
-    if (!gapElement) return false;
-    const editorEl = visualBlockEditors[index];
-    const gapIndex = Array.from(editorEl?.querySelectorAll('luecke-gap') || []).indexOf(
-      gapElement
-    );
-    const side = sideOverride || getGapCaretSideFromPoint(gapElement, event);
-    const activationView = 'visual';
-    if (visualBlockViews[index] !== activationView) setVisualBlockView(index, activationView);
-    activateVisualBlock(index);
-    await tick();
-
-    const nextGaps = Array.from(visualBlockEditors[index]?.querySelectorAll('luecke-gap') || []);
-    const nextGap = (gapIndex >= 0 ? nextGaps[gapIndex] : null) || gapElement;
-    return setVisualCaretAroundGap(index, nextGap, side);
-  };
-
-  const getVisualUnitLength = (node) => {
+  const countVisualUnitsInFragment = (node) => {
     if (!node) return 0;
     if (isLueckeGapNode(node)) return 1;
-    if (isLineBreakNode(node)) return 1;
-    if (node.nodeType === Node.TEXT_NODE) return getVisualTextLength(node.textContent || '');
+    if (node.nodeType === Node.TEXT_NODE) return (node.textContent || '').length;
     return Array.from(node.childNodes || []).reduce(
-      (total, child) => total + getVisualUnitLength(child),
+      (total, child) => total + countVisualUnitsInFragment(child),
       0
     );
   };
 
   const getVisualRangeOffset = (el, container, offset) => {
-    if (!el || !container) return 0;
-    let total = 0;
-    let found = false;
-    const boundaryOffset = Math.max(0, Number(offset) || 0);
-
-    const addChildrenBeforeOffset = (node, childOffset) => {
-      const children = Array.from(node.childNodes || []);
-      const limit = Math.min(Math.max(0, childOffset), children.length);
-      for (let idx = 0; idx < limit; idx += 1) {
-        total += getVisualUnitLength(children[idx]);
-      }
-    };
-
-    const getContainedAtomicOffset = (atomicNode, childContainer, childOffset) => {
-      if (atomicNode === childContainer) return childOffset > 0 ? 1 : 0;
-      if (!atomicNode.contains?.(childContainer)) return 1;
-      if (childContainer.nodeType === Node.TEXT_NODE) {
-        const text = childContainer.textContent || '';
-        const textLength = getVisualTextLength(text);
-        const textOffset = Math.min(getVisualTextOffset(text, childOffset), textLength);
-        return textOffset > textLength / 2 ? 1 : 0;
-      }
-      return childOffset > 0 ? 1 : 0;
-    };
-
-    const visit = (node) => {
-      if (!node || found) return;
-
-      if (node === container) {
-        if (node.nodeType === Node.TEXT_NODE) {
-          const text = node.textContent || '';
-          total += Math.min(getVisualTextOffset(text, boundaryOffset), getVisualTextLength(text));
-        } else if (isLueckeGapNode(node) || isLineBreakNode(node)) {
-          total += boundaryOffset > 0 ? 1 : 0;
-        } else {
-          addChildrenBeforeOffset(node, boundaryOffset);
-        }
-        found = true;
-        return;
-      }
-
-      if (node !== el && isVisualAtomicNode(node)) {
-        total += node.contains?.(container)
-          ? getContainedAtomicOffset(node, container, boundaryOffset)
-          : 1;
-        if (node.contains?.(container)) found = true;
-        return;
-      }
-
-      if (node.nodeType === Node.TEXT_NODE) {
-        total += getVisualTextLength(node.textContent || '');
-        return;
-      }
-
-      Array.from(node.childNodes || []).some((child) => {
-        visit(child);
-        return found;
-      });
-    };
-
-    visit(el);
-    return total;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.setEnd(container, offset);
+    return countVisualUnitsInFragment(range.cloneContents());
   };
 
   const getVisualSelectionOffsets = (el) => {
@@ -6792,127 +6146,40 @@
     offset: getNodeIndex(node) + 1
   });
 
-  const getCurrentVisualSelectionRange = (editorEl) => {
-    const selection = window?.getSelection ? window.getSelection() : null;
-    if (!editorEl || !selection || selection.rangeCount === 0) return null;
-    const range = selection.getRangeAt(0);
-    if (!editorEl.contains(range.commonAncestorContainer)) return null;
-    return range.cloneRange();
-  };
-
-  const getLueckeGapFromRange = (range, editorEl) => {
-    if (!range || !editorEl) return null;
-    return (
-      getClosestLueckeGap(range.startContainer, editorEl) ||
-      getClosestLueckeGap(range.endContainer, editorEl)
-    );
-  };
-
-  const getLueckeGapSelectionSide = (gap, range, fallback = 'after') => {
-    if (!gap || !range?.collapsed) return fallback;
-    const container = range.startContainer;
-    const offset = Math.max(0, Number(range.startOffset) || 0);
-    if (container === gap) {
-      return offset > (gap.childNodes?.length || 0) / 2 ? 'after' : 'before';
-    }
-    if (container.nodeType === Node.TEXT_NODE) {
-      const text = container.textContent || '';
-      return getVisualTextOffset(text, offset) > getVisualTextLength(text) / 2
-        ? 'after'
-        : 'before';
-    }
-    if (gap.contains?.(container)) {
-      const innerOffset = getVisualRangeOffset(gap, container, offset);
-      return innerOffset > getVisualTextLength(gap.textContent || '') / 2 ? 'after' : 'before';
-    }
-    return fallback;
-  };
-
-  const moveVisualRangeOutsideLueckeGap = (index, range, fallbackSide = 'after') => {
-    const editorEl = visualBlockEditors[index];
-    const gap = getLueckeGapFromRange(range, editorEl);
-    if (!gap) return false;
-    const side = getLueckeGapSelectionSide(gap, range, fallbackSide);
-    return setVisualCaretAroundGap(index, gap, side);
-  };
-
-  const normalizeVisualSelectionOutsideLueckeGap = (index, fallbackSide = 'after') => {
-    const editorEl = visualBlockEditors[index];
-    const range = getCurrentVisualSelectionRange(editorEl);
-    if (!range) return false;
-    return moveVisualRangeOutsideLueckeGap(index, range, fallbackSide);
-  };
-
-  const handleVisualSelectionChange = (index) => {
-    if (normalizeVisualSelectionOutsideLueckeGap(index)) return;
-    captureVisualSelection(index);
-  };
-
   const resolveOffsetInElement = (el, offset) => {
-    const targetOffset = Math.max(0, offset || 0);
+    let remaining = Math.max(0, offset || 0);
+    let lastBoundary = { node: el, offset: el.childNodes.length };
 
-    const getNodeEndBoundary = (node) => {
-      if (!node) return { node: el, offset: el.childNodes.length };
-      if (node !== el && isVisualAtomicNode(node)) {
-        return getBoundaryAfterVisualAtomicNode(node, el);
-      }
-      if (node.nodeType === Node.TEXT_NODE) {
-        return { node, offset: (node.textContent || '').length };
-      }
+    const visit = (node) => {
+      if (!node) return null;
 
-      const children = Array.from(node.childNodes || []);
-      if (!children.length) return { node, offset: 0 };
-      return getNodeEndBoundary(children[children.length - 1]) || {
-        node,
-        offset: children.length
-      };
-    };
-
-    const resolve = (node, nodeOffset) => {
-      if (!node) return { node: el, offset: el.childNodes.length };
-
-      if (node !== el && isVisualAtomicNode(node)) {
-        return nodeOffset <= 0
-          ? getBoundaryBeforeNode(node)
-          : getBoundaryAfterVisualAtomicNode(node, el);
+      if (node !== el && isLueckeGapNode(node)) {
+        if (remaining <= 0) return getBoundaryBeforeNode(node);
+        if (remaining <= 1) return getBoundaryAfterNode(node);
+        remaining -= 1;
+        lastBoundary = getBoundaryAfterNode(node);
+        return null;
       }
 
       if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent || '';
-        const length = getVisualTextLength(text);
-        const visibleOffset = Math.min(Math.max(0, nodeOffset), length);
-        return { node, offset: getRawVisualTextOffset(text, visibleOffset) };
+        const length = node.textContent ? node.textContent.length : 0;
+        if (remaining <= length) return { node, offset: remaining };
+        remaining -= length;
+        lastBoundary = { node, offset: length };
+        return null;
       }
 
       const children = Array.from(node.childNodes || []);
-      let consumed = 0;
-
       for (let childIndex = 0; childIndex < children.length; childIndex += 1) {
-        const child = children[childIndex];
-        const childLength = getVisualUnitLength(child);
-        const nextConsumed = consumed + childLength;
-
-        if (nodeOffset < nextConsumed) {
-          return resolve(child, nodeOffset - consumed);
-        }
-
-        if (nodeOffset === nextConsumed) {
-          if (isVisualAtomicNode(child)) {
-            return getBoundaryAfterVisualAtomicNode(child, el);
-          }
-          if (isVisualAtomicNode(children[childIndex + 1])) {
-            return { node, offset: childIndex + 1 };
-          }
-          return getNodeEndBoundary(child);
-        }
-
-        consumed = nextConsumed;
+        if (remaining <= 0) return { node, offset: childIndex };
+        const resolved = visit(children[childIndex]);
+        if (resolved) return resolved;
       }
-
-      return { node, offset: children.length };
+      lastBoundary = { node, offset: children.length };
+      return null;
     };
 
-    return resolve(el, targetOffset);
+    return visit(el) || lastBoundary;
   };
 
   const restoreVisualSelection = (index) => {
@@ -6939,32 +6206,11 @@
     return range;
   };
 
-  let visualSelectionCaptureFrame = null;
-  const visualSelectionCaptureIndexes = new Set();
-
   const captureVisualSelection = (index) => {
     const el = visualBlockEditors[index];
     const offsets = getVisualSelectionOffsets(el);
     if (!offsets) return;
     visualBlockSelections[index] = offsets;
-  };
-
-  const flushVisualSelectionCapture = () => {
-    visualSelectionCaptureFrame = null;
-    const indexes = Array.from(visualSelectionCaptureIndexes);
-    visualSelectionCaptureIndexes.clear();
-    indexes.forEach((index) => handleVisualSelectionChange(index));
-  };
-
-  const scheduleVisualSelectionCapture = (index) => {
-    if (!Number.isInteger(index)) return;
-    visualSelectionCaptureIndexes.add(index);
-    if (visualSelectionCaptureFrame !== null) return;
-    if (typeof requestAnimationFrame === 'function') {
-      visualSelectionCaptureFrame = requestAnimationFrame(flushVisualSelectionCapture);
-    } else {
-      visualSelectionCaptureFrame = window.setTimeout(flushVisualSelectionCapture, 0);
-    }
   };
 
   const isLineBreakInputEvent = (event) => {
@@ -7033,14 +6279,12 @@
     const offset = range.startOffset;
 
     if (container.nodeType === Node.TEXT_NODE) {
-      const text = container.textContent || '';
-      const textLength = getVisualTextLength(text);
-      const textOffset = getVisualTextOffset(text, offset);
+      const textLength = (container.textContent || '').length;
       if (direction === 'backward') {
-        if (textOffset > 0) return null;
+        if (offset > 0) return null;
         return getSiblingBoundaryNode(container, root, direction);
       }
-      if (textOffset < textLength) return null;
+      if (offset < textLength) return null;
       return getSiblingBoundaryNode(container, root, direction);
     }
 
@@ -7067,31 +6311,11 @@
       if (candidate.nodeType === Node.TEXT_NODE && (candidate.textContent || '').length > 0) {
         return null;
       }
-      if (candidate.nodeType === Node.ELEMENT_NODE) {
-        return null;
-      }
-      candidate = getSiblingBoundaryNode(candidate, editorEl, direction);
-    }
-    return null;
-  };
-
-  const getCurrentCollapsedSelectionRange = (editorEl) => {
-    const selection = window?.getSelection ? window.getSelection() : null;
-    if (!selection || selection.rangeCount === 0) return null;
-    const range = selection.getRangeAt(0);
-    if (!range.collapsed || !editorEl.contains(range.commonAncestorContainer)) return null;
-    return range.cloneRange();
-  };
-
-  const getAdjacentLineBreak = (range, editorEl, direction) => {
-    if (!range?.collapsed) return null;
-    let candidate = getNodeBesideCollapsedRange(range, editorEl, direction);
-    while (candidate && candidate !== editorEl) {
-      if (isLineBreakNode(candidate)) return candidate;
-      if (getClosestLueckeGap(candidate, editorEl)) return null;
-      if (candidate.nodeType === Node.TEXT_NODE) {
-        if ((candidate.textContent || '').length > 0) return null;
-      } else if (candidate.nodeType === Node.ELEMENT_NODE) {
+      if (
+        candidate.nodeType === Node.ELEMENT_NODE &&
+        candidate.tagName?.toLowerCase() !== 'br' &&
+        (candidate.textContent || '').length > 0
+      ) {
         return null;
       }
       candidate = getSiblingBoundaryNode(candidate, editorEl, direction);
@@ -7196,32 +6420,24 @@
   const handleSheetHtmlBeforeInput = (event) => {
     void handleHtmlTextareaGapDelete(event, editorContent, (nextValue) => {
       editorContent = nextValue;
-      scheduleSheetHtmlHighlight(nextValue);
     });
   };
 
   const handleSheetHtmlKeydown = (event) => {
     void handleHtmlTextareaGapDelete(event, editorContent, (nextValue) => {
       editorContent = nextValue;
-      scheduleSheetHtmlHighlight(nextValue);
     });
-  };
-
-  const handleSheetHtmlInput = (event) => {
-    scheduleSheetHtmlHighlight(event?.currentTarget?.value ?? event?.target?.value ?? editorContent);
   };
 
   const handleVisualHtmlBeforeInput = (index, event) => {
     void handleHtmlTextareaGapDelete(event, visualBlocks[index] || '', (nextValue) => {
       updateVisualBlock(index, nextValue, getVisualInputHistoryOptions(index, event, 'html'));
-      scheduleVisualBlockHtmlHighlight(index, nextValue);
     });
   };
 
   const handleVisualHtmlKeydown = (index, event) => {
     void handleHtmlTextareaGapDelete(event, visualBlocks[index] || '', (nextValue) => {
       updateVisualBlock(index, nextValue, getVisualInputHistoryOptions(index, event, 'html'));
-      scheduleVisualBlockHtmlHighlight(index, nextValue);
     });
   };
 
@@ -7278,124 +6494,11 @@
     return true;
   };
 
-  const handleVisualLineBreakDeleteRequest = (index, event) => {
-    if (!Number.isInteger(index) || !isGapDeleteEvent(event)) return false;
-    const editorEl = event?.currentTarget || visualBlockEditors[index];
-    if (!editorEl) return false;
-    const range = getCurrentCollapsedSelectionRange(editorEl);
-    if (!range) return false;
-    const direction = getGapDeleteDirection(event);
-    const lineBreak = getAdjacentLineBreak(range, editorEl, direction);
-    if (!lineBreak) return false;
-
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-
-    const deletionRange = document.createRange();
-    deletionRange.selectNode(lineBreak);
-    deletionRange.deleteContents();
-    deletionRange.collapse(true);
-
-    const selection = window?.getSelection ? window.getSelection() : null;
-    if (selection) {
-      selection.removeAllRanges();
-      selection.addRange(deletionRange);
-    }
-
-    captureVisualSelection(index);
-    updateVisualBlock(
-      index,
-      getVisualEditorValueFromElement(index, editorEl),
-      getVisualInputHistoryOptions(index, event, 'visual-linebreak')
-    );
-    return true;
-  };
-
-  const isVisualLineBreakRequest = (event) =>
-    event?.key === 'Enter' || isLineBreakInputEvent(event);
-
-  const getVisualEditorValueFromElement = (index, editorEl) => {
-    const current = visualBlocks[index] || '';
-    if (isFreitextBlock(current) && editorEl?.classList?.contains('freitext-instruction-editor')) {
-      return setFreitextInstructionHtml(current, editorEl.innerHTML);
-    }
-    return editorEl?.innerHTML || '';
-  };
-
-  const handleVisualLineBreakRequest = (index, event) => {
-    if (!Number.isInteger(index) || !isVisualLineBreakRequest(event)) return false;
-    if (event?.altKey || event?.ctrlKey || event?.metaKey) return false;
-
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-
-    if (isTitelBlock(visualBlocks[index])) {
-      return true;
-    }
-
-    const editorEl = event?.currentTarget || visualBlockEditors[index];
-    if (!editorEl) return true;
-    const range = getRangeFromInputEvent(event, editorEl);
-    if (!range) return true;
-
-    const selectedGaps = range.collapsed
-      ? []
-      : uniqueLueckeGaps(getLueckeGapsIntersectingRange(editorEl, range));
-    if (selectedGaps.length && !confirmDeleteLueckeGaps(selectedGaps)) {
-      return true;
-    }
-
-    const insertionRange = selectedGaps.length
-      ? buildGapDeletionRange(range, selectedGaps)
-      : range.cloneRange();
-    const lineBreak = document.createElement('br');
-    insertionRange.deleteContents();
-    insertionRange.insertNode(lineBreak);
-    insertionRange.setStartAfter(lineBreak);
-    insertionRange.collapse(true);
-
-    const selection = window?.getSelection ? window.getSelection() : null;
-    if (selection) {
-      selection.removeAllRanges();
-      selection.addRange(insertionRange);
-    }
-
-    captureVisualSelection(index);
-    updateVisualBlock(index, getVisualEditorValueFromElement(index, editorEl), {
-      coalesce: true,
-      chunkKey: `block:${index}:visual:linebreak`
-    });
-    return true;
-  };
-
-  const handleVisualGapAtomicInputRequest = (index, event) => {
-    if (!Number.isInteger(index) || isGapDeleteEvent(event)) return false;
-    const editorEl = event?.currentTarget || visualBlockEditors[index];
-    if (!editorEl) return false;
-    const range = getRangeFromInputEvent(event, editorEl);
-    if (!range) return false;
-    const rangeGap = getLueckeGapFromRange(range, editorEl);
-    const intersectingGaps = range.collapsed
-      ? []
-      : uniqueLueckeGaps(getLueckeGapsIntersectingRange(editorEl, range));
-    if (!rangeGap && !intersectingGaps.length) return false;
-
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    if (!moveVisualRangeOutsideLueckeGap(index, range, 'after') && intersectingGaps[0]) {
-      setVisualCaretAroundGap(index, intersectingGaps[0], 'after');
-    }
-    return true;
-  };
-
   const handleVisualBeforeInput = (event, index) => {
-    if (handleVisualGapDeleteRequest(index, event)) return;
-    if (handleVisualGapAtomicInputRequest(index, event)) return;
-    if (handleVisualLineBreakRequest(index, event)) return;
-    handleVisualLineBreakDeleteRequest(index, event);
+    handleVisualGapDeleteRequest(index, event);
   };
 
-  const handleVisualInput = (index, event) => {
+  const handleVisualInput = async (index, event) => {
     const el = event?.currentTarget;
     if (!el) return;
     const source = event?.target;
@@ -7408,32 +6511,36 @@
     ) {
       return;
     }
-    scheduleVisualSelectionCapture(index);
-    scheduleVisualInputCommit(
-      index,
-      el.innerHTML,
-      getVisualInputHistoryOptions(index, event, 'visual')
-    );
+    const nextRevision = (visualBlockInputRevisions[index] ?? 0) + 1;
+    visualBlockInputRevisions[index] = nextRevision;
+    captureVisualSelection(index);
+    updateVisualBlock(index, el.innerHTML, getVisualInputHistoryOptions(index, event, 'visual'));
+    await tick();
+    if ((visualBlockInputRevisions[index] ?? 0) !== nextRevision) {
+      return;
+    }
+    if (visualBlockViews[index] === 'visual' && visualActiveBlock === index) {
+      if (isLineBreakInputEvent(event)) return;
+      restoreVisualSelection(index);
+    }
   };
 
   const handleVisualHtmlInput = (index, event) => {
     const value = event?.currentTarget?.value ?? event?.target?.value ?? '';
-    scheduleVisualBlockHtmlHighlight(index, value);
-    scheduleVisualInputCommit(index, value, getVisualInputHistoryOptions(index, event, 'html'));
+    updateVisualBlock(index, value, getVisualInputHistoryOptions(index, event, 'html'));
   };
 
   const handleFreitextInstructionHtmlInput = (index, event) => {
     const value = event?.currentTarget?.value ?? event?.target?.value ?? '';
     const current = visualBlocks[index] || '';
-    scheduleVisualBlockHtmlHighlight(index, value);
-    scheduleVisualInputCommit(
+    updateVisualBlock(
       index,
       setFreitextInstructionHtml(current, value),
       getVisualInputHistoryOptions(index, event, 'freitext-instruction-html')
     );
   };
 
-  const handleFreitextInstructionVisualInput = (index, event) => {
+  const handleFreitextInstructionVisualInput = async (index, event) => {
     const el = event?.currentTarget;
     if (!el) return;
     const source = event?.target;
@@ -7446,13 +6553,23 @@
     ) {
       return;
     }
-    scheduleVisualSelectionCapture(index);
+    const nextRevision = (visualBlockInputRevisions[index] ?? 0) + 1;
+    visualBlockInputRevisions[index] = nextRevision;
+    captureVisualSelection(index);
     const current = visualBlocks[index] || '';
-    scheduleVisualInputCommit(
+    updateVisualBlock(
       index,
       setFreitextInstructionHtml(current, el.innerHTML),
       getVisualInputHistoryOptions(index, event, 'freitext-instruction-visual')
     );
+    await tick();
+    if ((visualBlockInputRevisions[index] ?? 0) !== nextRevision) {
+      return;
+    }
+    if (visualBlockViews[index] === 'visual' && visualActiveBlock === index) {
+      if (isLineBreakInputEvent(event)) return;
+      restoreVisualSelection(index);
+    }
   };
 
   const updateFreitextCriterion = (blockIndex, criterionIndex, patch, event = null) => {
@@ -7597,43 +6714,6 @@
     updateVisualBlock(blockIndex, setFreitextReferences(current, nextReferences));
   };
 
-  const handleVisualGapArrowNavigation = (index, event) => {
-    if (!Number.isInteger(index)) return false;
-    if (event?.altKey || event?.ctrlKey || event?.metaKey || event?.shiftKey) return false;
-    const direction =
-      event?.key === 'ArrowRight' ? 'forward' : event?.key === 'ArrowLeft' ? 'backward' : '';
-    if (!direction) return false;
-
-    const editorEl = event?.currentTarget || visualBlockEditors[index];
-    if (!editorEl) return false;
-    ensureTerminalCaretTextInEditor(editorEl);
-    const range = getCurrentCollapsedSelectionRange(editorEl);
-    if (!range) return false;
-    const gap = getAdjacentLueckeGap(range, editorEl, direction);
-    if (!gap) return false;
-
-    event.preventDefault();
-    event.stopPropagation();
-    return setVisualCaretAroundGap(index, gap, direction === 'forward' ? 'after' : 'before');
-  };
-
-  const handleVisualGapAtomicKeydown = (index, event) => {
-    if (!Number.isInteger(index)) return false;
-    if (event?.altKey || event?.ctrlKey || event?.metaKey) return false;
-    const key = event?.key || '';
-    const isTextInputKey = key.length === 1;
-    if (key !== 'Enter' && !isTextInputKey) return false;
-
-    const editorEl = event?.currentTarget || visualBlockEditors[index];
-    const range = getCurrentVisualSelectionRange(editorEl);
-    if (!range) return false;
-    if (!getLueckeGapFromRange(range, editorEl)) return false;
-
-    event.preventDefault();
-    event.stopPropagation();
-    return moveVisualRangeOutsideLueckeGap(index, range, 'after');
-  };
-
   const handleVisualKeydown = (event, index = null) => {
     const target = event?.target;
     if (
@@ -7646,16 +6726,12 @@
     if (Number.isInteger(index) && handleVisualGapDeleteRequest(index, event)) {
       return;
     }
-    if (Number.isInteger(index) && handleVisualGapAtomicKeydown(index, event)) {
-      return;
-    }
-    if (Number.isInteger(index) && handleVisualLineBreakRequest(index, event)) {
-      return;
-    }
-    if (Number.isInteger(index) && handleVisualLineBreakDeleteRequest(index, event)) {
-      return;
-    }
-    if (Number.isInteger(index) && handleVisualGapArrowNavigation(index, event)) {
+    if (
+      event?.key === 'Enter' &&
+      Number.isInteger(index) &&
+      isTitelBlock(visualBlocks[index])
+    ) {
+      event.preventDefault();
       return;
     }
     if (isUndoShortcut(event)) {
@@ -9311,9 +8387,8 @@
               class="ci-btn-secondary editor-action-btn"
               class:editor-action-btn--saved={sheetSaveButtonSaved}
               type="button"
-              on:pointerdown={captureSaveFocusSnapshot}
-              on:mousedown|preventDefault={captureSaveFocusSnapshot}
-              on:click={handleSaveButtonClick}
+              on:mousedown|preventDefault
+              on:click={saveSheet}
               disabled={saving || sheetReadOnly}
             >
               <span class="editor-action-btn__status" aria-hidden="true">
@@ -9455,8 +8530,6 @@
                         aria-label="Sheet HTML"
                         on:beforeinput={handleSheetHtmlBeforeInput}
                         on:keydown={handleSheetHtmlKeydown}
-                        on:input={handleSheetHtmlInput}
-                        on:blur={flushSheetHtmlInputWork}
                         on:scroll={() => syncCodeScroll(sheetHtmlInput, sheetHtmlHighlight)}
                       ></textarea>
                     </div>
@@ -9546,7 +8619,6 @@
                               role={blockIsActive ? 'group' : 'button'}
                               aria-label={`${blockType.shortLabel} Block ${blockIsActive ? 'ausgewählt' : 'auswählen'}`}
                               on:pointerdown={(event) => handleVisualBlockPointerDown(event, idx)}
-                              on:dblclick={(event) => handleVisualBlockDoubleClick(event, idx)}
                               on:click={(event) => handleVisualBlockClick(event, idx)}
                               on:keydown={(event) => handleVisualBlockKeydown(event, idx)}
                               on:focusin={(event) => handleVisualBlockFocusIn(event, idx)}
@@ -9845,12 +8917,10 @@
                                     }}
                                     bind:this={visualBlockEditors[idx]}
                                     on:focus={() => (visualActiveBlock = idx)}
-                                    on:blur={flushVisualInputCommits}
-                                    on:beforeinput={(event) => handleVisualBeforeInput(event, idx)}
                                     on:keydown={(event) => handleVisualKeydown(event, idx)}
                                     on:input={(event) => handleFreitextInstructionVisualInput(idx, event)}
-                                    on:mouseup={() => handleVisualSelectionChange(idx)}
-                                    on:keyup={() => handleVisualSelectionChange(idx)}
+                                    on:mouseup={() => captureVisualSelection(idx)}
+                                    on:keyup={() => captureVisualSelection(idx)}
                                   ></div>
                                   <div
                                     class="freitext-checklist-editor freitext-checklist-editor--premises"
@@ -10271,13 +9341,12 @@
                                   }}
                                   bind:this={visualBlockEditors[idx]}
                                   on:focus={() => (visualActiveBlock = idx)}
-                                  on:blur={flushVisualInputCommits}
                                   on:beforeinput={(event) => handleVisualBeforeInput(event, idx)}
                                   on:keydown={(event) => handleVisualKeydown(event, idx)}
                                   on:input={(event) =>
                                     visualBlockViews[idx] === 'visual' && handleVisualInput(idx, event)}
-                                  on:mouseup={() => handleVisualSelectionChange(idx)}
-                                  on:keyup={() => handleVisualSelectionChange(idx)}
+                                  on:mouseup={() => captureVisualSelection(idx)}
+                                  on:keyup={() => captureVisualSelection(idx)}
                                 ></div>
                               {/if}
                               {#if blockIsActive && visualBlockViews[idx] === 'html'}
@@ -10288,11 +9357,7 @@
                                     spellcheck="false"
                                     value={block}
                                     bind:this={visualBlockHtmlInputs[idx]}
-                                    on:focus={() => {
-                                      visualActiveBlock = idx;
-                                      setVisualBlockHtmlHighlight(idx, visualBlockHtmlInputs[idx]?.value ?? block);
-                                    }}
-                                    on:blur={flushVisualHtmlInputWork}
+                                    on:focus={() => (visualActiveBlock = idx)}
                                     on:beforeinput={(event) => handleVisualHtmlBeforeInput(idx, event)}
                                     on:keydown={(event) => handleVisualHtmlKeydown(idx, event)}
                                     on:input={(event) => handleVisualHtmlInput(idx, event)}
@@ -12238,9 +11303,6 @@
   .app {
     min-height: 100vh;
     padding: 4px clamp(17px, 4vw, 41px) 41px;
-    width: 100%;
-    max-width: 100%;
-    overflow-x: hidden;
   }
 
   .app.app--ci-zag {
@@ -12260,8 +11322,6 @@
     padding-left: 4px;
     padding-right: 4px;
     height: 100vh;
-    width: 100%;
-    max-width: 100%;
     overflow: hidden;
   }
 
@@ -12278,33 +11338,6 @@
     overflow-x: hidden;
   }
 
-  .app.app--with-agent,
-  .app.app--with-agent > :not(.agent-sidebar),
-  .app.app--with-agent .workspace,
-  .app.app--with-agent .panel,
-  .app.app--with-agent .panel-header,
-  .app.app--with-agent .manage-card,
-  .app.app--with-agent .editor,
-  .app.app--with-agent .editor-header,
-  .app.app--with-agent .editor-body,
-  .app.app--with-agent .fields,
-  .app.app--with-agent .editor-columns,
-  .app.app--with-agent .editor-main,
-  .app.app--with-agent .preview,
-  .app.app--with-agent .visual-layout,
-  .app.app--with-agent .visual-edit-panel,
-  .app.app--with-agent .block-editors,
-  .app.app--with-agent .block-editor {
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .app.app--with-agent > .topbar,
-  .app.app--with-agent > .workspace,
-  .app.app--with-agent > .panel {
-    width: auto;
-  }
-
   .topbar {
     display: flex;
     justify-content: space-between;
@@ -12313,8 +11346,6 @@
     gap: 20px;
     margin-bottom: 4px;
     grid-column: 1 / -1;
-    min-width: 0;
-    max-width: 100%;
   }
 
   .app.app--with-agent .topbar {
@@ -12326,8 +11357,6 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    flex: 0 1 auto;
-    min-width: 0;
   }
 
   .brand-logo img {
@@ -12361,8 +11390,6 @@
     align-items: center;
     gap: 14px;
     flex-wrap: nowrap;
-    flex: 0 1 auto;
-    min-width: 0;
   }
 
   .status-user {
@@ -12371,25 +11398,17 @@
     flex-direction: column;
     justify-content: center;
     gap: 2px;
-    min-width: 0;
-    max-width: clamp(120px, 18vw, 260px);
   }
 
   .status .value {
     margin: 0;
     font-weight: 600;
     line-height: 1.1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .status .hint {
     margin: 0;
     line-height: 1.1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .settings-btn {
@@ -12684,14 +11703,6 @@
     margin-bottom: 0;
     flex: 1 1 360px;
     justify-content: center;
-    min-width: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-  }
-
-  .topbar-tabs::-webkit-scrollbar {
-    display: none;
   }
 
   .topbar-tabs .topbar-tab-btn {
@@ -12832,7 +11843,6 @@
     gap: 7px;
     margin-bottom: 14px;
     font-weight: 500;
-    min-width: 0;
   }
 
   input,
@@ -12873,8 +11883,6 @@
     background: #f8fafc;
     overflow: hidden;
     isolation: isolate;
-    min-width: 0;
-    max-width: 100%;
   }
 
   .code-highlight,
