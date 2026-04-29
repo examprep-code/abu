@@ -1,7 +1,7 @@
 <?php
 
-// Oeffentliche Liste aktueller Sheets (ohne Auth).
-// Optional gefiltert ueber Lernenden-Code.
+// Öffentliche Liste aktueller Sheets (ohne Auth).
+// Optional gefiltert über Lernenden-Code.
 
 function build_sheet_summary($content)
 {
@@ -165,9 +165,9 @@ function build_sheet_progress_map($rows, $learner)
         if ($qualityPercent === null) {
             $qualityLabel = $answered > 0 ? 'Noch ohne Bewertung' : ($total > 0 ? 'Nicht begonnen' : 'Keine Aufgaben');
         } elseif ($qualityPercent >= 75) {
-            $qualityLabel = 'Gut geloest';
+            $qualityLabel = 'Gut gelöst';
         } elseif ($qualityPercent >= 35) {
-            $qualityLabel = 'Teilweise geloest';
+            $qualityLabel = 'Teilweise gelöst';
         } else {
             $qualityLabel = 'Noch offen';
         }
@@ -194,7 +194,7 @@ if ($code !== '') {
     );
     if (!count($learner)) {
         $return['status'] = 401;
-        warning('code ungueltig');
+        warning('code ungültig');
         $return['data'] = ['sheet' => []];
         return;
     }

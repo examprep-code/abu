@@ -61,8 +61,12 @@
   };
 
   $: {
-    const total = (lueckeProgress?.total ?? 0) + (freitextProgress?.total ?? 0);
-    const answered = (lueckeProgress?.answered ?? 0) + (freitextProgress?.answered ?? 0);
+    const total =
+      (lueckeProgress?.total ?? 0) +
+      (freitextProgress?.total ?? 0);
+    const answered =
+      (lueckeProgress?.answered ?? 0) +
+      (freitextProgress?.answered ?? 0);
     progress = {
       total,
       answered,
@@ -264,7 +268,7 @@
       const cleaned = (codeInput || '').replace(/\s+/g, '');
       const validated = await validateLearner(cleaned);
       if (!validated) {
-        loginError = 'Code ungueltig.';
+        loginError = 'Code ungültig.';
         return;
       }
       persistLearner(validated);
@@ -357,7 +361,7 @@
             loginError = '';
           } else {
             persistLearner(null);
-            loginError = 'Code ungueltig.';
+            loginError = 'Code ungültig.';
           }
         } else if (hadPersonalParam) {
           const newUrl =
@@ -426,7 +430,12 @@
     }
 
     const signature = `${runtimeUser}::${runtimeClassroom ?? ''}::${assignmentForm}`;
-    if (lueckeRuntime && freitextRuntime && umfrageRuntime && lastRuntimeSignature === signature) {
+    if (
+      lueckeRuntime &&
+      freitextRuntime &&
+      umfrageRuntime &&
+      lastRuntimeSignature === signature
+    ) {
       await lueckeRuntime.refresh();
       await freitextRuntime.refresh();
       await umfrageRuntime.refresh();
@@ -578,17 +587,17 @@
             />
           </svg>
         </span>
-        Anonym geoeffnet. Antworten werden anonym gespeichert.
+        Anonym geöffnet. Antworten werden anonym gespeichert.
         {anonymousSessionCode
           ? ` Dein Session-Code: ${anonymousSessionCode} (lokal als Cookie gespeichert).`
           : ''}
       {:else if learner}
-        Persoenlich geoeffnet als {learner.name || 'Lernende:r'}
+        Persönlich geöffnet als {learner.name || 'Lernende:r'}
         {learner.code ? ` (${learner.code})` : ''}.
       {:else}
         Bitte einloggen, damit deine Antworten gespeichert werden.
       {/if}
-      Rueckmeldungen werden beim Klick auf ? erstellt; Umfrage-Antworten werden direkt bei Auswahl gespeichert.
+      Rückmeldungen werden beim Klick auf ? erstellt; Umfrage-Antworten werden direkt bei Auswahl gespeichert.
     </div>
   </footer>
 </div>
@@ -891,7 +900,17 @@
     gap: 2px;
   }
 
+  .sheet :global(.freitext__references-wrap) {
+    display: grid;
+    gap: 2px;
+  }
+
   .sheet :global(.freitext__premises) {
+    display: grid;
+    gap: 0;
+  }
+
+  .sheet :global(.freitext__references) {
     display: grid;
     gap: 0;
   }
@@ -907,7 +926,22 @@
     background: #fffdf8;
   }
 
+  .sheet :global(.freitext__reference) {
+    display: grid;
+    grid-template-columns: minmax(160px, 0.36fr) minmax(220px, 0.64fr);
+    gap: 7px;
+    align-items: start;
+    padding: 4px 6px;
+    border-radius: 0;
+    border: 1px solid #eadfd3;
+    background: #fffdf8;
+  }
+
   .sheet :global(.freitext__premise + .freitext__premise) {
+    border-top: 0;
+  }
+
+  .sheet :global(.freitext__reference + .freitext__reference) {
     border-top: 0;
   }
 
@@ -916,6 +950,39 @@
     font-weight: 700;
     color: #1c232f;
     overflow-wrap: anywhere;
+  }
+
+  .sheet :global(.freitext__reference-label) {
+    min-width: 0;
+    font-weight: 700;
+    color: #1c232f;
+    overflow-wrap: anywhere;
+  }
+
+  .sheet :global(.freitext__reference-body) {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    color: #5e554a;
+    font-size: 12px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+
+  .sheet :global(.freitext__reference-status) {
+    font-weight: 700;
+    color: #8a5a17;
+  }
+
+  .sheet :global(.freitext__reference--ready .freitext__reference-status) {
+    color: #166534;
+  }
+
+  .sheet :global(.freitext__lock-message) {
+    margin: -2px 0 0;
+    color: #8a5a17;
+    font-size: 12px;
+    font-weight: 700;
   }
 
   .sheet :global(.freitext__premise-hint) {
@@ -968,6 +1035,12 @@
   .sheet :global(.freitext__textarea:focus) {
     outline: 2px solid rgba(47, 143, 131, 0.18);
     border-color: #2f8f83;
+  }
+
+  .sheet :global(.freitext__textarea:disabled) {
+    cursor: not-allowed;
+    background: #f4eee5;
+    color: #7a6f62;
   }
 
   .sheet :global(.freitext__question) {
@@ -1032,6 +1105,10 @@
     display: none;
     font-size: 11px;
     color: #6f6a60;
+  }
+
+  .sheet :global(abu-block-prompt) {
+    display: none !important;
   }
 
   @media (max-width: 640px) {

@@ -336,12 +336,12 @@ const normalizeModelIntentKind = (value = '') => {
 };
 
 const mapPromptToTab = (normalizedPrompt = '') => {
-  if (/\b(sammlung|sammlungen|collection|collections|ordner|ordnern)\b/.test(normalizedPrompt)) {
+  if (/\b(material|sammlung|sammlungen|collection|collections|ordner|ordnern)\b/.test(normalizedPrompt)) {
     return 'collections';
   }
   if (/\b(klasse|klassen|class)\b/.test(normalizedPrompt)) return 'classes';
   if (/\b(schule|schulen|school|schools)\b/.test(normalizedPrompt)) return 'schools';
-  if (/\b(shop|braintrade|materialtausch|materialportal)\b/.test(normalizedPrompt)) {
+  if (/\b(bibliothek|library|shop|braintrade|materialtausch|materialportal)\b/.test(normalizedPrompt)) {
     return 'shop';
   }
   if (/\b(einstellung|einstellungen|settings|setup|konfiguration)\b/.test(normalizedPrompt)) {
@@ -635,7 +635,7 @@ const buildVisibleItemsMessage = (context: string, visibleItems: string[] = []) 
     collections: ['Sammlungen', 'Collection-Details'],
     classes: ['Klassenliste', 'Klassen-Details'],
     schools: ['Schulenliste', 'Schul-Details'],
-    shop: ['Shop-Katalog', 'Didaktische Filter'],
+    shop: ['Bibliothek', 'Didaktische Filter'],
     settings: ['CI-Einstellungen'],
     app: ['App-Navigation']
   };
@@ -673,7 +673,7 @@ export const describeAgentContext = (context: string) => {
   if (context === 'collections') return 'Kontext: Sammlungen';
   if (context === 'classes') return 'Kontext: Klassen';
   if (context === 'schools') return 'Kontext: Schulen';
-  if (context === 'shop') return 'Kontext: Shop';
+  if (context === 'shop') return 'Kontext: Bibliothek';
   if (context === 'settings') return 'Kontext: Einstellungen';
   return 'Kontext: App';
 };
@@ -704,7 +704,7 @@ const buildDataModelResponse = () => {
 
   return {
     status: 'Datenmodell bereit.',
-    message: `Entitaeten (${AGENT_DATA_MODEL.length}):\n${buildDataModelDigest(8)}\n\nAPI-Endpunkte (Auszug):\n${endpointsPreview}`
+    message: `Entitäten (${AGENT_DATA_MODEL.length}):\n${buildDataModelDigest(8)}\n\nAPI-Endpunkte (Auszug):\n${endpointsPreview}`
   };
 };
 
@@ -713,7 +713,7 @@ const buildRecipeResponse = (prompt: string) => {
   const recipeText = buildRecipeGuide(prompt);
   return {
     status: matches.length ? 'Passende Datenabfrage-Strategie gefunden.' : 'Allgemeine Datenabfrage-Strategie.',
-    message: `${recipeText}\n\nVerfuegbare Rezepte insgesamt: ${AGENT_QUERY_RECIPES.length}.`
+    message: `${recipeText}\n\nVerfügbare Rezepte insgesamt: ${AGENT_QUERY_RECIPES.length}.`
   };
 };
 
@@ -723,9 +723,9 @@ const runExerciseOverviewInsight = async (
 ): Promise<{ status: string; message: string }> => {
   if (!options.fetchAnswers) {
     return {
-      status: 'Analyse nicht verfuegbar.',
+      status: 'Analyse nicht verfügbar.',
       message:
-        'Antwortdaten-Fetcher fehlt. Fuer diese Analyse wird GET answer?sheet={key} benoetigt.'
+        'Antwortdaten-Fetcher fehlt. Für diese Analyse wird GET answer?sheet={key} benötigt.'
     };
   }
 
@@ -738,7 +738,7 @@ const runExerciseOverviewInsight = async (
   if (!loadedSheets.length) {
     return {
       status: 'Keine Sheets vorhanden.',
-      message: 'Es gibt keine Datenbasis fuer eine Uebungsanalyse.'
+      message: 'Es gibt keine Datenbasis für eine Übungsanalyse.'
     };
   }
 
@@ -826,7 +826,7 @@ const runExerciseOverviewInsight = async (
     return {
       status: 'Keine Antworten zur Analyse gefunden.',
       message:
-        'Die ausgewaehlten Sheets haben aktuell keine Antwortdaten. Pruefe, ob bereits Lernendenantworten vorliegen.'
+        'Die ausgewählten Sheets haben aktuell keine Antwortdaten. Prüfe, ob bereits Lernendenantworten vorliegen.'
     };
   }
 
@@ -845,10 +845,10 @@ const runExerciseOverviewInsight = async (
   );
 
   return {
-    status: 'Uebungsanalyse erstellt.',
+    status: 'Übungsanalyse erstellt.',
     message:
       `Ausgewertete Sheets: ${withAnswers.length}, Antworten gesamt: ${totalAnswers}, globaler Avg: ${globalAvg}/1000.` +
-      `${usedClassScopedAggregation ? '\nDatengrundlage: Klassenbezogene Antworten (eigene Klassen).' : '\nDatengrundlage: Sheet-Filter (global nach key).'}\n\nAuffaellige Sheets:\n${summaryLines.join('\n')}`
+      `${usedClassScopedAggregation ? '\nDatengrundlage: Klassenbezogene Antworten (eigene Klassen).' : '\nDatengrundlage: Sheet-Filter (global nach key).'}\n\nAuffällige Sheets:\n${summaryLines.join('\n')}`
   };
 };
 
@@ -865,9 +865,9 @@ const runAssignmentCompletionInsight = async (
     !options.fetchAnswers
   ) {
     return {
-      status: 'Fortschrittsanalyse nicht verfuegbar.',
+      status: 'Fortschrittsanalyse nicht verfügbar.',
       message:
-        'Fuer diese Analyse werden plan-, class-, learner- und answer-Loader benoetigt.'
+        'Für diese Analyse werden plan-, class-, learner- und answer-Loader benötigt.'
     };
   }
 
@@ -879,7 +879,7 @@ const runAssignmentCompletionInsight = async (
   if (!loadedSheets.length) {
     return {
       status: 'Keine Sheets vorhanden.',
-      message: 'Es gibt keine Arbeitsblaetter als Datenbasis.'
+      message: 'Es gibt keine Arbeitsblätter als Datenbasis.'
     };
   }
 
@@ -888,14 +888,14 @@ const runAssignmentCompletionInsight = async (
     return {
       status: 'Thema fehlt.',
       message:
-        'Bitte nenne das Thema (z.B. "EU"), damit ich passende zugewiesene Arbeitsblaetter analysieren kann.'
+        'Bitte nenne das Thema (z.B. "EU"), damit ich passende zugewiesene Arbeitsblätter analysieren kann.'
     };
   }
 
   const topicSheets = findSheetsByTopic(loadedSheets, topicHint, 24);
   if (!topicSheets.length) {
     return {
-      status: `Keine Arbeitsblaetter zu "${topicHint}" gefunden.`,
+      status: `Keine Arbeitsblätter zu "${topicHint}" gefunden.`,
       message: 'Ich kann nichts zuweisen/auswerten, solange kein passendes Sheet vorhanden ist.'
     };
   }
@@ -908,8 +908,8 @@ const runAssignmentCompletionInsight = async (
   }
   if (!sheetByKey.size) {
     return {
-      status: `Keine gueltigen Sheet-Keys zu "${topicHint}" gefunden.`,
-      message: 'Bitte pruefe, ob die passenden Sheets einen key besitzen.'
+      status: `Keine gültigen Sheet-Keys zu "${topicHint}" gefunden.`,
+      message: 'Bitte prüfe, ob die passenden Sheets einen key besitzen.'
     };
   }
 
@@ -1070,7 +1070,7 @@ const runAssignmentCompletionInsight = async (
     return {
       status: `Keine Zuweisungen zu "${topicHint}" gefunden.`,
       message:
-        'Es gibt zwar passende Sheets, aber keine aktiven Klassen-Zuweisungen (plan) fuer dieses Thema.'
+        'Es gibt zwar passende Sheets, aber keine aktiven Klassen-Zuweisungen (plan) für dieses Thema.'
     };
   }
 
@@ -1133,13 +1133,13 @@ const runAssignmentCompletionInsight = async (
     `Passende Sheets: ${progressList.length}\n` +
     `Zuweisungen (Lernenden-Slots): ${totalAssigned}\n` +
     `Fertig: ${totalCompleted}, begonnen: ${totalStarted}, offen: ${totalNotStarted}` +
-    `${overallCompletion === null ? '' : `\nGesamt-Korrektheitsgrad ueber bekannte Luecken: ${overallCompletion}%`}`;
+    `${overallCompletion === null ? '' : `\nGesamt-Korrektheitsgrad über bekannte Lücken: ${overallCompletion}%`}`;
 
   return {
-    status: `Fortschritt fuer "${topicHint}" ausgewertet.`,
+    status: `Fortschritt für "${topicHint}" ausgewertet.`,
     message:
       `${header}\n\nFortschritt pro Sheet:\n${sheetLines.join('\n')}` +
-      `${bottleneckLines.length ? `\n\nWo Lernende haengen bleiben:\n${bottleneckLines.join('\n')}` : ''}`
+      `${bottleneckLines.length ? `\n\nWo Lernende hängen bleiben:\n${bottleneckLines.join('\n')}` : ''}`
   };
 };
 
@@ -1154,9 +1154,9 @@ const runStrugglingLearnersInsight = async (
     !options.fetchAnswers
   ) {
     return {
-      status: 'Analyse nicht verfuegbar.',
+      status: 'Analyse nicht verfügbar.',
       message:
-        'Fuer diese Analyse werden Klassen-, Lernenden- und Antwort-Loader benoetigt (classroom/learner/answer).'
+        'Für diese Analyse werden Klassen-, Lernenden- und Antwort-Loader benötigt (classroom/learner/answer).'
     };
   }
 
@@ -1261,12 +1261,12 @@ const runStrugglingLearnersInsight = async (
   const lines = ranked.map((entry, index) => {
     const riskPercent = Math.round(entry.risk * 100);
     const weakPercent = Math.round((entry.weak / entry.total) * 100);
-    const last = entry.lastAt ? `, letzte Aktivitaet: ${entry.lastAt}` : '';
+    const last = entry.lastAt ? `, letzte Aktivität: ${entry.lastAt}` : '';
     return `${index + 1}. ${entry.learnerLabel} (${entry.classLabel}) - Risiko ${riskPercent}%, schwach ${entry.weak}/${entry.total} (${weakPercent}%)${last}`;
   });
 
   return {
-    status: 'Risikoprofil fuer Lernende erstellt.',
+    status: 'Risikoprofil für Lernende erstellt.',
     message: lines.join('\n')
   };
 };
@@ -1276,9 +1276,9 @@ const runOpenLargestClassByLearners = async (
 ): Promise<{ status: string; message: string }> => {
   if (!options.getClasses || !options.fetchClasses || !options.fetchLearnersByClass || !options.openClass) {
     return {
-      status: 'Klassenabfrage nicht verfuegbar.',
+      status: 'Klassenabfrage nicht verfügbar.',
       message:
-        'Fuer diese Aktion werden Klassen- und Lernenden-Loader plus Klassen-Navigation benoetigt.'
+        'Für diese Aktion werden Klassen- und Lernenden-Loader plus Klassen-Navigation benötigt.'
     };
   }
 
@@ -1326,7 +1326,7 @@ const runOpenLargestClassByLearners = async (
   if (!winner) {
     return {
       status: 'Keine Klasse ermittelbar.',
-      message: 'Es konnte keine Klasse fuer die Abfrage bestimmt werden.'
+      message: 'Es konnte keine Klasse für die Abfrage bestimmt werden.'
     };
   }
 
@@ -1346,7 +1346,7 @@ const runOpenLargestClassByLearners = async (
   }
 
   return {
-    status: `Klasse geoeffnet: ${formatClassLabel(winner.classEntry)}.`,
+    status: `Klasse geöffnet: ${formatClassLabel(winner.classEntry)}.`,
     message: `Lernendenzahl: ${winner.learnerCount}.\n\nRanking:\n${rankingText}`
   };
 };
@@ -1497,7 +1497,10 @@ export const resolveAgentNavigationIntent = async (
             ? 'classes'
             : intentTab === 'schools' || intentTab === 'schulen'
             ? 'schools'
-            : intentTab === 'shop' || intentTab === 'braintrade'
+            : intentTab === 'bibliothek' ||
+              intentTab === 'library' ||
+              intentTab === 'shop' ||
+              intentTab === 'braintrade'
             ? 'shop'
             : intentTab === 'settings' || intentTab === 'einstellungen'
             ? 'settings'
@@ -1645,7 +1648,7 @@ export const resolveAgentNavigationIntent = async (
     return done({
       handled: true,
       status: `Zu Inhalt gewechselt (${requestedView}).`,
-      message: options.getSelectedId() ? '' : 'Derzeit ist kein Sheet geoeffnet. Nenne ein Sheet zum Oeffnen.'
+      message: options.getSelectedId() ? '' : 'Derzeit ist kein Sheet geöffnet. Nenne ein Sheet zum Öffnen.'
     });
   }
 
@@ -1665,7 +1668,7 @@ export const resolveAgentNavigationIntent = async (
     }
     return done({
       handled: true,
-      status: `${sheets.length} Sheets verfuegbar.`,
+      status: `${sheets.length} Sheets verfügbar.`,
       message: `Ja, ich kann lokal in den Sheet-Titeln suchen.\n\nTitel:\n${buildSheetTitleListMessage(
         sheets,
         12
@@ -1701,7 +1704,7 @@ export const resolveAgentNavigationIntent = async (
       const emptySheets = findLikelyEmptySheets(sheets);
       nextMemory.lastSheetAuditIntent = 'empty';
       if (!emptySheets.length) {
-        sections.push('Keine klar leeren Arbeitsblaetter gefunden.');
+        sections.push('Keine klar leeren Arbeitsblätter gefunden.');
       } else {
         const lines = emptySheets.slice(0, 12).map((sheet, index) => {
           trackedIds.push(normalizeMemoryId(sheet.id));
@@ -1715,13 +1718,13 @@ export const resolveAgentNavigationIntent = async (
       const weakNameSheets = findSheetsWithWeakNames(sheets);
       nextMemory.lastSheetAuditIntent = 'name';
       if (!weakNameSheets.length) {
-        sections.push('Keine auffaelligen Namen gefunden.');
+        sections.push('Keine auffälligen Namen gefunden.');
       } else {
         const lines = weakNameSheets.slice(0, 12).map((entry, index) => {
           trackedIds.push(normalizeMemoryId(entry.sheet.id));
           return `${index + 1}. ${formatSheetLabel(entry.sheet)} (${entry.reason})`;
         });
-        sections.push(`Auffaellige Namen:\n${lines.join('\n')}`);
+        sections.push(`Auffällige Namen:\n${lines.join('\n')}`);
       }
     }
 
@@ -1755,8 +1758,8 @@ export const resolveAgentNavigationIntent = async (
         return done({
           handled: true,
           status: opened
-            ? `Sheet geoeffnet: ${formatSheetLabel(target)}.`
-            : 'Sheet konnte nicht geoeffnet werden.'
+            ? `Sheet geöffnet: ${formatSheetLabel(target)}.`
+            : 'Sheet konnte nicht geöffnet werden.'
         });
       }
     }
@@ -1769,7 +1772,7 @@ export const resolveAgentNavigationIntent = async (
       const opened = await options.openSheet(target);
       return done({
         handled: true,
-        status: opened ? `Sheet geoeffnet: ${formatSheetLabel(target)}.` : 'Sheet konnte nicht geoeffnet werden.'
+        status: opened ? `Sheet geöffnet: ${formatSheetLabel(target)}.` : 'Sheet konnte nicht geöffnet werden.'
       });
     }
 
@@ -1781,8 +1784,8 @@ export const resolveAgentNavigationIntent = async (
         return done({
           handled: true,
           status: opened
-            ? `Sheet geoeffnet: ${formatSheetLabel(target)}.`
-            : 'Sheet konnte nicht geoeffnet werden.'
+            ? `Sheet geöffnet: ${formatSheetLabel(target)}.`
+            : 'Sheet konnte nicht geöffnet werden.'
         });
       }
     }
@@ -1792,8 +1795,8 @@ export const resolveAgentNavigationIntent = async (
       if (asksForTopicSearch || asksForSheetListing || wantsOpen) {
         return done({
           handled: true,
-          status: 'Bitte Thema praezisieren (z.B. "europaeische union").',
-          message: sheets.length ? `Verfuegbare Titel:\n${buildSheetTitleListMessage(sheets, 8)}` : ''
+          status: 'Bitte Thema präzisieren (z.B. "europäische union").',
+          message: sheets.length ? `Verfügbare Titel:\n${buildSheetTitleListMessage(sheets, 8)}` : ''
         });
       }
       return done({ handled: false });
@@ -1806,7 +1809,7 @@ export const resolveAgentNavigationIntent = async (
     nextMemory.sheetMatchIds = matches.map((sheet) => normalizeMemoryId(sheet.id)).filter(Boolean);
 
     if (!matches.length) {
-      return done({ handled: true, status: `Keine Uebung zu "${resolvedTopic}" gefunden.` });
+      return done({ handled: true, status: `Keine Übung zu "${resolvedTopic}" gefunden.` });
     }
 
     if (wantsOpen) {
@@ -1814,7 +1817,7 @@ export const resolveAgentNavigationIntent = async (
       const opened = await options.openSheet(target);
       return done({
         handled: true,
-        status: opened ? `Sheet geoeffnet: ${formatSheetLabel(target)}.` : 'Sheet konnte nicht geoeffnet werden.',
+        status: opened ? `Sheet geöffnet: ${formatSheetLabel(target)}.` : 'Sheet konnte nicht geöffnet werden.',
         message:
           matches.length > 1
             ? `Weitere Treffer zu "${resolvedTopic}": ${matches
@@ -1867,9 +1870,9 @@ export const resolveAgentNavigationIntent = async (
             : nextTab === 'schools'
             ? 'Schulen'
             : nextTab === 'shop'
-            ? 'Shop'
+            ? 'Bibliothek'
             : 'Einstellungen';
-        return done({ handled: true, status: `Navigation ausgefuehrt: ${tabLabel}.` });
+        return done({ handled: true, status: `Navigation ausgeführt: ${tabLabel}.` });
       }
       return done({ handled: true, status: 'Navigation abgebrochen.' });
     }

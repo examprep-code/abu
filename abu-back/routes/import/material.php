@@ -70,7 +70,7 @@ foreach ($files as $file) {
     if ($tmp === '' || !is_uploaded_file($tmp)) {
         $errors[] = [
             'file' => $originalName,
-            'error' => 'Upload tmp_name ungueltig.',
+            'error' => 'Upload tmp_name ungültig.',
         ];
         continue;
     }
@@ -126,16 +126,16 @@ foreach ($files as $file) {
     }
 
     $system = implode(' ', [
-        'Du bist ein Assistent, der Unterrichtsmaterial in ABU-Arbeitsblaetter (HTML) umwandelt.',
+        'Du bist ein Assistent, der Unterrichtsmaterial in ABU-Arbeitsblätter (HTML) umwandelt.',
         'Antworte AUSSCHLIESSLICH als JSON (kein Markdown, keine Code-Fences) mit den Feldern:',
         '"name" (string), "content_html" (string), "prompt" (string, optional), "stats" (object, optional).',
         'content_html ist ein HTML-Fragment (ohne <html>/<body>) mit normalen Tags (h2,p,ul,li,table).',
-        'Erzeuge Luecken mit <luecke-gap>LOESUNG</luecke-gap>. Fuer volle Breite: <luecke-gap width="100%">LOESUNG</luecke-gap>.',
-        'Die Loesung steht im TextContent des Tags (nicht als Attribut). Kein Script, kein CSS.',
-        'Mindestens 8 und maximal 20 Luecken. Schreibe auf Deutsch.',
+        'Erzeuge Lücken mit <luecke-gap>LOESUNG</luecke-gap>. Für volle Breite: <luecke-gap width="100%">LOESUNG</luecke-gap>.',
+        'Die Lösung steht im TextContent des Tags (nicht als Attribut). Kein Script, kein CSS.',
+        'Mindestens 8 und maximal 20 Lücken. Schreibe auf Deutsch.',
     ]);
 
-    $userMsg = "Bitte erstelle aus diesem Material ein Arbeitsblatt mit Luecken (ABU-tauglich).\n" .
+    $userMsg = "Bitte erstelle aus diesem Material ein Arbeitsblatt mit Lücken (ABU-tauglich).\n" .
         "Datei: " . $originalName . "\n" .
         ($truncated ? "Hinweis: Text wurde serverseitig gekuerzt.\n" : '') .
         ($warn !== '' ? "Hinweis: Extraktion: " . $warn . "\n" : '') .

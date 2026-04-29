@@ -6,6 +6,7 @@ $m['classroom_sheet']=[
     'sheet_key' => ['word'],
     'assignment_form' => ['word'],
     'status' => ['word'],
+    'prompt' => ['text'],
     'created_at' => ['timestamp'],
     'updated_at' => ['timestamp'],
 ];

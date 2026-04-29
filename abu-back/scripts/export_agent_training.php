@@ -58,7 +58,7 @@ $lineCount = 0;
 $openAiHandle = fopen($openAiOut, 'wb');
 $ragHandle = fopen($ragOut, 'wb');
 if ($openAiHandle === false || $ragHandle === false) {
-    fwrite(STDERR, "Konnte Output-Dateien nicht oeffnen.\n");
+    fwrite(STDERR, "Konnte Output-Dateien nicht öffnen.\n");
     exit(1);
 }
 

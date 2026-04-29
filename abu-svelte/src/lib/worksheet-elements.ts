@@ -3,7 +3,6 @@ export type WorksheetElementId =
   | 'titel'
   | 'luecke'
   | 'freitext'
-  | 'antworttext'
   | 'umfrage';
 
 export type WorksheetElementType = {
@@ -28,19 +27,20 @@ export type WorksheetBlockTemplate = {
   view: 'html' | 'visual';
 };
 
-export const WORKSHEET_ELEMENT_TYPES: WorksheetElementType[] = [
-  {
-    id: 'html',
-    label: 'HTML-Block',
-    shortLabel: 'HTML',
-    meta: 'Quelltext',
-    icon: {
-      viewBox: '0 0 24 24',
-      paths: ['M8 9l-4 3 4 3', 'M16 9l4 3-4 3', 'M14 5l-4 14']
-    },
-    defaultView: 'html',
-    blockLevel: true
+const HTML_ELEMENT_TYPE: WorksheetElementType = {
+  id: 'html',
+  label: 'HTML',
+  shortLabel: 'HTML Block',
+  meta: 'Externes HTML',
+  icon: {
+    viewBox: '0 0 24 24',
+    paths: ['M8 9l-4 3 4 3', 'M16 9l4 3-4 3', 'M14 5l-4 14']
   },
+  defaultView: 'visual',
+  blockLevel: true
+};
+
+export const WORKSHEET_ELEMENT_TYPES: WorksheetElementType[] = [
   {
     id: 'titel',
     label: 'Titel',
@@ -56,8 +56,8 @@ export const WORKSHEET_ELEMENT_TYPES: WorksheetElementType[] = [
   },
   {
     id: 'luecke',
-    label: 'Luecke',
-    shortLabel: 'Luecke',
+    label: 'Lücke',
+    shortLabel: 'Lücke',
     meta: 'Inline-Antwort',
     icon: {
       viewBox: '0 0 24 24',
@@ -76,22 +76,9 @@ export const WORKSHEET_ELEMENT_TYPES: WorksheetElementType[] = [
       viewBox: '0 0 24 24',
       paths: ['M6 3h9l3 3v15H6z', 'M15 3v4h4', 'M9 11h6', 'M9 15h6', 'M9 18h4']
     },
-    defaultView: 'html',
+    defaultView: 'visual',
     blockLevel: true,
     pattern: /<\s*freitext-block\b/i
-  },
-  {
-    id: 'antworttext',
-    label: 'Antworttext',
-    shortLabel: 'Antworttext',
-    meta: 'Textarea (pruefbar)',
-    icon: {
-      viewBox: '0 0 24 24',
-      paths: ['M5 5h14v10H9l-4 4z', 'M8 9h8', 'M8 12h6']
-    },
-    defaultView: 'html',
-    blockLevel: true,
-    pattern: /<\s*antworttext-block\b/i
   },
   {
     id: 'umfrage',
@@ -135,22 +122,27 @@ export const BLOCK_LEVEL_TAG_NAMES = [
   'footer',
   'nav',
   'umfrage-matrix',
-  'freitext-block',
-  'antworttext-block'
+  'freitext-block'
 ];
 
-export const BLOCK_TEMPLATE_DEFINITIONS: WorksheetBlockTemplate[] = WORKSHEET_ELEMENT_TYPES.filter(
+export const BLOCK_TEMPLATE_DEFINITIONS: WorksheetBlockTemplate[] = [
+  ...WORKSHEET_ELEMENT_TYPES.filter((type) => type.id === 'titel'),
+  HTML_ELEMENT_TYPE,
+  ...WORKSHEET_ELEMENT_TYPES.filter((type) => type.id !== 'titel')
+].filter(
   (type) => type.id !== 'luecke'
 ).map((type) => ({
   id: type.id as WorksheetBlockTemplate['id'],
   label: type.label,
   meta: type.meta,
   icon: type.icon,
-  view: type.defaultView
+  view: type.id === 'html' ? 'html' : type.defaultView
 }));
 
 export const getWorksheetElementType = (id: string): WorksheetElementType =>
-  WORKSHEET_ELEMENT_TYPES.find((type) => type.id === id) ?? WORKSHEET_ELEMENT_TYPES[0];
+  id === 'html'
+    ? HTML_ELEMENT_TYPE
+    : WORKSHEET_ELEMENT_TYPES.find((type) => type.id === id) ?? HTML_ELEMENT_TYPE;
 
 export const detectWorksheetBlockType = (html = ''): WorksheetElementType => {
   const value = String(html || '');

@@ -1,4 +1,5 @@
 import { createSyncIconElement, ensureSyncIconElement } from '$lib/components/icons/sync-icon';
+import { logAiError, logAiRequest, logAiResponse } from '../ai-console';
 
 export type UmfrageRuntimeOptions = {
   root: HTMLElement;
@@ -200,8 +201,10 @@ async function sendAnswerToBackend(
   apiBaseUrl: string,
   payload: Record<string, string>
 ): Promise<{ ok: boolean; warning?: string }> {
+  const endpoint = `${apiBaseUrl}answer`;
+  logAiRequest(endpoint, payload);
   try {
-    const response = await fetch(`${apiBaseUrl}answer`, {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -221,13 +224,17 @@ async function sendAnswerToBackend(
         (parsed.data && parsed.data.chatgpt && parsed.data.chatgpt.error) ||
         parsed.error ||
         `Fehler im Backend (${response.status})`;
+      logAiResponse(endpoint, payload, response.status, parsed);
       return { ok: false, warning: String(warning) };
     }
     if (parsed.warning) {
+      logAiResponse(endpoint, payload, response.status, parsed);
       return { ok: false, warning: String(parsed.warning) };
     }
+    logAiResponse(endpoint, payload, response.status, parsed);
     return { ok: true };
-  } catch {
+  } catch (err) {
+    logAiError(endpoint, payload, err);
     return { ok: false, warning: 'Antwort konnte nicht gespeichert werden.' };
   }
 }
@@ -529,7 +536,7 @@ export function ensureUmfrageElements(): void {
       insertBtn.type = 'button';
       insertBtn.className = 'umfrage-matrix__statement-insert-btn';
       insertBtn.textContent = '+';
-      insertBtn.setAttribute('aria-label', 'Aussage einfuegen');
+      insertBtn.setAttribute('aria-label', 'Aussage einfügen');
       insertBtn.addEventListener('click', () => this.insertStatementAt(insertIndex));
 
       insertCell.appendChild(insertBtn);
@@ -603,7 +610,7 @@ export function ensureUmfrageElements(): void {
             addBeforeBtn.className =
               'umfrage-matrix__scale-btn umfrage-matrix__scale-btn--add umfrage-matrix__scale-btn--insert umfrage-matrix__scale-btn--insert-left';
             addBeforeBtn.textContent = '+';
-            addBeforeBtn.setAttribute('aria-label', 'Kategorie links einfuegen');
+            addBeforeBtn.setAttribute('aria-label', 'Kategorie links einfügen');
             addBeforeBtn.addEventListener('click', () => this.insertScaleAt(index));
             controls.appendChild(addBeforeBtn);
 
@@ -626,7 +633,7 @@ export function ensureUmfrageElements(): void {
               addAfterBtn.className =
                 'umfrage-matrix__scale-btn umfrage-matrix__scale-btn--add umfrage-matrix__scale-btn--insert umfrage-matrix__scale-btn--insert-right';
               addAfterBtn.textContent = '+';
-              addAfterBtn.setAttribute('aria-label', 'Kategorie rechts einfuegen');
+              addAfterBtn.setAttribute('aria-label', 'Kategorie rechts einfügen');
               addAfterBtn.addEventListener('click', () => this.insertScaleAt(index + 1));
               controls.appendChild(addAfterBtn);
             }
@@ -670,7 +677,7 @@ export function ensureUmfrageElements(): void {
         addBtn.type = 'button';
         addBtn.className = 'umfrage-matrix__scale-btn umfrage-matrix__scale-btn--add';
         addBtn.textContent = '+';
-        addBtn.setAttribute('aria-label', 'Kategorie einfuegen');
+        addBtn.setAttribute('aria-label', 'Kategorie einfügen');
         addBtn.addEventListener('click', () => this.insertScaleAt(0));
         th.appendChild(addBtn);
         headRow.appendChild(th);

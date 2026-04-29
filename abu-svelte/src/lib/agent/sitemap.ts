@@ -19,7 +19,7 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     route: '/',
     area: 'public',
     kind: 'page',
-    description: 'Login fuer Lehrpersonen/Admins.',
+    description: 'Login für Lehrpersonen/Admins.',
     shows: ['Email', 'Passwort', 'Login-Status'],
     editable: [],
     actions: ['Einloggen', 'Zur Registrierung wechseln'],
@@ -29,13 +29,13 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
   {
     id: 'admin.editor.list',
     label: 'Inhalt / Sheet-Liste',
-    route: '/ (Tab: editor, ohne geoeffnetes Sheet)',
+    route: '/ (Tab: editor, ohne geöffnetes Sheet)',
     area: 'admin',
     kind: 'tab',
     description: 'Liste aller aktuellen Sheets mit Suche/Sortierung.',
     shows: ['Sheet-Liste', 'Filter', 'Sortierung'],
-    editable: ['Sheet erstellen', 'Sheet loeschen'],
-    actions: ['Sheet auswaehlen', 'Neues Sheet'],
+    editable: ['Sheet erstellen', 'Sheet löschen'],
+    actions: ['Sheet auswählen', 'Neues Sheet'],
     apiCalls: ['GET sheet', 'POST sheet', 'DELETE sheet'],
     keywords: ['inhalt', 'sheet liste', 'arbeitsblatt liste', 'sheets']
   },
@@ -59,9 +59,9 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     area: 'admin',
     kind: 'view',
     description: 'Block-basierte visuelle Bearbeitung eines Sheets.',
-    shows: ['Bloecke', 'Format-Werkzeuge', 'Block-Ansicht'],
-    editable: ['Bloecke', 'Block-Reihenfolge', 'Inline-Inhalte'],
-    actions: ['Block einfuegen', 'Block loeschen', 'Zwischen HTML/Visual wechseln'],
+    shows: ['Blöcke', 'Format-Werkzeuge', 'Block-Ansicht'],
+    editable: ['Blöcke', 'Block-Reihenfolge', 'Inline-Inhalte'],
+    actions: ['Block einfügen', 'Block löschen', 'Zwischen HTML/Visual wechseln'],
     apiCalls: ['PATCH sheet'],
     keywords: ['visuell', 'block', 'visual', 'formatieren']
   },
@@ -84,7 +84,7 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     route: '/ (Tab: editor, View: answers)',
     area: 'admin',
     kind: 'view',
-    description: 'Aggregierte Antworten und Klassifizierung pro Luecke.',
+    description: 'Aggregierte Antworten und Klassifizierung pro Lücke.',
     shows: ['Antworten pro Gap', 'Klassenfilter', 'Lernendenfilter'],
     editable: ['Klassifizierung (RICHTIG/TEILWEISE/FALSCH)'],
     actions: ['Antworten filtern', 'Antworten aktualisieren'],
@@ -93,14 +93,14 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
   },
   {
     id: 'admin.classes.overview',
-    label: 'Klassen / Uebersicht',
-    route: '/ (Tab: classes, ohne Klasse ausgewaehlt)',
+    label: 'Klassen / Übersicht',
+    route: '/ (Tab: classes, ohne Klasse ausgewählt)',
     area: 'admin',
     kind: 'tab',
-    description: 'Uebersicht aller Klassen.',
+    description: 'Übersicht aller Klassen.',
     shows: ['Klassenliste', 'Sortierung'],
-    editable: ['Klasse erstellen', 'Klasse loeschen'],
-    actions: ['Klasse oeffnen', 'Zuordnungen oeffnen', 'Lernende oeffnen'],
+    editable: ['Klasse erstellen', 'Klasse löschen'],
+    actions: ['Klasse öffnen', 'Zuordnungen öffnen', 'Lernende öffnen'],
     apiCalls: ['GET classroom', 'POST classroom', 'DELETE classroom'],
     keywords: ['klassen', 'klasse', 'classroom', 'unterricht']
   },
@@ -125,10 +125,10 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     kind: 'view',
     description: 'Lernende einer Klasse verwalten.',
     shows: ['Lernendenliste', 'Codes', 'Notizen'],
-    editable: ['Lernende anlegen', 'Lernende bearbeiten', 'Lernende loeschen'],
+    editable: ['Lernende anlegen', 'Lernende bearbeiten', 'Lernende löschen'],
     actions: ['Lernende aktualisieren', 'Neue Lernende'],
     apiCalls: ['GET learner?classroom=...', 'POST learner', 'PATCH learner', 'DELETE learner'],
-    keywords: ['lernende', 'schueler', 'studenten', 'codes']
+    keywords: ['lernende', 'schüler', 'studenten', 'codes']
   },
   {
     id: 'admin.classes.assignments',
@@ -141,25 +141,25 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     editable: ['Zuordnung aktiv/freiwillig/vergangen/archiviert', 'personal/anonym'],
     actions: ['Zuordnung setzen', 'Zuordnung entfernen'],
     apiCalls: ['GET plan?classroom=...', 'POST plan', 'PATCH plan', 'DELETE plan', 'GET sheet'],
-    keywords: ['zuordnung', 'arbeitsblaetter zuweisen', 'plan', 'assignment']
+    keywords: ['zuordnung', 'arbeitsblätter zuweisen', 'plan', 'assignment']
   },
   {
     id: 'admin.schools.overview',
-    label: 'Schulen / Uebersicht',
-    route: '/ (Tab: schools, ohne Schule ausgewaehlt)',
+    label: 'Schulen / Übersicht',
+    route: '/ (Tab: schools, ohne Schule ausgewählt)',
     area: 'admin',
     kind: 'tab',
     description: 'Schulenliste und Schule anlegen.',
     shows: ['Schulenliste', 'CI-Status'],
-    editable: ['Schule erstellen', 'Schule loeschen'],
-    actions: ['Schule auswaehlen'],
+    editable: ['Schule erstellen', 'Schule löschen'],
+    actions: ['Schule auswählen'],
     apiCalls: ['GET school', 'POST school', 'DELETE school'],
     keywords: ['schule', 'schulen', 'ci', 'branding']
   },
   {
     id: 'admin.schools.edit',
     label: 'Schulen / Bearbeiten',
-    route: '/ (Tab: schools, Schule ausgewaehlt)',
+    route: '/ (Tab: schools, Schule ausgewählt)',
     area: 'admin',
     kind: 'view',
     description: 'Name und CI CSS einer Schule bearbeiten.',
@@ -171,16 +171,16 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
   },
   {
     id: 'admin.shop.overview',
-    label: 'Shop / Braintrade',
+    label: 'Bibliothek / Braintrade',
     route: '/ (Tab: shop)',
     area: 'admin',
     kind: 'tab',
-    description: 'Mockup eines ABU Materialshops auf Basis bestehender Sheets.',
-    shows: ['Shop-Karten', 'Didaktische Filter', 'Preis- und Lizenzmodelle'],
+    description: 'Bibliotheksansicht für ABU Materialpakete auf Basis bestehender Sheets.',
+    shows: ['Bibliotheks-Karten', 'Didaktische Filter', 'Preis- und Lizenzmodelle'],
     editable: [],
-    actions: ['Nach Material filtern', 'Preview oeffnen', 'Sheet im Editor oeffnen'],
+    actions: ['Nach Material filtern', 'Preview öffnen', 'Sheet im Editor öffnen'],
     apiCalls: ['GET sheet'],
-    keywords: ['shop', 'braintrade', 'materialtausch', 'materialportal', 'katalog']
+    keywords: ['bibliothek', 'shop', 'braintrade', 'materialtausch', 'materialportal', 'katalog']
   },
   {
     id: 'admin.settings.ci',
@@ -188,7 +188,7 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     route: '/ (Tab: settings)',
     area: 'admin',
     kind: 'tab',
-    description: 'Aktive CI fuer die Admin-Ansicht waehlen.',
+    description: 'Aktive CI für die Admin-Ansicht wählen.',
     shows: ['Aktive CI', 'CI-Selector'],
     editable: ['Auswahl aktive CI'],
     actions: ['CI wechseln'],
@@ -202,9 +202,9 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     area: 'learner',
     kind: 'page',
     description: 'Login mit 12-stelligem Lernenden-Code.',
-    shows: ['Logincode Feld', 'Persoenliche Sheet-Liste'],
+    shows: ['Logincode Feld', 'Persönliche Sheet-Liste'],
     editable: [],
-    actions: ['Einloggen', 'Sheet oeffnen'],
+    actions: ['Einloggen', 'Sheet öffnen'],
     apiCalls: ['POST learner-login', 'GET sheet/public-list?code=...'],
     keywords: ['lernenden login', 'code login', 'lernende portal']
   },
@@ -216,10 +216,10 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     kind: 'page',
     description: 'Bearbeitung eines konkreten Sheets durch Lernende.',
     shows: ['Sheet Inhalt', 'Fortschritt', 'Antwortfelder'],
-    editable: ['Antworten in luecke/umfrage'],
+    editable: ['Antworten in Lücke/Umfrage'],
     actions: ['Antworten speichern'],
     apiCalls: ['GET sheet/public?key=...&classroom=...', 'POST answer', 'PUT answer'],
-    keywords: ['sheet bearbeiten', 'luecken ausfuellen', 'lernenden ansicht']
+    keywords: ['sheet bearbeiten', 'lücken ausfüllen', 'lernenden ansicht']
   },
   {
     id: 'review.sheet',
@@ -228,7 +228,7 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     area: 'admin',
     kind: 'page',
     description: 'Review einer Sheet-Antwortlage, optional je Klasse.',
-    shows: ['Antwortsummen je Luecke', 'Klassenfilter'],
+    shows: ['Antwortsummen je Lücke', 'Klassenfilter'],
     editable: ['Klassifizierung einzelner Antworten'],
     actions: ['Klasse filtern', 'Klassifizierung setzen'],
     apiCalls: ['GET sheet/public', 'GET answer', 'GET classroom', 'GET plan?sheet_key=...', 'PUT answer'],
@@ -240,7 +240,7 @@ export const AGENT_SITEMAP: AgentSitemapNode[] = [
     route: '/register',
     area: 'public',
     kind: 'page',
-    description: 'Account-Erstellung fuer Lehrpersonen/Admins.',
+    description: 'Account-Erstellung für Lehrpersonen/Admins.',
     shows: ['Email', 'Passwort'],
     editable: ['Registrierungsdaten'],
     actions: ['Registrieren'],
@@ -296,7 +296,7 @@ export const findSitemapMatches = (prompt: string, limit = 6) =>
     .map((entry) => entry.node);
 
 export const buildSitemapDigest = (nodes: AgentSitemapNode[] = AGENT_SITEMAP, limit = 14) => {
-  if (!nodes.length) return 'Keine Sitemap-Eintraege verfuegbar.';
+  if (!nodes.length) return 'Keine Sitemap-Einträge verfügbar.';
   return nodes
     .slice(0, limit)
     .map((node, index) => `${index + 1}. ${node.label} (${node.route}) - ${node.description}`)

@@ -1,3 +1,5 @@
+import { logAiError, logAiRequest, logAiResponse } from '../ai-console';
+
 export type LueckeProgress = {
   percent: number;
   answered: number;
@@ -42,9 +44,9 @@ const STOPWORTER_DE = new Set([
   'von',
   'zu',
   'mit',
-  'fuer',
+  'für',
   'auf',
-  'ueber',
+  'über',
   'unter',
   'nach',
   'bei',
@@ -135,6 +137,38 @@ function classificationInfo(value: unknown, labelHint?: string | null): {
   return { score, label };
 }
 
+function parseStoredLueckeValue(rawValue: unknown): {
+  answer: string;
+  sourceContext: Record<string, any> | null;
+} {
+  const raw = String(rawValue || '');
+  if (!raw.trim().startsWith('{')) {
+    return { answer: raw, sourceContext: null };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return { answer: raw, sourceContext: null };
+    }
+
+    const answer =
+      typeof parsed.answer === 'string'
+        ? parsed.answer
+        : typeof parsed.text === 'string'
+        ? parsed.text
+        : raw;
+    const sourceContext =
+      parsed.source_context && typeof parsed.source_context === 'object'
+        ? (parsed.source_context as Record<string, any>)
+        : null;
+
+    return { answer, sourceContext };
+  } catch {
+    return { answer: raw, sourceContext: null };
+  }
+}
+
 function buildLueckentext(root: HTMLElement): string {
   const blocks = Array.from(root.querySelectorAll('p, li'));
   const elements = blocks.length ? blocks : [root];
@@ -179,8 +213,10 @@ async function sendAnswerToBackend(
   apiBaseUrl: string,
   payload: Record<string, string>
 ): Promise<Record<string, any>> {
+  const endpoint = `${apiBaseUrl}answer`;
+  logAiRequest(endpoint, payload);
   try {
-    const resp = await fetch(`${apiBaseUrl}answer`, {
+    const resp = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -200,11 +236,14 @@ async function sendAnswerToBackend(
         parsed.warning ||
         (parsed.data && parsed.data.chatgpt && parsed.data.chatgpt.error) ||
         parsed.error;
+      logAiResponse(endpoint, payload, resp.status, parsed);
       return { error: warn || `Fehler im Backend (${resp.status})` };
     }
 
+    logAiResponse(endpoint, payload, resp.status, parsed);
     return parsed;
   } catch (err) {
+    logAiError(endpoint, payload, err);
     return { error: 'Antwort konnte nicht an das Backend gesendet werden.' };
   }
 }
@@ -334,7 +373,20 @@ export function ensureLueckeElements(): void {
 
   const upgraded = new WeakSet<HTMLElement>();
   const isVisualEditorGap = (el: HTMLElement) =>
-    Boolean(el.closest('.block-editor__visual[contenteditable="true"]'));
+    Boolean(el.closest('.block-editor__visual'));
+  const applyVisualEditorGapWidth = (el: HTMLElement) => {
+    const widthAttr = (el.getAttribute('width') || '').trim();
+    el.style.removeProperty('min-width');
+    el.style.removeProperty('width');
+    el.style.removeProperty('justify-content');
+    if (!widthAttr) return;
+    if (widthAttr === '100%') {
+      el.style.width = widthAttr;
+      return;
+    }
+    el.style.minWidth = widthAttr;
+    el.style.justifyContent = 'center';
+  };
 
   class LueckeGap extends HTMLElement {
     connectedCallback() {
@@ -347,11 +399,14 @@ export function ensureLueckeElements(): void {
       // Clean up legacy editor artifacts (this attribute used to be written by older versions).
       this.removeAttribute('data-upgraded');
 
-      // In the visual editor we want to keep the original markup (<luecke-gap prompt>Loesung</luecke-gap>)
+      // In the visual editor we want to keep the original markup (<luecke-gap prompt>Lösung</luecke-gap>)
       // so it can be edited/serialized without injecting runtime inputs/buttons.
       if (isVisualEditorGap(this)) {
+        this.setAttribute('contenteditable', 'false');
+        applyVisualEditorGapWidth(this);
         return;
       }
+      this.removeAttribute('contenteditable');
 
       if (upgraded.has(this)) return;
       upgraded.add(this);
@@ -360,6 +415,11 @@ export function ensureLueckeElements(): void {
       const solutionSource = existingInput?.dataset?.solution;
       const solutionText = (solutionSource || this.textContent || '').trim();
       const acceptedExtra = this.getAttribute('data-accepted') || '';
+      const promptText = (
+        this.getAttribute('prompt') ||
+        this.getAttribute('data-prompt') ||
+        ''
+      ).trim();
       const widthAttr = (this.getAttribute('width') || '').trim();
 
       this.innerHTML = '';
@@ -369,6 +429,9 @@ export function ensureLueckeElements(): void {
       input.className = 'luecke';
       input.name = nameAttr;
       input.dataset.solution = solutionText;
+      if (promptText) {
+        input.dataset.prompt = promptText;
+      }
       if (widthAttr) {
         input.style.width = widthAttr;
       }
@@ -380,7 +443,7 @@ export function ensureLueckeElements(): void {
       button.type = 'button';
       button.className = 'check-btn ci-btn-primary';
       button.setAttribute('data-target', nameAttr);
-      button.setAttribute('aria-label', 'Antwort pruefen');
+      button.setAttribute('aria-label', 'Antwort prüfen');
 
       input.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter') return;
@@ -442,10 +505,17 @@ async function prefillAnswers(options: LueckeRuntimeOptions): Promise<void> {
       ) as HTMLInputElement | undefined;
       if (!input) return;
 
+      const stored = parseStoredLueckeValue(entry.value || '');
+
       if (!input.value) {
-        input.value = entry.value || '';
+        input.value = stored.answer || '';
       }
       input.title = input.value || '';
+      if (stored.sourceContext) {
+        input.dataset.sourceContext = JSON.stringify(stored.sourceContext);
+      } else {
+        delete input.dataset.sourceContext;
+      }
 
       const { label } = classificationInfo(entry.classification, entry.classification_label);
       const button = input.parentElement?.querySelector('.check-btn') as HTMLButtonElement | null;
@@ -478,18 +548,19 @@ async function checkGap(
   if (!answer) {
     notifySaveState(options, 'error', 'Bitte zuerst eine Antwort eingeben.');
     setClasses(input, button, feedback, null);
-    showFeedback(feedback, 'Bitte zuerst eine Antwort in die Luecke schreiben.');
+    showFeedback(feedback, 'Bitte zuerst eine Antwort in die Lücke schreiben.');
     button.dataset.lueckeBusy = '';
     return;
   }
 
   feedback.classList.remove('feedback--richtig', 'feedback--teilweise', 'feedback--falsch');
-  showFeedback(feedback, 'Ueberpruefung laeuft...');
+  showFeedback(feedback, 'Überprüfung läuft...');
   button.classList.add('check-btn--loading');
   button.disabled = true;
 
   const lueckentext = buildLueckentext(options.root);
   const musterloesung = input.dataset.solution || '';
+  const prompt = input.dataset.prompt || '';
 
   const backendResponse = await sendAnswerToBackend(options.apiBaseUrl, {
     key: input.name,
@@ -498,7 +569,8 @@ async function checkGap(
     value: answer,
     ...(options.classroom ? { classroom: String(options.classroom) } : {}),
     lueckentext,
-    musterloesung
+    musterloesung,
+    prompt
   });
 
   const backendError = (backendResponse && (backendResponse.error || backendResponse.warning)) || null;
@@ -514,10 +586,14 @@ async function checkGap(
 
   const chatgpt = backendResponse?.data?.chatgpt;
   const chatgptError = chatgpt && chatgpt.error ? String(chatgpt.error) : '';
+  const sourceContext =
+    chatgpt?.source_context && typeof chatgpt.source_context === 'object'
+      ? (chatgpt.source_context as Record<string, any>)
+      : null;
 
   const rawText =
     (chatgpt && (chatgpt.raw || chatgpt.explanation)) ||
-    (chatgptError ? chatgptError : 'Keine Rueckmeldung erhalten.');
+    (chatgptError ? chatgptError : 'Keine Rückmeldung erhalten.');
   const info = classificationInfo(chatgpt?.classification, chatgpt?.classification_label);
   let label = info.label;
   let explanation = chatgpt?.explanation || rawText;
@@ -548,11 +624,31 @@ async function checkGap(
   }
 
   input.title = answer;
+  if (sourceContext) {
+    input.dataset.sourceContext = JSON.stringify(sourceContext);
+  } else {
+    delete input.dataset.sourceContext;
+  }
   showFeedback(feedback, explanation);
 
   setClasses(input, button, feedback, label);
+  button.disabled = false;
   updateProgress(options.root, options.onProgress);
   notifySaveState(options, 'saved');
+  options.root.dispatchEvent(
+    new CustomEvent('abu-answer-saved', {
+      bubbles: true,
+      detail: {
+        key: input.name,
+        sheet: options.sheetKey,
+        user: options.user,
+        classification: label === 'RICHTIG' ? 1000 : label === 'TEILWEISE' ? 500 : label === 'FALSCH' ? 0 : null,
+        classification_label: label,
+        value: answer,
+        source_context: sourceContext
+      }
+    })
+  );
   button.dataset.lueckeBusy = '';
 }
 

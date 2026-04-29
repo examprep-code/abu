@@ -35,26 +35,26 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
     label: 'User',
     description: 'Lehrperson/Admin mit Login-Token.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
       { name: 'role', type: 'int', description: '0=warte Aktivierung, 1=normal, 3=admin' },
       { name: 'email', type: 'varchar', description: 'Login-Email' },
       { name: 'password', type: 'varchar(hash)', description: 'Gehashtes Passwort' },
       { name: 'token', type: 'varchar', description: 'Aktiver API-Token' },
-      { name: 'valid_until', type: 'datetime', description: 'Token-Gueltigkeit' }
+      { name: 'valid_until', type: 'datetime', description: 'Token-Gültigkeit' }
     ],
     relations: ['1:n sheet', '1:n school', '1:n classroom', '1:n learner']
   },
   {
     id: 'sheet',
     label: 'Sheet',
-    description: 'Arbeitsblatt; Versionierung ueber key + is_current.',
+    description: 'Arbeitsblatt; Versionierung über key + is_current.',
     fields: [
       { name: 'id', type: 'int', description: 'Version-ID' },
       { name: 'user', type: 'fkey user.id', description: 'Besitzender User' },
-      { name: 'key', type: 'word', description: 'Stabiler Sheet-Schluessel' },
+      { name: 'key', type: 'word', description: 'Stabiler Sheet-Schlüssel' },
       { name: 'name', type: 'word', description: 'Titel des Sheets' },
       { name: 'content', type: 'text', description: 'HTML-Inhalt' },
-      { name: 'prompt', type: 'longtext', description: 'Prompt fuer spaetere Auto-Korrektur' },
+      { name: 'prompt', type: 'longtext', description: 'Prompt für spätere Auto-Korrektur' },
       { name: 'is_current', type: 'bool', description: 'Aktive Version' }
     ],
     relations: ['n:1 user', '1:n classroom_sheet (via sheet_key)', '1:n answer (via sheet key)']
@@ -64,11 +64,11 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
     label: 'School',
     description: 'Schule inkl. CI CSS.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
       { name: 'user', type: 'fkey user.id', description: 'Besitzender User' },
       { name: 'name', type: 'word', description: 'Schulname' },
       { name: 'ci_css', type: 'text', description: 'CI CSS' },
-      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext fuer Schule' }
+      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext für Schule' }
     ],
     relations: ['n:1 user', '1:n classroom']
   },
@@ -77,14 +77,14 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
     label: 'Classroom',
     description: 'Klasse mit Stammdaten und optionaler Schule.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
       { name: 'user', type: 'fkey user.id', description: 'Besitzender User' },
-      { name: 'school', type: 'fkey school.id', description: 'Optional verknuepfte Schule' },
+      { name: 'school', type: 'fkey school.id', description: 'Optional verknüpfte Schule' },
       { name: 'name', type: 'word', description: 'Klassenname' },
       { name: 'year', type: 'word', description: 'Jahrgang' },
       { name: 'profession', type: 'word', description: 'Beruf/Fachrichtung' },
       { name: 'notes', type: 'text', description: 'Notizen' },
-      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext fuer Klasse' }
+      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext für Klasse' }
     ],
     relations: ['n:1 user', 'n:1 school', '1:n learner', '1:n classroom_sheet']
   },
@@ -93,14 +93,14 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
     label: 'Learner',
     description: 'Lernende Person mit Login-Code.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
       { name: 'user', type: 'fkey user.id', description: 'Besitzender User' },
       { name: 'classroom', type: 'fkey classroom.id', description: 'Klassen-ID' },
       { name: 'name', type: 'word', description: 'Anzeigename' },
       { name: 'email', type: 'email', description: 'Optionale Email' },
       { name: 'code', type: 'token', description: '12-stelliger Lernenden-Code' },
       { name: 'notes', type: 'text', description: 'Notizen' },
-      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext fuer Lernende' }
+      { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext für Lernende' }
     ],
     relations: ['n:1 user', 'n:1 classroom']
   },
@@ -109,38 +109,38 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
     label: 'ClassroomSheet',
     description: 'Zuordnung Sheet <-> Klasse inkl. Status und Form.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
       { name: 'user', type: 'fkey user.id', description: 'Besitzender User' },
       { name: 'classroom', type: 'fkey classroom.id', description: 'Klassen-ID' },
       { name: 'sheet_key', type: 'word', description: 'Sheet key' },
       { name: 'status', type: 'word', description: 'aktiv|freiwillig|vergangen|archiviert' },
       { name: 'assignment_form', type: 'word', description: 'personal|anonym' },
-      { name: 'prompt', type: 'longtext', description: 'Prompt fuer diese Zuweisung' }
+      { name: 'prompt', type: 'longtext', description: 'Prompt für diese Zuweisung' }
     ],
     relations: ['n:1 user', 'n:1 classroom', 'n:1 sheet (via key)']
   },
   {
     id: 'answer',
     label: 'Answer',
-    description: 'Antworteintrag auf eine Luecke/Frage.',
+    description: 'Antworteintrag auf eine Lücke/Frage.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
-      { name: 'key', type: 'word', description: 'Luecken-/Feld-Key im Sheet' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
+      { name: 'key', type: 'word', description: 'Lücken-/Feld-Key im Sheet' },
       { name: 'sheet', type: 'word', description: 'Sheet key' },
-      { name: 'value', type: 'word', description: 'Antworttext' },
+      { name: 'value', type: 'word', description: 'Antwortwert' },
       { name: 'user', type: 'word', description: 'Lernenden-Code oder Benutzerkennung' },
       { name: 'classroom', type: 'int', description: 'Klassen-ID (optional)' },
       { name: 'classification', type: 'int', description: '0/500/1000 Bewertung' },
-      { name: 'updated_at', type: 'datetime', description: 'Zeitstempel letzte Aenderung' }
+      { name: 'updated_at', type: 'datetime', description: 'Zeitstempel letzte Änderung' }
     ],
     relations: ['n:1 classroom (optional)', 'n:1 sheet (via key)']
   },
   {
     id: 'log',
     label: 'Log',
-    description: 'Backend-Log fuer Antwort/KI-Rueckmeldungen.',
+    description: 'Backend-Log für Antwort/KI-Rückmeldungen.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
       { name: 'request', type: 'array/text', description: 'Request-JSON' },
       { name: 'chatgpt', type: 'array/text', description: 'KI-Antwort JSON' }
     ],
@@ -152,7 +152,7 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
     description:
       'Persistenter Agent-Chat-Log mit Prompt, Ablaufprotokoll, Antwort und Nutzerbewertung.',
     fields: [
-      { name: 'id', type: 'int', description: 'Primarschluessel' },
+      { name: 'id', type: 'int', description: 'Primärschlüssel' },
       { name: 'user', type: 'int', description: 'Besitzender User' },
       { name: 'prompt', type: 'longtext', description: 'Nutzeranfrage' },
       {
@@ -253,7 +253,7 @@ export const AGENT_API_ENDPOINTS: AgentApiEndpoint[] = [
     id: 'sheet_public',
     method: 'GET',
     path: 'sheet/public?key={key}&classroom={id}',
-    description: 'Oeffentliches aktuelles Sheet laden.',
+    description: 'Öffentliches aktuelles Sheet laden.',
     usedByViews: ['learner.sheet', 'review.sheet'],
     returns: 'sheet'
   },
@@ -261,7 +261,7 @@ export const AGENT_API_ENDPOINTS: AgentApiEndpoint[] = [
     id: 'sheet_public_list',
     method: 'GET',
     path: 'sheet/public-list?code={learnerCode}',
-    description: 'Fuer Lernende sichtbare Sheets laden.',
+    description: 'Für Lernende sichtbare Sheets laden.',
     usedByViews: ['learner.login'],
     returns: 'sheet[]'
   },
@@ -285,7 +285,7 @@ export const AGENT_API_ENDPOINTS: AgentApiEndpoint[] = [
     id: 'agent_log_rate',
     method: 'PATCH',
     path: 'agent_log',
-    description: 'Bewertung fuer Agent-Log speichern (positiv/negativ + Kommentar).',
+    description: 'Bewertung für Agent-Log speichern (positiv/negativ + Kommentar).',
     usedByViews: ['admin.agent.sidebar'],
     returns: 'rated, log_id'
   }
@@ -294,26 +294,26 @@ export const AGENT_API_ENDPOINTS: AgentApiEndpoint[] = [
 export const AGENT_QUERY_RECIPES: AgentQueryRecipe[] = [
   {
     id: 'exercise_overview',
-    label: 'Analyse aller Uebungen',
-    whenToUse: 'Wenn eine Uebersicht ueber vorhandene Sheets oder deren Antwortqualitaet benoetigt wird.',
+    label: 'Analyse aller Übungen',
+    whenToUse: 'Wenn eine Übersicht über vorhandene Sheets oder deren Antwortqualität benötigt wird.',
     steps: [
       'GET sheet -> aktuelle Sheets laden.',
       'Pro relevantem Sheet GET answer?sheet={key} laden.',
       'Antwortanzahl und durchschnittliche Klassifizierung pro Sheet berechnen.',
-      'Schwaechste/staerkste Sheets mit kurzer Interpretation ausgeben.'
+      'Schwächste/stärkste Sheets mit kurzer Interpretation ausgeben.'
     ],
     endpoints: ['sheet_crud', 'answer_query']
   },
   {
     id: 'struggling_learners',
-    label: 'Lernende mit Muehe identifizieren',
+    label: 'Lernende mit Mühe identifizieren',
     whenToUse: 'Wenn erfragt wird, wer aktuell am meisten Schwierigkeiten hat.',
     steps: [
       'GET classroom -> Klassen laden.',
-      'Fuer jede Klasse GET learner?classroom={id} laden.',
-      'Fuer jede Klasse GET answer?classroom={id} laden.',
-      'Pro Lernenden Fehl-/Teilraten, Volumen und Aktualitaet berechnen.',
-      'Top-Risiko-Liste mit Begruendung ausgeben.'
+      'Für jede Klasse GET learner?classroom={id} laden.',
+      'Für jede Klasse GET answer?classroom={id} laden.',
+      'Pro Lernenden Fehl-/Teilraten, Volumen und Aktualität berechnen.',
+      'Top-Risiko-Liste mit Begründung ausgeben.'
     ],
     endpoints: ['classroom_crud', 'learner_by_class', 'answer_query']
   },
@@ -323,34 +323,34 @@ export const AGENT_QUERY_RECIPES: AgentQueryRecipe[] = [
     whenToUse: 'Wenn Zuordnungen und Status einer Klasse gefragt sind.',
     steps: [
       'GET plan?classroom={id} laden.',
-      'Optional GET sheet laden, um Titel fuer sheet_key aufloesen.',
+      'Optional GET sheet laden, um Titel für sheet_key auflösen.',
       'Status und assignment_form als Matrix darstellen.'
     ],
     endpoints: ['plan_by_class', 'sheet_crud']
   },
   {
     id: 'topic_assignment_completion',
-    label: 'Haben Lernende zugewiesene Themenblaetter erledigt?',
+    label: 'Haben Lernende zugewiesene Themenblätter erledigt?',
     whenToUse:
-      'Wenn geprueft werden soll, ob Lernende die zugewiesenen Blaetter zu einem Thema (z.B. EU) ausgefuellt haben.',
+      'Wenn geprüft werden soll, ob Lernende die zugewiesenen Blätter zu einem Thema (z.B. EU) ausgefüllt haben.',
     steps: [
       'GET sheet -> thematisch passende Sheets bestimmen.',
       'GET classroom -> Klassen laden.',
       'Pro Klasse GET plan?classroom={id} -> zugewiesene sheet_key filtern.',
       'Pro Klasse GET learner?classroom={id} und GET answer?classroom={id} laden.',
-      'Lueckenanzahl pro Sheet mit gegebenen/korrekten Antworten pro Lernenden vergleichen.',
-      'Offene bzw. fehlerhafte Luecken als Engpaesse zusammenfassen.'
+      'Lückenanzahl pro Sheet mit gegebenen/korrekten Antworten pro Lernenden vergleichen.',
+      'Offene bzw. fehlerhafte Lücken als Engpässe zusammenfassen.'
     ],
     endpoints: ['sheet_crud', 'classroom_crud', 'plan_by_class', 'learner_by_class', 'answer_query']
   },
   {
     id: 'learner_recent_answers',
-    label: 'Kuerzliche Antworten einer lernenden Person',
+    label: 'Kürzliche Antworten einer lernenden Person',
     whenToUse: 'Wenn Verlauf oder aktuelle Schwierigkeiten einer Person gefragt sind.',
     steps: [
       'GET answer?classroom={id}&user={code} laden.',
       'Nach updated_at absteigend sortieren.',
-      'Klassifizierungstrend und haeufige Fehlfelder zusammenfassen.'
+      'Klassifizierungstrend und häufige Fehlfelder zusammenfassen.'
     ],
     endpoints: ['answer_query']
   },
@@ -360,8 +360,8 @@ export const AGENT_QUERY_RECIPES: AgentQueryRecipe[] = [
     whenToUse: 'Wenn ein einzelnes Sheet analysiert werden soll.',
     steps: [
       'GET answer?sheet={key} (optional +classroom) laden.',
-      'Verteilung 0/500/1000 sowie Luecken mit hoher Fehlerquote berechnen.',
-      'Kurzfazit mit moeglichen Ursachen ausgeben.'
+      'Verteilung 0/500/1000 sowie Lücken mit hoher Fehlerquote berechnen.',
+      'Kurzfazit mit möglichen Ursachen ausgeben.'
     ],
     endpoints: ['answer_query']
   }

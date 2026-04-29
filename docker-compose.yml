@@ -51,6 +51,7 @@ services:
     volumes:
       - ./abu-svelte:/app
       - abu-svelte-node-modules:/app/node_modules
+      - abu-svelte-kit:/app/.svelte-kit
     networks:
       - abu
 
@@ -72,6 +73,7 @@ services:
 volumes:
   abu-db-data:
   abu-svelte-node-modules:
+  abu-svelte-kit:
 
 networks:
   abu:

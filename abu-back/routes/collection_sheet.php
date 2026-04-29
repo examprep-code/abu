@@ -292,7 +292,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
     }
 
     $return['status'] = 400;
-    warning('keine aenderung uebermittelt');
+    warning('keine änderung übermittelt');
     return;
 }
 
