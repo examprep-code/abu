@@ -392,6 +392,7 @@ function bewerteAntwortMitKI($payload)
         }
         $sourceContext = annotate_source_context_quality($sourceContext);
         $result['source_context'] = $sourceContext;
+        $result = apply_property_portal_feedback($result, $sourceContext);
     }
     answer_ai_console_log('KI Bewertung', [
         'sheet' => (string)($payload['sheet'] ?? ''),
@@ -479,6 +480,7 @@ function build_gap_source_context($payload)
         'source_status' => 'unavailable',
         'facts' => [],
     ];
+    $urlHint = property_listing_context_from_url($url);
 
     $previous = latest_source_context_for_answer($payload, $answer);
     $fetched = fetch_url_for_context($url);
@@ -507,8 +509,353 @@ function build_gap_source_context($payload)
     if (!empty($previous)) {
         $context = merge_source_context($previous, $context);
     }
+    if (!empty($urlHint)) {
+        $context = merge_listing_url_hint($context, $urlHint);
+    }
 
     return annotate_source_context_quality($context);
+}
+
+function apply_property_portal_feedback($result, $sourceContext)
+{
+    if (!is_array($result) || !is_array($sourceContext) || empty($sourceContext)) {
+        return $result;
+    }
+
+    $facts = is_array($sourceContext['facts'] ?? null) ? $sourceContext['facts'] : [];
+    if (source_context_extracted_listing_fact_count($facts) > 0) {
+        return $result;
+    }
+
+    $status = strtolower(trim((string)($sourceContext['source_status'] ?? '')));
+    $hasKnownPortal = source_context_truthy($sourceContext['known_property_portal'] ?? false)
+        || $status === 'known_listing_portal'
+        || $status === 'known_listing_url';
+    $hasDirectListing = source_context_truthy($sourceContext['direct_listing_url'] ?? false)
+        || $status === 'known_listing_url';
+    if (!$hasKnownPortal && !$hasDirectListing) {
+        return $result;
+    }
+
+    $hasAntibotSignal = source_context_has_antibot_signal($sourceContext);
+    if (!$hasDirectListing && !$hasAntibotSignal) {
+        return $result;
+    }
+
+    $score = isset($result['classification']) && is_numeric($result['classification'])
+        ? intval($result['classification'])
+        : null;
+    if ($score === null || $score < 500) {
+        $result['classification'] = 500;
+        $result['classification_label'] = 'TEILWEISE';
+    }
+
+    $portal = trim((string)(
+        $facts['portal'] ??
+        $sourceContext['portal'] ??
+        $sourceContext['portal_domain'] ??
+        'einer bekannten Immobilienplattform'
+    ));
+    $note = $hasDirectListing
+        ? 'Der Link wurde als direkter Immobilien-Inseratslink auf ' . $portal . ' erkannt; fehlende automatische Lesbarkeit oder CAPTCHA entwertet den Link nicht.'
+        : 'Der Link stammt von ' . $portal . '; wegen Anti-Bot-Schutz konnten keine Details automatisch gelesen werden.';
+    $explanation = trim((string)($result['explanation'] ?? ''));
+    if ($explanation === '') {
+        $result['explanation'] = $note;
+    } elseif (stripos($explanation, 'direkter Immobilien-Inseratslink') === false
+        && stripos($explanation, 'Anti-Bot') === false
+        && stripos($explanation, 'CAPTCHA') === false) {
+        $result['explanation'] = $note . ' ' . $explanation;
+    }
+
+    return $result;
+}
+
+function property_listing_context_from_url($url)
+{
+    $parts = parse_url((string)$url);
+    if (!is_array($parts) || empty($parts['host'])) {
+        return [];
+    }
+
+    $host = strtolower(trim((string)$parts['host']));
+    $host = preg_replace('/^www\./i', '', $host);
+    $portal = known_property_portal_for_host($host);
+    if (empty($portal)) {
+        return [];
+    }
+
+    $path = (string)($parts['path'] ?? '/');
+    $query = (string)($parts['query'] ?? '');
+    $directMatch = property_portal_direct_listing_match($path, $query, $portal);
+    if (!empty($portal['requires_path_hint']) && empty($directMatch)) {
+        return [];
+    }
+
+    $direct = !empty($directMatch);
+    $facts = [
+        'portal' => $portal['name'],
+        'portal_domain' => $portal['domain'],
+        'listing_kind' => $direct
+            ? ($directMatch['listing_kind'] ?? property_listing_kind_from_text($path . '?' . $query))
+            : 'Immobilienportal',
+        'object_type' => 'Immobilieninserat',
+    ];
+    if (!empty($directMatch['listing_id'])) {
+        $facts['listing_id'] = $directMatch['listing_id'];
+    }
+
+    $summary = $direct
+        ? 'Direkter Inseratslink auf ' . $portal['name'] . ' erkannt.'
+        : 'Bekannte Immobilienplattform ' . $portal['name'] . ' erkannt.';
+    if (!empty($facts['listing_id'])) {
+        $summary .= ' Inseratenummer: ' . $facts['listing_id'] . '.';
+    }
+
+    return [
+        'url' => (string)$url,
+        'source_status' => $direct ? 'known_listing_url' : 'known_listing_portal',
+        'source_status_detail' => $direct
+            ? 'Die URL entspricht einem bekannten Muster fuer direkte Immobilieninserate. Anti-Bot-Schutz oder CAPTCHA beweist nicht, dass der Link kein direkter Inseratslink ist.'
+            : 'Die URL stammt von einer bekannten Immobilienplattform; fuer Details muss die Seite lesbar sein.',
+        'known_property_portal' => true,
+        'direct_listing_url' => $direct,
+        'listing_confidence' => $direct ? 'url_pattern' : 'known_portal_domain',
+        'portal' => $portal['name'],
+        'portal_domain' => $portal['domain'],
+        'facts' => $facts,
+        'summary' => $summary,
+    ];
+}
+
+function known_property_portal_for_host($host)
+{
+    $portals = [
+        [
+            'name' => 'Homegate',
+            'domain' => 'homegate.ch',
+            'direct_patterns' => ['~^/(mieten|kaufen)/(\d+)(?:/)?$~i'],
+        ],
+        [
+            'name' => 'ImmoScout24',
+            'domain' => 'immoscout24.ch',
+            'direct_patterns' => [
+                '~/(?:de|fr|it|en)/d/[^/?#]+~i',
+                '~/(mieten|kaufen|rent|buy)/[^?#]*\d~i',
+            ],
+        ],
+        [
+            'name' => 'Flatfox',
+            'domain' => 'flatfox.ch',
+            'direct_patterns' => [
+                '~/(?:de|fr|it|en)/(?:wohnung|immobilien|flat|rent|listing)[^?#]*\d~i',
+                '~/listing/[^?#]+~i',
+            ],
+        ],
+        [
+            'name' => 'Newhome',
+            'domain' => 'newhome.ch',
+            'direct_patterns' => ['~/(?:de|fr|it|en)/(?:mieten|kaufen|rent|buy)/[^?#]+~i'],
+        ],
+        [
+            'name' => 'Comparis Immobilien',
+            'domain' => 'comparis.ch',
+            'requires_path_hint' => true,
+            'direct_patterns' => [
+                '~/immobilien/(?:marktplatz/)?details/[^?#]+~i',
+                '~/immobilier/(?:marche/)?details/[^?#]+~i',
+            ],
+        ],
+        [
+            'name' => 'ImmoStreet',
+            'domain' => 'immostreet.ch',
+            'direct_patterns' => ['~/(?:de|fr|it|en)/(?:mieten|kaufen|immobilien|immobilier)/[^?#]+~i'],
+        ],
+        [
+            'name' => 'Immobilier.ch',
+            'domain' => 'immobilier.ch',
+            'direct_patterns' => ['~/(?:fr|de|it|en)/(?:louer|acheter|mieten|kaufen)/[^?#]+~i'],
+        ],
+        [
+            'name' => 'Properstar',
+            'domain' => 'properstar.ch',
+            'direct_patterns' => ['~/(?:de|fr|it|en)/(?:immobilien|mieten|kaufen|rent|buy|property)/[^?#]+~i'],
+        ],
+        [
+            'name' => 'Tutti Immobilien',
+            'domain' => 'tutti.ch',
+            'requires_path_hint' => true,
+            'direct_patterns' => ['~/(?:immobilien|immobilier|case|real-estate|wohnung|mieten|kaufen)/[^?#]+~i'],
+        ],
+        [
+            'name' => 'Anibis Immobilien',
+            'domain' => 'anibis.ch',
+            'requires_path_hint' => true,
+            'direct_patterns' => ['~/(?:immobilien|immobilier|case|real-estate|wohnung|mieten|kaufen)/[^?#]+~i'],
+        ],
+    ];
+
+    foreach ($portals as $portal) {
+        if (property_host_matches_domain($host, $portal['domain'])) {
+            return $portal;
+        }
+    }
+    return [];
+}
+
+function property_host_matches_domain($host, $domain)
+{
+    $host = strtolower(trim((string)$host));
+    $domain = strtolower(trim((string)$domain));
+    if ($host === $domain) {
+        return true;
+    }
+    $suffix = '.' . $domain;
+    return strlen($host) > strlen($suffix) && substr($host, -strlen($suffix)) === $suffix;
+}
+
+function property_portal_direct_listing_match($path, $query, $portal)
+{
+    $path = rawurldecode((string)$path);
+    if ($path === '') {
+        $path = '/';
+    } elseif ($path[0] !== '/') {
+        $path = '/' . $path;
+    }
+    $query = rawurldecode((string)$query);
+    $target = $path . ($query !== '' ? '?' . $query : '');
+    $patterns = is_array($portal['direct_patterns'] ?? null) ? $portal['direct_patterns'] : [];
+
+    foreach ($patterns as $pattern) {
+        if (!preg_match($pattern, $target)) {
+            continue;
+        }
+        $match = [
+            'listing_kind' => property_listing_kind_from_text($target),
+        ];
+        $listingId = property_listing_id_from_text($target);
+        if ($listingId !== '') {
+            $match['listing_id'] = $listingId;
+        }
+        return $match;
+    }
+
+    return [];
+}
+
+function property_listing_id_from_text($text)
+{
+    if (preg_match('/(?<!\d)(\d{5,})(?!\d)/', (string)$text, $matches)) {
+        return $matches[1];
+    }
+    return '';
+}
+
+function property_listing_kind_from_text($text)
+{
+    $value = strtolower(rawurldecode((string)$text));
+    if (preg_match('/\b(kaufen|buy|acheter|comprare|vendita|sale)\b/u', $value)) {
+        return 'Kaufinserat';
+    }
+    if (preg_match('/\b(mieten|rent|louer|affittare|affitto|location)\b/u', $value)) {
+        return 'Mietinserat';
+    }
+    return 'Immobilieninserat';
+}
+
+function merge_listing_url_hint($context, $hint)
+{
+    if (!is_array($context)) {
+        $context = [];
+    }
+    if (!is_array($hint) || empty($hint)) {
+        return $context;
+    }
+
+    $merged = $context;
+    foreach ($hint as $key => $value) {
+        if (in_array($key, ['facts', 'source_status', 'source_status_detail', 'summary'], true)) {
+            continue;
+        }
+        if ($value === null || $value === '') {
+            continue;
+        }
+        if (!isset($merged[$key]) || $merged[$key] === '') {
+            $merged[$key] = $value;
+        }
+    }
+
+    $currentFacts = is_array($context['facts'] ?? null) ? $context['facts'] : [];
+    $hintFacts = is_array($hint['facts'] ?? null) ? $hint['facts'] : [];
+    $cleanCurrentFacts = array_filter($currentFacts, function ($value) {
+        return $value !== null && trim(source_context_scalar($value)) !== '';
+    });
+    $merged['facts'] = array_merge($hintFacts, $cleanCurrentFacts);
+
+    $currentStatus = strtolower(trim((string)($context['source_status'] ?? '')));
+    $extractedFactCount = source_context_extracted_listing_fact_count($currentFacts);
+    if ($extractedFactCount === 0 || in_array($currentStatus, ['', 'blocked', 'error', 'unavailable'], true)) {
+        if (!empty($hint['source_status'])) {
+            $merged['source_status'] = $hint['source_status'];
+        }
+        if (!empty($hint['source_status_detail'])) {
+            $merged['source_status_detail'] = $hint['source_status_detail'];
+        }
+    } elseif (empty($merged['source_status_detail']) && !empty($hint['source_status_detail'])) {
+        $merged['source_status_detail'] = $hint['source_status_detail'];
+    }
+
+    if (empty($merged['summary']) && !empty($hint['summary'])) {
+        $merged['summary'] = $hint['summary'];
+    }
+
+    return $merged;
+}
+
+function source_context_extracted_listing_fact_count($facts)
+{
+    if (!is_array($facts)) {
+        return 0;
+    }
+    $count = 0;
+    foreach (['title', 'address', 'rooms', 'living_area_m2', 'rent_chf', 'floor', 'year_built', 'features'] as $key) {
+        if (isset($facts[$key]) && trim(source_context_scalar($facts[$key])) !== '') {
+            $count++;
+        }
+    }
+    return $count;
+}
+
+function source_context_has_antibot_signal($sourceContext)
+{
+    if (!is_array($sourceContext)) {
+        return false;
+    }
+    $status = strtolower(trim((string)($sourceContext['source_status'] ?? '')));
+    if ($status === 'blocked') {
+        return true;
+    }
+
+    $parts = [];
+    foreach (['source_status_detail', 'fallback_reason', 'error', 'excerpt', 'summary', 'http_status'] as $key) {
+        if (isset($sourceContext[$key])) {
+            $parts[] = source_context_scalar($sourceContext[$key]);
+        }
+    }
+    $text = implode(' ', $parts);
+    return preg_match(
+        '/captcha|anti[-\s]?bot|datadome|cloudflare|just a moment|enable javascript|please enable|access denied|zugriff verweigert|forbidden|http\s*403|403 forbidden|unusual traffic|robot check|blocked/i',
+        $text
+    ) === 1;
+}
+
+function source_context_truthy($value)
+{
+    if ($value === true || $value === 1) {
+        return true;
+    }
+    $text = strtolower(trim((string)$value));
+    return in_array($text, ['1', 'true', 'yes', 'ja'], true);
 }
 
 function first_url_in_text($text)
@@ -523,7 +870,7 @@ function fetch_url_for_context($url)
 {
     $attempts = [$url];
     if (preg_match('/^https?:\/\//i', $url)) {
-        $attempts[] = 'https://r.jina.ai/http://r.jina.ai/http://' . $url;
+        $attempts[] = 'https://r.jina.ai/' . $url;
     }
 
     $lastError = '';
@@ -676,6 +1023,9 @@ function first_context_title($text)
         if (preg_match('/please enable|captcha|datadome|just a moment/i', $line)) {
             continue;
         }
+        if (preg_match('/^(url source|warning|markdown content):/i', $line)) {
+            continue;
+        }
         if (preg_match('/wohnung|zimmer|mieten|haus|inserat|appartement|apartment/i', $line)) {
             return $line;
         }
@@ -704,21 +1054,22 @@ function annotate_source_context_quality($context)
 
     $facts = is_array($context['facts'] ?? null) ? $context['facts'] : [];
     $status = strtolower(trim((string)($context['source_status'] ?? '')));
-    $factCount = 0;
-    foreach ($facts as $value) {
-        if ($value !== null && trim(source_context_scalar($value)) !== '') {
-            $factCount++;
-        }
-    }
+    $extractedFactCount = source_context_extracted_listing_fact_count($facts);
 
     $hasCoreFacts = !empty($facts['rooms']) && !empty($facts['living_area_m2']);
-    $hasUsefulFacts = $hasCoreFacts || $factCount >= 3;
+    $hasUsefulFacts = $hasCoreFacts || $extractedFactCount >= 3;
     $isBlocked = in_array($status, ['blocked', 'error', 'unavailable'], true);
+    $hasKnownListingUrl = source_context_truthy($context['direct_listing_url'] ?? false)
+        || source_context_truthy($context['known_property_portal'] ?? false)
+        || in_array($status, ['known_listing_url', 'known_listing_portal'], true);
 
     if ($hasUsefulFacts) {
         $quality = 'ok';
         $reason = 'Die wichtigsten Inseratsdaten konnten ausreichend gespeichert werden.';
-    } elseif ($factCount > 0) {
+    } elseif ($hasKnownListingUrl) {
+        $quality = 'partial';
+        $reason = 'Der Link wurde als Immobilienplattform oder direkter Inseratslink erkannt; Details konnten nicht vollstaendig automatisch gelesen werden.';
+    } elseif ($extractedFactCount > 0) {
         $quality = 'partial';
         $reason = 'Nur ein Teil der Inseratsdaten konnte automatisch gelesen werden.';
     } elseif ($isBlocked) {
@@ -845,6 +1196,15 @@ function source_context_text($sourceContext)
     if (!empty($sourceContext['source_status_detail'])) {
         $lines[] = 'Hinweis: ' . $sourceContext['source_status_detail'];
     }
+    if (source_context_truthy($sourceContext['known_property_portal'] ?? false)) {
+        $lines[] = 'Bekannte Immobilienplattform erkannt: ja';
+    }
+    if (source_context_truthy($sourceContext['direct_listing_url'] ?? false)) {
+        $lines[] = 'Direkter Inseratslink erkannt: ja';
+    }
+    if (!empty($sourceContext['listing_confidence'])) {
+        $lines[] = 'Erkennungsart Inseratslink: ' . $sourceContext['listing_confidence'];
+    }
     if (!empty($sourceContext['extraction_quality'])) {
         $lines[] = 'Extraktionsqualität: ' . $sourceContext['extraction_quality'];
     }
@@ -891,6 +1251,11 @@ function source_context_fact_label($key)
         'floor' => 'Etage',
         'year_built' => 'Baujahr',
         'features' => 'Merkmale',
+        'portal' => 'Portal',
+        'portal_domain' => 'Portal-Domain',
+        'listing_id' => 'Inseratenummer',
+        'listing_kind' => 'Inseratsart',
+        'object_type' => 'Objekttyp',
     ];
     return $labels[$key] ?? $key;
 }
@@ -1495,7 +1860,7 @@ function build_gap_feedback_messages($payload)
         [
             'role' => 'system',
             'content' =>
-                'Du bist eine Lehrperson für Politik und Geschichte. Du bewertest kurze Antworten von Lernenden zu einem Lückentext sachlich korrekt, freundlich und knapp auf Deutsch. Du kennst eine Lehrerlösung, verwendest sie als zentrale fachliche Referenz, verrätst sie aber nie wörtlich. Antworten, die inhaltlich sehr nahe an der Lehrerlösung sind, sollen klar als richtig bewertet werden. Entscheidend ist gleichzeitig, ob die Antwort im Kontext des Lückentextes inhaltlich korrekt ist – auch andere richtige Lösungen, Umschreibungen oder Synonyme können als richtig gelten. Bewerte bewusst tolerant: Ignoriere kleine sprachliche Unterschiede wie Artikel, Präpositionen, Flexionen oder Satzzeichen. Du gibst nur eine grobe Einschätzung (richtig/teilweise richtig/falsch) und kurze Hinweise oder Denkanstösse. Wenn du RICHTIG schreibst, soll die Rückmeldung kurz positiv sein und idealerweise einen ganz kurzen inhaltlichen Hinweis zur Lösung geben. Wenn ein Wohnungsinserat als Quelle mitgegeben wird, extrahiere die wichtigsten Fakten für spätere Freitextaufgaben. Antworte IMMER in genau diesem Format: Erste Zeile NUR eines dieser Wörter in Grossbuchstaben: RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile eine sehr kurze Rückmeldung (maximal 2 Sätze). Falls Inseratsdaten vorhanden sind, dritte Zeile exakt DATEN_JSON: gefolgt von einem kompakten JSON-Objekt mit passenden Schlüsseln wie title, address, rooms, living_area_m2, rent_chf, floor, year_built, features.',
+                'Du bist eine Lehrperson für Politik und Geschichte. Du bewertest kurze Antworten von Lernenden zu einem Lückentext sachlich korrekt, freundlich und knapp auf Deutsch. Du kennst eine Lehrerlösung, verwendest sie als zentrale fachliche Referenz, verrätst sie aber nie wörtlich. Antworten, die inhaltlich sehr nahe an der Lehrerlösung sind, sollen klar als richtig bewertet werden. Entscheidend ist gleichzeitig, ob die Antwort im Kontext des Lückentextes inhaltlich korrekt ist – auch andere richtige Lösungen, Umschreibungen oder Synonyme können als richtig gelten. Bewerte bewusst tolerant: Ignoriere kleine sprachliche Unterschiede wie Artikel, Präpositionen, Flexionen oder Satzzeichen. Du gibst nur eine grobe Einschätzung (richtig/teilweise richtig/falsch) und kurze Hinweise oder Denkanstösse. Wenn du RICHTIG schreibst, soll die Rückmeldung kurz positiv sein und idealerweise einen ganz kurzen inhaltlichen Hinweis zur Lösung geben. Wenn ein Wohnungsinserat als Quelle mitgegeben wird, extrahiere die wichtigsten Fakten für spätere Freitextaufgaben. Wenn der Linkkontext "Direkter Inseratslink erkannt: ja" enthält, darf fehlendes automatisches Laden, CAPTCHA oder Anti-Bot-Schutz allein den direkten Link nicht entwerten. Antworte IMMER in genau diesem Format: Erste Zeile NUR eines dieser Wörter in Grossbuchstaben: RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile eine sehr kurze Rückmeldung (maximal 2 Sätze). Falls Inseratsdaten vorhanden sind, dritte Zeile exakt DATEN_JSON: gefolgt von einem kompakten JSON-Objekt mit passenden Schlüsseln wie title, address, rooms, living_area_m2, rent_chf, floor, year_built, features.',
         ],
         [
             'role' => 'user',
@@ -1512,7 +1877,7 @@ function build_gap_feedback_messages($payload)
                 ($gapPrompt !== '' ? $gapPrompt : 'Kein zusätzlicher Prüfauftrag angegeben.') .
                 "\n\nGelesener Kontext aus Link/Inserat:\n" .
                 ($sourceContextText !== '' ? $sourceContextText : 'Kein Linkkontext verfügbar.') .
-                "\n\nBeurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung und den zusätzlichen Prüfauftrag als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.",
+                "\n\nBeurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung und den zusätzlichen Prüfauftrag als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Wenn der Linkkontext einen direkten Inseratslink erkennt, bewerte ihn nicht wegen fehlender automatischer Lesbarkeit ab. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.",
         ],
     ];
 }

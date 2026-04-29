@@ -1540,6 +1540,11 @@ function referenceSourceContextText(sourceContext: Record<string, any> | null | 
     if (text) parts.push(`${label}: ${text}${suffix}`);
   };
 
+  add('Portal', facts.portal || sourceContext.portal);
+  add('Portal-Domain', facts.portal_domain || sourceContext.portal_domain);
+  add('Inseratenummer', facts.listing_id || sourceContext.listing_id);
+  add('Inseratsart', facts.listing_kind || sourceContext.listing_kind);
+  add('Objekttyp', facts.object_type || sourceContext.object_type);
   add('Titel', facts.title || sourceContext.title);
   add('Adresse', facts.address || sourceContext.address);
   add('Zimmer', facts.rooms || sourceContext.rooms);
@@ -1548,6 +1553,17 @@ function referenceSourceContextText(sourceContext: Record<string, any> | null | 
   add('Etage', facts.floor || sourceContext.floor);
   add('Baujahr', facts.year_built || sourceContext.year_built);
   add('Merkmale', facts.features || sourceContext.features);
+
+  const knownPortal =
+    sourceContext.known_property_portal === true ||
+    sourceContext.known_property_portal === '1' ||
+    sourceContext.known_property_portal === 1;
+  if (knownPortal) add('Bekannte Immobilienplattform erkannt', 'ja');
+  const directListing =
+    sourceContext.direct_listing_url === true ||
+    sourceContext.direct_listing_url === '1' ||
+    sourceContext.direct_listing_url === 1;
+  if (directListing) add('Direkter Inseratslink erkannt', 'ja');
 
   const quality = String(sourceContext.extraction_quality || '').trim();
   const allowFlexible =
