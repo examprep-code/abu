@@ -10,6 +10,7 @@ export type FreitextCriterion = {
   id: string;
   label: string;
   description: string;
+  example: string;
   internalDescription: string;
 };
 
@@ -25,38 +26,15 @@ export type FreitextPremise = {
   required: boolean;
 };
 
-export type FreitextReference = {
-  id: string;
-  label: string;
-  sourceKey: string;
-  sourceType: string;
-  prompt: string;
-  minClassification: number;
-  required: boolean;
-};
-
-type FreitextReferenceSnapshot = {
-  id: string;
-  label: string;
-  sourceKey: string;
-  sourceType: string;
-  prompt: string;
-  value: string;
-  sourceContext: Record<string, any> | null;
-  classification: number | null;
-  classificationLabel: ClassificationLabel;
-  updatedAt: string;
-  ready: boolean;
-  required: boolean;
-  minClassification: number;
-};
-
 export type FreitextRuntimeOptions = {
   root: HTMLElement;
   apiBaseUrl: string;
   sheetKey: string;
   user: string;
   classroom?: string | number | null;
+  previewSchool?: string | number | null;
+  previewClassroom?: string | number | null;
+  previewLearner?: string | null;
   previewMode?: boolean;
   onProgress?: (progress: FreitextProgress) => void;
   onSaveState?: (event: {
@@ -93,7 +71,13 @@ function notifySaveState(
 }
 
 function previewPayload(options: FreitextRuntimeOptions): Record<string, string> {
-  return options.previewMode ? { preview_mode: '1' } : {};
+  if (!options.previewMode) return {};
+  return {
+    preview_mode: '1',
+    ...(options.previewSchool ? { preview_school: String(options.previewSchool) } : {}),
+    ...(options.previewClassroom ? { preview_classroom: String(options.previewClassroom) } : {}),
+    ...(options.previewLearner ? { preview_learner: String(options.previewLearner) } : {})
+  };
 }
 
 function classificationInfo(
@@ -177,8 +161,273 @@ const FEEDBACK_HIDE_DELAY = 4500;
 const feedbackTimers = new WeakMap<HTMLElement, number>();
 let feedbackClickBound = false;
 
+type FeedbackGroupKey = 'fulfilled' | 'partial' | 'wrong' | 'missing';
+
+type FeedbackGroupDefinition = {
+  key: FeedbackGroupKey;
+  label: string;
+  aliases: string[];
+};
+
+type ParsedFreitextFeedback = {
+  promptAnswer: string;
+  summary: string[];
+  groups: Record<FeedbackGroupKey, string[]>;
+  structured: boolean;
+};
+
+const FEEDBACK_GROUP_DEFINITIONS: FeedbackGroupDefinition[] = [
+  {
+    key: 'fulfilled',
+    label: 'Erfüllt',
+    aliases: ['erfullt', 'erfuellt', 'fulfilled', 'ok']
+  },
+  {
+    key: 'partial',
+    label: 'Teilweise',
+    aliases: ['teilweise', 'teils', 'partial']
+  },
+  {
+    key: 'wrong',
+    label: 'Fehlerhaft',
+    aliases: ['fehlerhaft', 'falsch', 'wrong', 'incorrect']
+  },
+  {
+    key: 'missing',
+    label: 'Fehlt',
+    aliases: ['fehlt', 'fehlend', 'missing', 'offen']
+  }
+];
+
+function emptyFeedbackGroups(): Record<FeedbackGroupKey, string[]> {
+  return {
+    fulfilled: [],
+    partial: [],
+    wrong: [],
+    missing: []
+  };
+}
+
+function normalizeFeedbackHeading(value: string): string {
+  return String(value || '')
+    .trim()
+    .replace(/^#+\s*/, '')
+    .replace(/[:：]+$/, '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function stripFeedbackBullet(value: string): string {
+  return String(value || '')
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')
+    .trim();
+}
+
+function feedbackGroupForHeading(value: string): FeedbackGroupDefinition | null {
+  const heading = normalizeFeedbackHeading(value);
+  return (
+    FEEDBACK_GROUP_DEFINITIONS.find((definition) => definition.aliases.includes(heading)) || null
+  );
+}
+
+function splitFeedbackGroupLine(
+  value: string
+): { group: FeedbackGroupDefinition; text: string } | null {
+  const clean = stripFeedbackBullet(value);
+  const match = clean.match(/^([^:：]{1,40})[:：]\s*(.*)$/u);
+  if (!match) return null;
+  const group = feedbackGroupForHeading(match[1]);
+  if (!group) return null;
+  return {
+    group,
+    text: stripFeedbackBullet(match[2] || '')
+  };
+}
+
+function parseFreitextFeedback(text: string): ParsedFreitextFeedback {
+  const parsed: ParsedFreitextFeedback = {
+    promptAnswer: '',
+    summary: [],
+    groups: emptyFeedbackGroups(),
+    structured: false
+  };
+  const promptLines: string[] = [];
+  let currentGroup: FeedbackGroupDefinition | null = null;
+  let readingPromptAnswer = false;
+  let readingEvaluation = false;
+
+  String(text || '')
+    .split(/\r\n|\r|\n/)
+    .forEach((rawLine) => {
+      const line = rawLine.trim();
+      if (!line) {
+        readingPromptAnswer = false;
+        return;
+      }
+
+      const normalized = normalizeFeedbackHeading(line);
+      if (normalized === 'richtig' || normalized === 'teilweise' || normalized === 'falsch') {
+        return;
+      }
+
+      const promptMatch = line.match(/^Antwort\s+auf\s+Pr(?:ü|ue)fhinweis\s*:\s*(.*)$/iu);
+      if (promptMatch) {
+        parsed.structured = true;
+        readingPromptAnswer = true;
+        readingEvaluation = false;
+        currentGroup = null;
+        const answer = stripFeedbackBullet(promptMatch[1] || '');
+        if (answer) promptLines.push(answer);
+        return;
+      }
+
+      const evaluationMatch = line.match(/^Bewertung\s*:\s*(.*)$/iu);
+      if (evaluationMatch) {
+        parsed.structured = true;
+        readingPromptAnswer = false;
+        readingEvaluation = true;
+        currentGroup = null;
+        const remainder = stripFeedbackBullet(evaluationMatch[1] || '');
+        if (remainder) {
+          const inlineGroup = splitFeedbackGroupLine(remainder);
+          if (inlineGroup) {
+            currentGroup = inlineGroup.group;
+            if (inlineGroup.text) parsed.groups[inlineGroup.group.key].push(inlineGroup.text);
+          } else {
+            parsed.summary.push(remainder);
+          }
+        }
+        return;
+      }
+
+      const inlineGroup = splitFeedbackGroupLine(line);
+      if (inlineGroup) {
+        parsed.structured = true;
+        readingPromptAnswer = false;
+        readingEvaluation = true;
+        currentGroup = inlineGroup.group;
+        if (inlineGroup.text) parsed.groups[inlineGroup.group.key].push(inlineGroup.text);
+        return;
+      }
+
+      const headingGroup = feedbackGroupForHeading(line);
+      if (headingGroup) {
+        parsed.structured = true;
+        readingPromptAnswer = false;
+        readingEvaluation = true;
+        currentGroup = headingGroup;
+        return;
+      }
+
+      const clean = stripFeedbackBullet(line);
+      if (!clean) return;
+      if (readingPromptAnswer) {
+        promptLines.push(clean);
+        return;
+      }
+      if (currentGroup) {
+        parsed.groups[currentGroup.key].push(clean);
+        return;
+      }
+      if (readingEvaluation || parsed.structured) {
+        parsed.summary.push(clean);
+      }
+    });
+
+  parsed.promptAnswer = promptLines.join(' ');
+  parsed.structured =
+    parsed.structured &&
+    Boolean(
+      parsed.promptAnswer ||
+        parsed.summary.length ||
+        FEEDBACK_GROUP_DEFINITIONS.some((definition) => parsed.groups[definition.key].length)
+    );
+  return parsed;
+}
+
+function createFeedbackTextBlock(className: string, title: string, text: string): HTMLElement {
+  const block = document.createElement('section');
+  block.className = className;
+
+  const heading = document.createElement('div');
+  heading.className = 'freitext-feedback__heading';
+  heading.textContent = title;
+  block.appendChild(heading);
+
+  const body = document.createElement('div');
+  body.className = 'freitext-feedback__body';
+  body.textContent = text;
+  block.appendChild(body);
+
+  return block;
+}
+
+function renderFreitextFeedback(feedback: HTMLElement, text: string): boolean {
+  const parsed = parseFreitextFeedback(text);
+  feedback.textContent = '';
+
+  if (!parsed.structured) {
+    feedback.classList.remove('feedback--structured');
+    feedback.textContent = text;
+    return false;
+  }
+
+  feedback.classList.add('feedback--structured');
+  const root = document.createElement('div');
+  root.className = 'freitext-feedback';
+
+  if (parsed.promptAnswer) {
+    root.appendChild(
+      createFeedbackTextBlock(
+        'freitext-feedback__prompt',
+        'Antwort auf Prüfhinweis',
+        parsed.promptAnswer
+      )
+    );
+  }
+
+  if (parsed.summary.length) {
+    root.appendChild(
+      createFeedbackTextBlock('freitext-feedback__summary', 'Hinweis', parsed.summary.join(' '))
+    );
+  }
+
+  const visibleGroups = FEEDBACK_GROUP_DEFINITIONS.filter(
+    (definition) => parsed.groups[definition.key].length
+  );
+  if (visibleGroups.length) {
+    const groups = document.createElement('div');
+    groups.className = 'freitext-feedback__groups';
+    visibleGroups.forEach((definition) => {
+      const group = document.createElement('section');
+      group.className = `freitext-feedback__group freitext-feedback__group--${definition.key}`;
+
+      const heading = document.createElement('div');
+      heading.className = 'freitext-feedback__group-title';
+      heading.textContent = definition.label;
+      group.appendChild(heading);
+
+      const list = document.createElement('ul');
+      list.className = 'freitext-feedback__list';
+      parsed.groups[definition.key].forEach((itemText) => {
+        const item = document.createElement('li');
+        item.textContent = itemText;
+        list.appendChild(item);
+      });
+      group.appendChild(list);
+      groups.appendChild(group);
+    });
+    root.appendChild(groups);
+  }
+
+  feedback.appendChild(root);
+  return true;
+}
+
 function showFeedback(feedback: HTMLElement, text: string, autoHide = false): void {
-  feedback.textContent = text;
+  renderFreitextFeedback(feedback, text);
   feedback.dataset.lastText = text;
   feedback.classList.add('feedback--visible');
   if (autoHide) {
@@ -204,7 +453,8 @@ function clearFeedback(feedback: HTMLElement | null): void {
     'feedback--visible',
     'feedback--richtig',
     'feedback--teilweise',
-    'feedback--falsch'
+    'feedback--falsch',
+    'feedback--structured'
   );
   feedback.removeAttribute('data-last-text');
 }
@@ -223,60 +473,6 @@ function bindOutsideClickHide(): void {
 }
 
 type AnswerEntry = Record<string, any>;
-
-function answerTextFromEntry(entry: AnswerEntry | null | undefined): string {
-  if (!entry) return '';
-  const stored = parseStoredFreitextValue(entry.value || '');
-  if (stored.answer) return stored.answer;
-  return String(entry.value || '').trim();
-}
-
-function thresholdLabel(score: number): string {
-  if (score >= 900) return 'richtig';
-  if (score >= 101) return 'mindestens teilweise richtig';
-  return 'eingetragen und geprüft';
-}
-
-function referenceReady(reference: FreitextReference, entry: AnswerEntry | null | undefined): boolean {
-  const value = answerTextFromEntry(entry);
-  if (!entry || value === '') return false;
-  const sourceType = reference.sourceType.toLowerCase();
-  if (sourceType === 'url' && !/^https?:\/\/\S+\.\S+/i.test(value)) return false;
-  const { score } = classificationInfo(entry.classification, entry.classification_label);
-  if (reference.minClassification <= 0) return true;
-  return score !== null && score >= reference.minClassification;
-}
-
-function setReferenceLockState(block: HTMLElement, locked: boolean, message = ''): void {
-  const textarea = block.querySelector('textarea.freitext__textarea') as HTMLTextAreaElement | null;
-  const button = block.querySelector('button.check-btn') as HTMLButtonElement | null;
-  const questionField = block.querySelector(
-    '.freitext__question-field'
-  ) as HTMLInputElement | HTMLTextAreaElement | null;
-  const lockMessage = block.querySelector('.freitext__lock-message') as HTMLElement | null;
-
-  block.classList.toggle('freitext-block--locked', locked);
-
-  if (textarea) {
-    if (!textarea.dataset.originalPlaceholder) {
-      textarea.dataset.originalPlaceholder = textarea.placeholder || '';
-    }
-    textarea.disabled = locked;
-    textarea.placeholder = locked
-      ? 'Dieser Freitext wird nach der verknüpften Vorarbeit freigeschaltet.'
-      : textarea.dataset.originalPlaceholder || 'Schreibe deinen Text hier...';
-  }
-  if (button) {
-    button.disabled = locked || button.dataset.freitextBusy === '1';
-  }
-  if (questionField) {
-    questionField.disabled = locked;
-  }
-  if (lockMessage) {
-    lockMessage.textContent = locked ? message : '';
-    lockMessage.hidden = !locked;
-  }
-}
 
 function setClasses(
   textarea: HTMLTextAreaElement | null,
@@ -309,6 +505,26 @@ function setClasses(
   }
 }
 
+function rememberCheckedValue(textarea: HTMLTextAreaElement, label: ClassificationLabel): void {
+  if (label) {
+    textarea.dataset.checkedValue = textarea.value.trim();
+  } else {
+    delete textarea.dataset.checkedValue;
+  }
+}
+
+function clearCheckedStateIfEdited(textarea: HTMLTextAreaElement): void {
+  if (!Object.prototype.hasOwnProperty.call(textarea.dataset, 'checkedValue')) return;
+  if (textarea.value.trim() === textarea.dataset.checkedValue) return;
+
+  const wrapper = textarea.closest('freitext-block') as HTMLElement | null;
+  const button = wrapper?.querySelector('.check-btn') as HTMLButtonElement | null;
+  const feedback = wrapper?.querySelector('.feedback') as HTMLElement | null;
+  setClasses(textarea, button, feedback, null);
+  clearFeedback(feedback);
+  delete textarea.dataset.checkedValue;
+}
+
 function updateProgress(
   root: HTMLElement,
   onProgress?: (progress: FreitextProgress) => void
@@ -319,12 +535,7 @@ function updateProgress(
     const textarea = block.querySelector(
       'textarea.freitext__textarea'
     ) as HTMLTextAreaElement | null;
-    if (!textarea || textarea.value.trim() === '') return false;
-
-    const requiredReferences = Array.from(
-      block.querySelectorAll<HTMLElement>('.freitext__reference[data-required="1"]')
-    );
-    return requiredReferences.every((entry) => entry.dataset.ready === '1');
+    return Boolean(textarea && textarea.value.trim() !== '');
   }).length;
   const percent = total ? Math.round((answered / total) * 100) : 0;
   const progress = { percent, answered, total };
@@ -354,6 +565,14 @@ function parseFreitextCriteria(block: HTMLElement | null): FreitextCriterion[] {
         entry.getAttribute('name') ||
         '';
       const description = (entry.textContent || '').replace(/\s+/g, ' ').trim();
+      const example = (
+        entry.getAttribute('example') ||
+        entry.getAttribute('data-example') ||
+        entry.getAttribute('beispiel') ||
+        ''
+      )
+        .replace(/\s+/g, ' ')
+        .trim();
       const internalDescription = (
         entry.getAttribute('internal-description') ||
         entry.getAttribute('data-internal-description') ||
@@ -363,12 +582,15 @@ function parseFreitextCriteria(block: HTMLElement | null): FreitextCriterion[] {
         .replace(/\s+/g, ' ')
         .trim();
       const key = (entry.getAttribute('key') || '').trim();
-      if (!key && !String(rawLabel).trim() && !description && !internalDescription) return null;
+      if (!key && !String(rawLabel).trim() && !description && !example && !internalDescription) {
+        return null;
+      }
       const label = String(rawLabel || `Teil ${index + 1}`).trim();
       return {
         id: normalizeCriterionId(key || label, index),
         label,
         description,
+        example,
         internalDescription
       };
     })
@@ -384,6 +606,9 @@ function normalizePremiseType(value = ''): string {
 function normalizeAnswerSourceType(value = ''): string {
   const type = String(value || '').trim().toLowerCase();
   if (type === 'gap' || type === 'luecke') return 'luecke';
+  if (type === 'textdokument' || type === 'text-document' || type === 'document') {
+    return 'textdokument';
+  }
   if (type === 'free-text' || type === 'freitext') return 'freitext';
   return '';
 }
@@ -486,81 +711,6 @@ function parseFreitextPremises(block: HTMLElement | null): FreitextPremise[] {
     .filter((entry): entry is FreitextPremise => Boolean(entry && entry.label !== ''));
 }
 
-function parseMinClassification(value: string | null): number {
-  const raw = String(value || '').trim().toLowerCase();
-  if (!raw) return 900;
-  if (raw === 'any' || raw === 'answered' || raw === 'eingetragen' || raw === 'vorhanden') return 0;
-  if (raw === 'richtig' || raw === 'correct') return 900;
-  if (raw === 'teilweise' || raw === 'partial') return 101;
-  if (raw === 'falsch' || raw === 'false') return 0;
-  const numeric = Number(raw);
-  if (!Number.isNaN(numeric)) return Math.max(0, Math.min(1000, Math.floor(numeric)));
-  return 900;
-}
-
-function referencePromptText(entry: Element): string {
-  const promptNode = entry.querySelector('freitext-ref-prompt, freitext-reference-prompt');
-  const prompt =
-    entry.getAttribute('prompt') ||
-    entry.getAttribute('instruction') ||
-    promptNode?.textContent ||
-    entry.textContent ||
-    '';
-  return prompt.replace(/\s+/g, ' ').trim();
-}
-
-function parseFreitextReferences(block: HTMLElement | null): FreitextReference[] {
-  if (!block) return [];
-  const referenceNodes = Array.from(
-    block.querySelectorAll(
-      'freitext-ref, freitext-reference, freitext-verknuepfung, freitext-abhaengigkeit'
-    )
-  );
-
-  return referenceNodes
-    .map((entry, index) => {
-      const sourceKey = (
-        entry.getAttribute('source-key') ||
-        entry.getAttribute('answer-key') ||
-        entry.getAttribute('source') ||
-        entry.getAttribute('ref') ||
-        entry.getAttribute('target') ||
-        entry.getAttribute('key') ||
-        ''
-      ).trim();
-      const label =
-        entry.getAttribute('label') ||
-        entry.getAttribute('title') ||
-        entry.getAttribute('name') ||
-        sourceKey ||
-        `Referenz ${index + 1}`;
-      const minClassification = parseMinClassification(
-        entry.getAttribute('min-classification') ||
-          entry.getAttribute('min-score') ||
-          entry.getAttribute('threshold') ||
-          entry.getAttribute('min')
-      );
-
-      return {
-        id: normalizeCriterionId(
-          entry.getAttribute('key') || entry.getAttribute('name') || sourceKey || label,
-          index
-        ),
-        label: String(label).trim(),
-        sourceKey,
-        sourceType: (
-          entry.getAttribute('type') ||
-          entry.getAttribute('source-type') ||
-          'answer'
-        ).trim(),
-        prompt: referencePromptText(entry),
-        minClassification,
-        required: parseRequiredAttribute(entry)
-      };
-    })
-    .filter((entry) => entry.sourceKey !== '' && entry.label !== '');
-}
-
 function getFreitextInstructionHtml(block: HTMLElement | null): string {
   if (!block) return '';
   const instruction = block.querySelector(FREITEXT_INSTRUCTION_SELECTOR);
@@ -611,6 +761,20 @@ function isVisualEditorBlock(el: HTMLElement): boolean {
   return Boolean(el.closest('.block-editor__visual[contenteditable="true"]'));
 }
 
+function clearLegacyFreitextLocks(block: HTMLElement): void {
+  block.classList.remove('freitext-block--locked');
+  block
+    .querySelectorAll('.freitext__lock-message, .freitext__references-wrap, .freitext__action-hint')
+    .forEach((entry) => entry.remove());
+}
+
+function unlockTextControl(control: HTMLInputElement | HTMLTextAreaElement | null): void {
+  if (!control) return;
+  control.disabled = false;
+  control.readOnly = false;
+  control.removeAttribute('aria-disabled');
+}
+
 export function ensureFreitextElements(): void {
   if (customElements.get('freitext-block')) return;
 
@@ -633,33 +797,32 @@ export function ensureFreitextElements(): void {
       const teacherPrompt = getFreitextTeacherPrompt(this);
       const blockPrompt = consumeBlockPromptText(this);
       const placeholder =
-        this.getAttribute('placeholder') || 'Schreibe deinen Text hier...';
+        this.getAttribute('placeholder') || 'Schreiben Sie Ihren Text hier...';
       const rowsAttr = Number(this.getAttribute('rows') || 0);
       const rows = Number.isFinite(rowsAttr) && rowsAttr > 0 ? Math.floor(rowsAttr) : 10;
       const minLength = (this.getAttribute('min-length') || '').trim();
       const maxLength = (this.getAttribute('max-length') || '').trim();
       const criteria = parseFreitextCriteria(this);
       const premises = parseFreitextPremises(this);
-      const references = parseFreitextReferences(this);
+      const reuseExistingRuntimeConfig =
+        this.dataset.upgraded === '1' && Boolean(this.querySelector('.freitext'));
+
+      clearLegacyFreitextLocks(this);
 
       const configureTextarea = (textarea: HTMLTextAreaElement): void => {
         textarea.className = 'freitext__textarea';
         textarea.name = nameAttr;
         textarea.rows = rows;
         textarea.placeholder = placeholder;
-        textarea.disabled = false;
+        unlockTextControl(textarea);
         textarea.dataset.criteria =
-          criteria.length || !textarea.dataset.criteria
+          !reuseExistingRuntimeConfig || criteria.length || !textarea.dataset.criteria
             ? JSON.stringify(criteria)
             : textarea.dataset.criteria;
         textarea.dataset.premises =
-          premises.length || !textarea.dataset.premises
+          !reuseExistingRuntimeConfig || premises.length || !textarea.dataset.premises
             ? JSON.stringify(premises)
             : textarea.dataset.premises;
-        textarea.dataset.references =
-          references.length || !textarea.dataset.references
-            ? JSON.stringify(references)
-            : textarea.dataset.references;
         textarea.dataset.task =
           task || textFromHtml(instructionHtml) || textarea.dataset.task || '';
         textarea.dataset.teacherPrompt = teacherPrompt || textarea.dataset.teacherPrompt || '';
@@ -667,7 +830,9 @@ export function ensureFreitextElements(): void {
         textarea.dataset.title =
           title || titleFromInstructionHtml(instructionHtml) || textarea.dataset.title || '';
         if (minLength) textarea.dataset.minLength = minLength;
+        else delete textarea.dataset.minLength;
         if (maxLength) textarea.dataset.maxLength = maxLength;
+        else delete textarea.dataset.maxLength;
       };
 
       const bindTextFieldShortcut = (
@@ -708,6 +873,8 @@ export function ensureFreitextElements(): void {
 
         button.type = 'button';
         button.classList.add('check-btn', 'ci-btn-primary');
+        button.disabled = button.dataset.freitextBusy === '1';
+        button.removeAttribute('aria-disabled');
         button.setAttribute('data-target', nameAttr);
         button.setAttribute('aria-label', 'Aktuellen Stand prüfen');
         bindTextFieldShortcut(textarea, button);
@@ -734,6 +901,7 @@ export function ensureFreitextElements(): void {
           questionField.type = 'text';
         }
         questionField.placeholder = FREITEXT_QUESTION_PLACEHOLDER;
+        unlockTextControl(questionField);
         questionField.setAttribute('aria-label', 'Zusatzfrage zur Prüfung');
         actionRow.appendChild(questionField);
         if (questionWrap && !questionWrap.querySelector('.freitext__question-field')) {
@@ -779,7 +947,6 @@ export function ensureFreitextElements(): void {
         task ||
         criteria.length ||
         premises.length ||
-        references.length ||
         minLength ||
         maxLength
       ) {
@@ -855,7 +1022,7 @@ export function ensureFreitextElements(): void {
               status.dataset.ready = '0';
               status.dataset.value = '';
               status.setAttribute('role', 'status');
-              status.textContent = 'Wartet auf verknüpftes Feld.';
+              status.textContent = 'Wartet auf Eingabefeld.';
               inputRow.appendChild(status);
             } else {
               const input = document.createElement('input');
@@ -880,55 +1047,6 @@ export function ensureFreitextElements(): void {
 
           premiseWrap.appendChild(premiseGrid);
           intro.appendChild(premiseWrap);
-        }
-
-        if (references.length) {
-          const referenceWrap = document.createElement('div');
-          referenceWrap.className = 'freitext__references-wrap';
-
-          const referenceLabel = document.createElement('strong');
-          referenceLabel.className = 'freitext__criteria-label';
-          referenceLabel.textContent = 'Verknüpfungen';
-          referenceWrap.appendChild(referenceLabel);
-
-          const referenceGrid = document.createElement('div');
-          referenceGrid.className = 'freitext__references';
-
-          references.forEach((reference) => {
-            const item = document.createElement('div');
-            item.className = 'freitext__reference';
-            item.dataset.referenceId = reference.id;
-            item.dataset.sourceKey = reference.sourceKey;
-            item.dataset.required = reference.required ? '1' : '0';
-            item.dataset.minClassification = String(reference.minClassification);
-            item.dataset.ready = '0';
-
-            const labelEl = document.createElement('span');
-            labelEl.className = 'freitext__reference-label';
-            labelEl.textContent = reference.label;
-            item.appendChild(labelEl);
-
-            const body = document.createElement('span');
-            body.className = 'freitext__reference-body';
-
-            if (reference.prompt) {
-              const promptEl = document.createElement('span');
-              promptEl.className = 'freitext__reference-prompt';
-              promptEl.textContent = reference.prompt;
-              body.appendChild(promptEl);
-            }
-
-            const statusEl = document.createElement('span');
-            statusEl.className = 'freitext__reference-status';
-            statusEl.textContent = `Wartet auf ${thresholdLabel(reference.minClassification)}.`;
-            body.appendChild(statusEl);
-
-            item.appendChild(body);
-            referenceGrid.appendChild(item);
-          });
-
-          referenceWrap.appendChild(referenceGrid);
-          intro.appendChild(referenceWrap);
         }
 
         if (criteria.length) {
@@ -957,6 +1075,13 @@ export function ensureFreitextElements(): void {
               descEl.className = 'freitext__criterion-description';
               descEl.textContent = criterion.description;
               item.appendChild(descEl);
+            }
+
+            if (criterion.example) {
+              const exampleEl = document.createElement('span');
+              exampleEl.className = 'freitext__criterion-example';
+              exampleEl.textContent = `Beispiel: ${criterion.example}`;
+              item.appendChild(exampleEl);
             }
 
             list.appendChild(item);
@@ -1004,25 +1129,11 @@ export function ensureFreitextElements(): void {
 
       wrapper.appendChild(actionRow);
 
-      const lockMessage = document.createElement('p');
-      lockMessage.className = 'freitext__lock-message';
-      lockMessage.hidden = true;
-      wrapper.appendChild(lockMessage);
-
       const feedback = document.createElement('div');
       feedback.className = 'feedback';
       wrapper.appendChild(feedback);
 
       this.appendChild(wrapper);
-      if (references.some((reference) => reference.required)) {
-        setReferenceLockState(
-          this,
-          true,
-          `Freigeschaltet, sobald "${references[0].label}" ${thresholdLabel(
-            references[0].minClassification
-          )} ist.`
-        );
-      }
     }
   }
 
@@ -1032,17 +1143,17 @@ export function ensureFreitextElements(): void {
 function parseStoredFreitextValue(rawValue: unknown): {
   answer: string;
   premiseValues: Record<string, string>;
-  sourceContext: Record<string, any> | null;
+  structured: boolean;
 } {
   const raw = String(rawValue || '');
   if (!raw.trim().startsWith('{')) {
-    return { answer: raw, premiseValues: {}, sourceContext: null };
+    return { answer: raw, premiseValues: {}, structured: false };
   }
 
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') {
-      return { answer: raw, premiseValues: {}, sourceContext: null };
+      return { answer: raw, premiseValues: {}, structured: false };
     }
 
     const answer =
@@ -1061,27 +1172,9 @@ function parseStoredFreitextValue(rawValue: unknown): {
     Object.entries(sourceValues).forEach(([key, value]) => {
       premiseValues[key] = String(value ?? '');
     });
-    let sourceContext =
-      parsed.source_context && typeof parsed.source_context === 'object'
-        ? (parsed.source_context as Record<string, any>)
-        : null;
-    if (!sourceContext && Array.isArray(parsed.references)) {
-      const referenceContexts = parsed.references
-        .map((reference: Record<string, any>) => ({
-          id: reference.id,
-          label: reference.label,
-          sourceKey: reference.sourceKey || reference.source_key,
-          value: reference.value,
-          sourceContext: reference.sourceContext || reference.source_context || null
-        }))
-        .filter((reference: Record<string, any>) => reference.sourceContext);
-      if (referenceContexts.length) {
-        sourceContext = { references: referenceContexts };
-      }
-    }
-    return { answer, premiseValues, sourceContext };
+    return { answer, premiseValues, structured: true };
   } catch {
-    return { answer: raw, premiseValues: {}, sourceContext: null };
+    return { answer: raw, premiseValues: {}, structured: false };
   }
 }
 
@@ -1104,16 +1197,6 @@ function latestAnswersByKey(answers: AnswerEntry[]): Record<string, AnswerEntry>
     }
   });
   return latestByKey;
-}
-
-function readReferencesFromTextarea(textarea: HTMLTextAreaElement | null): FreitextReference[] {
-  if (!textarea) return [];
-  try {
-    const parsed = JSON.parse(textarea.dataset.references || '[]');
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function readPremisesFromTextarea(textarea: HTMLTextAreaElement | null): FreitextPremise[] {
@@ -1251,90 +1334,6 @@ function updatePremiseStates(root: HTMLElement, latestByKey: Record<string, Answ
   });
 }
 
-function referenceSnapshot(
-  reference: FreitextReference,
-  latestByKey: Record<string, AnswerEntry>
-): FreitextReferenceSnapshot {
-  const entry = latestByKey[reference.sourceKey];
-  const stored = parseStoredFreitextValue(entry?.value || '');
-  const { score, label } = classificationInfo(entry?.classification, entry?.classification_label);
-  return {
-    id: reference.id,
-    label: reference.label,
-    sourceKey: reference.sourceKey,
-    sourceType: reference.sourceType,
-    prompt: reference.prompt,
-    value: stored.answer || answerTextFromEntry(entry),
-    sourceContext: stored.sourceContext,
-    classification: score,
-    classificationLabel: label,
-    updatedAt: String(entry?.updated_at || ''),
-    ready: referenceReady(reference, entry),
-    required: reference.required,
-    minClassification: reference.minClassification
-  };
-}
-
-function collectReferenceSnapshots(
-  references: FreitextReference[],
-  latestByKey: Record<string, AnswerEntry>
-): FreitextReferenceSnapshot[] {
-  return references.map((reference) => referenceSnapshot(reference, latestByKey));
-}
-
-function updateReferenceStates(
-  root: HTMLElement,
-  latestByKey: Record<string, AnswerEntry>
-): void {
-  const blocks = Array.from(root.querySelectorAll('freitext-block')) as HTMLElement[];
-  blocks.forEach((block) => {
-    const textarea = block.querySelector('textarea.freitext__textarea') as HTMLTextAreaElement | null;
-    const references = readReferencesFromTextarea(textarea);
-    if (!references.length) return;
-
-    const snapshots = collectReferenceSnapshots(references, latestByKey);
-    snapshots.forEach((snapshot) => {
-      const item = Array.from(block.querySelectorAll<HTMLElement>('.freitext__reference')).find(
-        (entry) => entry.dataset.referenceId === snapshot.id
-      );
-      if (!item) return;
-      item.dataset.ready = snapshot.ready ? '1' : '0';
-      item.dataset.value = snapshot.value;
-      item.dataset.sourceContext = snapshot.sourceContext
-        ? JSON.stringify(snapshot.sourceContext)
-        : '';
-      item.dataset.classification = snapshot.classification !== null ? String(snapshot.classification) : '';
-      item.dataset.classificationLabel = snapshot.classificationLabel || '';
-      item.dataset.updatedAt = snapshot.updatedAt;
-      item.classList.toggle('freitext__reference--ready', snapshot.ready);
-      item.classList.toggle('freitext__reference--missing', !snapshot.ready);
-
-      const status = item.querySelector('.freitext__reference-status') as HTMLElement | null;
-      if (status) {
-        const label = snapshot.classificationLabel
-          ? snapshot.classificationLabel.toLowerCase()
-          : snapshot.value
-          ? 'eingetragen'
-          : 'fehlt';
-        status.textContent = snapshot.ready
-          ? `Bereit: ${label}.`
-          : `Wartet auf ${thresholdLabel(snapshot.minClassification)}.`;
-      }
-    });
-
-    const missing = snapshots.find((snapshot) => snapshot.required && !snapshot.ready);
-    setReferenceLockState(
-      block,
-      Boolean(missing),
-      missing
-        ? `Freigeschaltet, sobald "${missing.label}" ${thresholdLabel(
-            missing.minClassification
-          )} ist.`
-        : ''
-    );
-  });
-}
-
 async function prefillAnswers(options: FreitextRuntimeOptions): Promise<void> {
   const { apiBaseUrl, sheetKey, user, root } = options;
   if (!user) return;
@@ -1362,7 +1361,12 @@ async function prefillAnswers(options: FreitextRuntimeOptions): Promise<void> {
 
       const wrapper = textarea.closest('freitext-block') as HTMLElement | null;
       const stored = parseStoredFreitextValue(entry.value || '');
-      if (!textarea.value) {
+      if (stored.answer.trim()) {
+        textarea.dataset.hasStoredAnswer = '1';
+      } else {
+        delete textarea.dataset.hasStoredAnswer;
+      }
+      if (textarea.dataset.userEdited !== '1' && !textarea.value) {
         textarea.value = stored.answer || '';
       }
       Object.entries(stored.premiseValues).forEach(([premiseId, value]) => {
@@ -1373,13 +1377,14 @@ async function prefillAnswers(options: FreitextRuntimeOptions): Promise<void> {
       });
 
       const { label } = classificationInfo(entry.classification, entry.classification_label);
+      const storedAnswer = stored.answer.trim();
+      const appliedLabel = storedAnswer !== '' && textarea.value.trim() === storedAnswer ? label : null;
       const button = wrapper?.querySelector('.check-btn') as HTMLButtonElement | null;
       const feedback = wrapper?.querySelector('.feedback') as HTMLElement | null;
-      setClasses(textarea, button, feedback, label);
+      setClasses(textarea, button, feedback, appliedLabel);
+      rememberCheckedValue(textarea, appliedLabel);
     });
     updatePremiseStates(root, latestByKey);
-    updateReferenceStates(root, latestByKey);
-    await saveReferenceSnapshots(options, latestByKey);
   } catch {
     // ignore
   }
@@ -1391,6 +1396,7 @@ function criteriaText(criteria: FreitextCriterion[]): string {
     .map((criterion, index) => {
       const details = [];
       if (criterion.description) details.push(`sichtbar: ${criterion.description}`);
+      if (criterion.example) details.push(`beispiel: ${criterion.example}`);
       if (criterion.internalDescription) details.push(`intern: ${criterion.internalDescription}`);
       return `${index + 1}. ${criterion.label}${details.length ? ` | ${details.join(' | ')}` : ''}`;
     })
@@ -1484,7 +1490,7 @@ function premisesText(
       if (premise.description) parts.push(`KI-Hinweis: ${premise.description}`);
       if (premise.sourceKey) {
         parts.push(
-          `Verknüpftes Eingabeelement: ${premise.sourceKey}${
+          `Eingabeelement: ${premise.sourceKey}${
             premise.sourceType ? ` (${premise.sourceType})` : ''
           }`
         );
@@ -1504,177 +1510,18 @@ function premisesText(
     .join('\n');
 }
 
-function referencesText(snapshots: FreitextReferenceSnapshot[]): string {
-  if (!snapshots.length) return '';
-  return snapshots
-    .map((snapshot, index) => {
-      const parts = [`${index + 1}. ${snapshot.label}`];
-      parts.push(`Referenzschlüssel: ${snapshot.sourceKey}`);
-      if (snapshot.prompt) parts.push(`KI-Hinweis: ${snapshot.prompt}`);
-      parts.push(`Schwelle: ${thresholdLabel(snapshot.minClassification)}`);
-      const state = snapshot.classificationLabel
-        ? snapshot.classificationLabel
-        : snapshot.value
-        ? 'eingetragen, noch ohne KI-Klassifizierung'
-        : 'fehlt';
-      parts.push(`Status Vorarbeit: ${state}`);
-      parts.push(`Vorarbeit bereit: ${snapshot.ready ? 'ja' : 'nein'}`);
-      parts.push(`Gespeicherte Vorarbeit: ${snapshot.value !== '' ? snapshot.value : '[fehlt]'}`);
-      const sourceContext = referenceSourceContextText(snapshot.sourceContext);
-      if (sourceContext) parts.push(`Extrahierter Inseratskontext: ${sourceContext}`);
-      return parts.join(' | ');
-    })
-    .join('\n');
-}
-
-function referenceSourceContextText(sourceContext: Record<string, any> | null | undefined): string {
-  if (!sourceContext || typeof sourceContext !== 'object') return '';
-  const facts =
-    sourceContext.facts && typeof sourceContext.facts === 'object'
-      ? (sourceContext.facts as Record<string, any>)
-      : {};
-  const parts: string[] = [];
-
-  const add = (label: string, value: unknown, suffix = '') => {
-    const text = Array.isArray(value) ? value.join(', ') : String(value ?? '').trim();
-    if (text) parts.push(`${label}: ${text}${suffix}`);
-  };
-
-  add('Portal', facts.portal || sourceContext.portal);
-  add('Portal-Domain', facts.portal_domain || sourceContext.portal_domain);
-  add('Inseratenummer', facts.listing_id || sourceContext.listing_id);
-  add('Inseratsart', facts.listing_kind || sourceContext.listing_kind);
-  add('Objekttyp', facts.object_type || sourceContext.object_type);
-  add('Titel', facts.title || sourceContext.title);
-  add('Adresse', facts.address || sourceContext.address);
-  add('Zimmer', facts.rooms || sourceContext.rooms);
-  add('Wohnfläche', facts.living_area_m2 || sourceContext.living_area_m2, ' m2');
-  add('Miete', facts.rent_chf || sourceContext.rent_chf, ' CHF');
-  add('Etage', facts.floor || sourceContext.floor);
-  add('Baujahr', facts.year_built || sourceContext.year_built);
-  add('Merkmale', facts.features || sourceContext.features);
-
-  const knownPortal =
-    sourceContext.known_property_portal === true ||
-    sourceContext.known_property_portal === '1' ||
-    sourceContext.known_property_portal === 1;
-  if (knownPortal) add('Bekannte Immobilienplattform erkannt', 'ja');
-  const directListing =
-    sourceContext.direct_listing_url === true ||
-    sourceContext.direct_listing_url === '1' ||
-    sourceContext.direct_listing_url === 1;
-  if (directListing) add('Direkter Inseratslink erkannt', 'ja');
-
-  const quality = String(sourceContext.extraction_quality || '').trim();
-  const allowFlexible =
-    sourceContext.allow_flexible_followup === true ||
-    sourceContext.allow_flexible_followup === '1';
-  if (quality) {
-    add('Extraktionsqualität', quality);
-  }
-  if (allowFlexible) {
-    add(
-      'Fallback',
-      sourceContext.fallback_reason ||
-        'Inserat konnte nicht ausreichend automatisch gelesen werden; Folgeantworten freier bewerten'
-    );
-  }
-
-  if (Array.isArray(sourceContext.references)) {
-    sourceContext.references.forEach((reference: Record<string, any>) => {
-      const nestedContext = reference.sourceContext || reference.source_context || null;
-      const nestedText = referenceSourceContextText(nestedContext);
-      const label = String(reference.label || reference.sourceKey || 'Referenz').trim();
-      if (nestedText) parts.push(`${label}: ${nestedText}`);
-    });
-  }
-
-  if (!parts.length && sourceContext.summary) {
-    add('Zusammenfassung', sourceContext.summary);
-  }
-  if (!parts.length && sourceContext.excerpt) {
-    add('Auszug', String(sourceContext.excerpt).slice(0, 500));
-  }
-  return parts.join('; ');
-}
-
-function parseReferenceSourceContext(rawValue: string): Record<string, any> | null {
-  const raw = String(rawValue || '').trim();
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, any>) : null;
-  } catch {
-    return null;
-  }
-}
-
 function buildStoredFreitextValue(
   answer: string,
   premises: FreitextPremise[],
-  values: Record<string, string>,
-  referenceSnapshots: FreitextReferenceSnapshot[] = []
+  values: Record<string, string>
 ): string {
-  if (!premises.length && !referenceSnapshots.length) return answer;
+  if (!premises.length) return answer;
   return JSON.stringify({
     type: 'freitext',
-    version: referenceSnapshots.length ? 2 : 1,
+    version: 1,
     answer,
-    premise_values: values,
-    references: referenceSnapshots
+    premise_values: values
   });
-}
-
-async function saveReferenceSnapshots(
-  options: FreitextRuntimeOptions,
-  latestByKey: Record<string, AnswerEntry>
-): Promise<void> {
-  const blocks = Array.from(options.root.querySelectorAll('freitext-block')) as HTMLElement[];
-  await Promise.all(
-    blocks.map(async (block) => {
-      const textarea = block.querySelector(
-        'textarea.freitext__textarea'
-      ) as HTMLTextAreaElement | null;
-      if (!textarea) return;
-
-      const references = readReferencesFromTextarea(textarea);
-      if (!references.length) return;
-
-      const snapshots = collectReferenceSnapshots(references, latestByKey);
-      if (!snapshots.some((snapshot) => snapshot.value !== '' || snapshot.updatedAt !== '')) return;
-
-      let premises: FreitextPremise[] = [];
-      try {
-        premises = JSON.parse(textarea.dataset.premises || '[]');
-      } catch {
-        premises = [];
-      }
-
-      const premiseValues = collectPremiseValues(block);
-      const answer = textarea.value.trim();
-      const signature = JSON.stringify({ answer, premiseValues, snapshots });
-      if (textarea.dataset.referenceSnapshotSignature === signature) return;
-      textarea.dataset.referenceSnapshotSignature = signature;
-
-      const existing = latestByKey[textarea.name];
-      const { score } = classificationInfo(existing?.classification, existing?.classification_label);
-      const payload: Record<string, string> = {
-        key: textarea.name,
-        sheet: options.sheetKey,
-        user: options.user,
-        value: buildStoredFreitextValue(answer, premises, premiseValues, snapshots),
-        save_only: '1',
-        ...previewPayload(options)
-      };
-      if (options.classroom) payload.classroom = String(options.classroom);
-      if (score !== null) payload.classification = String(score);
-
-      const response = await sendAnswerToBackend(options.apiBaseUrl, payload);
-      if (response?.error || response?.warning) {
-        textarea.dataset.referenceSnapshotSignature = '';
-      }
-    })
-  );
 }
 
 async function checkFreitext(
@@ -1713,31 +1560,6 @@ async function checkFreitext(
     premises = [];
   }
 
-  const references = readReferencesFromTextarea(textarea);
-  const referenceSnapshots = references.map((reference) => {
-    const item = Array.from(
-      wrapper?.querySelectorAll<HTMLElement>('.freitext__reference') ?? []
-    ).find((entry) => entry.dataset.referenceId === reference.id);
-    return {
-      id: reference.id,
-      label: reference.label,
-      sourceKey: reference.sourceKey,
-      sourceType: reference.sourceType,
-      prompt: reference.prompt,
-      value: item?.dataset.value || '',
-      sourceContext: parseReferenceSourceContext(item?.dataset.sourceContext || ''),
-      classification:
-        item?.dataset.classification && !Number.isNaN(Number(item.dataset.classification))
-          ? Number(item.dataset.classification)
-          : null,
-      classificationLabel: (item?.dataset.classificationLabel || null) as ClassificationLabel,
-      updatedAt: item?.dataset.updatedAt || '',
-      ready: item?.dataset.ready === '1',
-      required: reference.required,
-      minClassification: reference.minClassification
-    };
-  });
-
   const premiseValues = collectPremiseValues(wrapper);
   const premiseStates = Object.fromEntries(
     premises.map((premise) => [
@@ -1747,21 +1569,6 @@ async function checkFreitext(
   ) as Record<string, PremiseFulfillmentState>;
   const premiseNotice = premiseFeedbackNotice(premises, premiseStates);
   const additionalQuestion = questionField?.value.trim() || '';
-  const missingReference = referenceSnapshots.find(
-    (snapshot) => snapshot.required && !snapshot.ready
-  );
-  if (missingReference) {
-    const message = `Bitte zuerst "${missingReference.label}" ${thresholdLabel(
-      missingReference.minClassification
-    )} abschliessen.`;
-    notifySaveState(options, 'error', message);
-    setClasses(textarea, button, feedback, null);
-    button.classList.remove('check-btn--loading');
-    button.disabled = false;
-    showFeedback(feedback, message);
-    button.dataset.freitextBusy = '';
-    return;
-  }
 
   if (!answer) {
     const message = 'Bitte zuerst einen Text schreiben.';
@@ -1781,7 +1588,7 @@ async function checkFreitext(
     key: textarea.name,
     sheet: options.sheetKey,
     user: options.user,
-    value: buildStoredFreitextValue(answer, premises, premiseValues, referenceSnapshots),
+    value: buildStoredFreitextValue(answer, premises, premiseValues),
     answer_text: answer,
     ...(options.classroom ? { classroom: String(options.classroom) } : {}),
     ...previewPayload(options),
@@ -1797,15 +1604,22 @@ async function checkFreitext(
     criteria_text: criteriaText(criteria),
     criteria_json: JSON.stringify(criteria),
     additional_question: additionalQuestion,
-    premises_text: [premisesText(premises, premiseValues, premiseStates), referencesText(referenceSnapshots)]
-      .filter(Boolean)
-      .join('\n\n'),
+    premises_text: premisesText(premises, premiseValues, premiseStates),
     premises_json: JSON.stringify(premises),
     premise_values_json: JSON.stringify(premiseValues),
-    reference_snapshots_json: JSON.stringify(referenceSnapshots),
     min_length: textarea.dataset.minLength || '',
     max_length: textarea.dataset.maxLength || ''
   });
+
+  if (textarea.value.trim() !== answer) {
+    const message = 'Antwort wurde geändert. Bitte erneut prüfen.';
+    notifySaveState(options, 'error', message);
+    setClasses(textarea, button, feedback, null);
+    button.disabled = false;
+    showFeedback(feedback, message);
+    button.dataset.freitextBusy = '';
+    return;
+  }
 
   const backendError = (backendResponse && (backendResponse.error || backendResponse.warning)) || null;
   if (backendError) {
@@ -1826,6 +1640,9 @@ async function checkFreitext(
 
   const info = classificationInfo(chatgpt?.classification, chatgpt?.classification_label);
   setClasses(textarea, button, feedback, info.label);
+  rememberCheckedValue(textarea, info.label);
+  textarea.dataset.hasStoredAnswer = '1';
+  delete textarea.dataset.userEdited;
   showFeedback(feedback, [premiseNotice, chatgpt?.explanation || rawText].filter(Boolean).join('\n\n'));
 
   button.classList.remove('check-btn--loading');
@@ -1887,6 +1704,8 @@ export function createFreitextRuntime(options: FreitextRuntimeOptions): {
     textareas.forEach((textarea) => {
       if (textareaHandlers.has(textarea)) return;
       const handler = () => {
+        textarea.dataset.userEdited = '1';
+        clearCheckedStateIfEdited(textarea);
         updateProgress(options.root, options.onProgress);
       };
       textareaHandlers.set(textarea, handler);

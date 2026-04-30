@@ -6,6 +6,10 @@
   import { page } from '$app/stores';
   import { loadConfig } from '$lib/config';
   import { createLueckeRuntime, ensureLueckeElements } from '$lib/custom-elements/luecke';
+  import {
+    createTextdokumentRuntime,
+    ensureTextdokumentElements
+  } from '$lib/custom-elements/textdokument';
   import { createFreitextRuntime, ensureFreitextElements } from '$lib/custom-elements/freitext';
   import { createUmfrageRuntime, ensureUmfrageElements } from '$lib/custom-elements/umfrage';
   import { applySchoolCiCss } from '$lib/ci';
@@ -32,6 +36,7 @@
 
   let progress = { percent: 0, answered: 0, total: 0 };
   let lueckeProgress = { percent: 0, answered: 0, total: 0 };
+  let textdokumentProgress = { percent: 0, answered: 0, total: 0 };
   let freitextProgress = { percent: 0, answered: 0, total: 0 };
   let saveStatus = '';
   let saveMessage = '';
@@ -39,6 +44,7 @@
 
   let contentEl;
   let lueckeRuntime = null;
+  let textdokumentRuntime = null;
   let freitextRuntime = null;
   let umfrageRuntime = null;
   let lastLoadedKey = '';
@@ -56,6 +62,10 @@
     lueckeProgress = next;
   };
 
+  const updateTextdokumentProgress = (next) => {
+    textdokumentProgress = next;
+  };
+
   const updateFreitextProgress = (next) => {
     freitextProgress = next;
   };
@@ -63,9 +73,11 @@
   $: {
     const total =
       (lueckeProgress?.total ?? 0) +
+      (textdokumentProgress?.total ?? 0) +
       (freitextProgress?.total ?? 0);
     const answered =
       (lueckeProgress?.answered ?? 0) +
+      (textdokumentProgress?.answered ?? 0) +
       (freitextProgress?.answered ?? 0);
     progress = {
       total,
@@ -302,6 +314,7 @@
         assignmentForm = '';
         classroomSchoolCss = '';
         lueckeProgress = { percent: 0, answered: 0, total: 0 };
+        textdokumentProgress = { percent: 0, answered: 0, total: 0 };
         freitextProgress = { percent: 0, answered: 0, total: 0 };
         loading = false;
         return;
@@ -311,6 +324,7 @@
       assignmentForm = sheet?.assignment_form ?? '';
       classroomSchoolCss = typeof sheet?.school_css === 'string' ? sheet.school_css : '';
       lueckeProgress = { percent: 0, answered: 0, total: 0 };
+      textdokumentProgress = { percent: 0, answered: 0, total: 0 };
       freitextProgress = { percent: 0, answered: 0, total: 0 };
       saveStatus = '';
       saveMessage = '';
@@ -324,6 +338,7 @@
       loadError = err?.message ?? 'Sheet konnte nicht geladen werden';
       classroomSchoolCss = '';
       lueckeProgress = { percent: 0, answered: 0, total: 0 };
+      textdokumentProgress = { percent: 0, answered: 0, total: 0 };
       freitextProgress = { percent: 0, answered: 0, total: 0 };
       loading = false;
     }
@@ -336,6 +351,7 @@
         ? config.apiBaseUrl
         : `${config.apiBaseUrl}/`;
       ensureLueckeElements();
+      ensureTextdokumentElements();
       ensureFreitextElements();
       ensureUmfrageElements();
     } catch (err) {
@@ -432,16 +448,19 @@
     const signature = `${runtimeUser}::${runtimeClassroom ?? ''}::${assignmentForm}`;
     if (
       lueckeRuntime &&
+      textdokumentRuntime &&
       freitextRuntime &&
       umfrageRuntime &&
       lastRuntimeSignature === signature
     ) {
       await lueckeRuntime.refresh();
+      await textdokumentRuntime.refresh();
       await freitextRuntime.refresh();
       await umfrageRuntime.refresh();
       return;
     }
     lueckeRuntime?.destroy();
+    textdokumentRuntime?.destroy();
     freitextRuntime?.destroy();
     umfrageRuntime?.destroy();
     lueckeRuntime = createLueckeRuntime({
@@ -451,6 +470,15 @@
       user: runtimeUser,
       classroom: runtimeClassroom,
       onProgress: updateLueckeProgress,
+      onSaveState: updateSaveState
+    });
+    textdokumentRuntime = createTextdokumentRuntime({
+      root: contentEl,
+      apiBaseUrl,
+      sheetKey,
+      user: runtimeUser,
+      classroom: runtimeClassroom,
+      onProgress: updateTextdokumentProgress,
       onSaveState: updateSaveState
     });
     freitextRuntime = createFreitextRuntime({
@@ -472,12 +500,14 @@
     });
     lastRuntimeSignature = signature;
     await lueckeRuntime.refresh();
+    await textdokumentRuntime.refresh();
     await freitextRuntime.refresh();
     await umfrageRuntime.refresh();
   };
 
   onDestroy(() => {
     lueckeRuntime?.destroy();
+    textdokumentRuntime?.destroy();
     freitextRuntime?.destroy();
     umfrageRuntime?.destroy();
   });
@@ -533,7 +563,7 @@
   {#if authReady && !learner && !isAnonymousDisplayMode()}
     <div class="login-card">
       <h2>Identifikationscode</h2>
-      <p>Bitte gib deinen 12-stelligen Code ein, um Antworten zu speichern.</p>
+      <p>Bitte geben Sie Ihren 12-stelligen Code ein, um Antworten zu speichern.</p>
       <p class="login-card__hint">Direktlinks mit `?token=123456789012` funktionieren ebenfalls.</p>
       <div class="login-row">
         <input
@@ -589,13 +619,13 @@
         </span>
         Anonym geöffnet. Antworten werden anonym gespeichert.
         {anonymousSessionCode
-          ? ` Dein Session-Code: ${anonymousSessionCode} (lokal als Cookie gespeichert).`
+          ? ` Ihr Session-Code: ${anonymousSessionCode} (lokal als Cookie gespeichert).`
           : ''}
       {:else if learner}
         Persönlich geöffnet als {learner.name || 'Lernende:r'}
         {learner.code ? ` (${learner.code})` : ''}.
       {:else}
-        Bitte einloggen, damit deine Antworten gespeichert werden.
+        Bitte einloggen, damit Ihre Antworten gespeichert werden.
       {/if}
       Rückmeldungen werden beim Klick auf ? erstellt; Umfrage-Antworten werden direkt bei Auswahl gespeichert.
     </div>
@@ -604,6 +634,7 @@
 
 <style>
   @import '../../../lib/check-btn.css';
+  @import '../../../lib/textdokument.css';
 
   :global(body) {
     margin: 0;
@@ -867,7 +898,7 @@
 
   .sheet :global(.freitext__criterion) {
     display: grid;
-    grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr);
+    grid-template-columns: minmax(60px, 0.17fr) minmax(0, 0.48fr) minmax(0, 0.35fr);
     gap: 5px;
     align-items: start;
     padding: 2px 5px;
@@ -887,7 +918,8 @@
     overflow-wrap: anywhere;
   }
 
-  .sheet :global(.freitext__criterion-description) {
+  .sheet :global(.freitext__criterion-description),
+  .sheet :global(.freitext__criterion-example) {
     min-width: 0;
     color: #5e554a;
     font-size: 12px;
@@ -895,22 +927,16 @@
     overflow-wrap: anywhere;
   }
 
+  .sheet :global(.freitext__criterion-example) {
+    color: #475569;
+  }
+
   .sheet :global(.freitext__premises-wrap) {
     display: grid;
     gap: 2px;
   }
 
-  .sheet :global(.freitext__references-wrap) {
-    display: grid;
-    gap: 2px;
-  }
-
   .sheet :global(.freitext__premises) {
-    display: grid;
-    gap: 0;
-  }
-
-  .sheet :global(.freitext__references) {
     display: grid;
     gap: 0;
   }
@@ -926,22 +952,7 @@
     background: #fffdf8;
   }
 
-  .sheet :global(.freitext__reference) {
-    display: grid;
-    grid-template-columns: minmax(160px, 0.36fr) minmax(220px, 0.64fr);
-    gap: 7px;
-    align-items: start;
-    padding: 4px 6px;
-    border-radius: 0;
-    border: 1px solid #eadfd3;
-    background: #fffdf8;
-  }
-
   .sheet :global(.freitext__premise + .freitext__premise) {
-    border-top: 0;
-  }
-
-  .sheet :global(.freitext__reference + .freitext__reference) {
     border-top: 0;
   }
 
@@ -950,39 +961,6 @@
     font-weight: 700;
     color: #1c232f;
     overflow-wrap: anywhere;
-  }
-
-  .sheet :global(.freitext__reference-label) {
-    min-width: 0;
-    font-weight: 700;
-    color: #1c232f;
-    overflow-wrap: anywhere;
-  }
-
-  .sheet :global(.freitext__reference-body) {
-    display: grid;
-    gap: 3px;
-    min-width: 0;
-    color: #5e554a;
-    font-size: 12px;
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-  }
-
-  .sheet :global(.freitext__reference-status) {
-    font-weight: 700;
-    color: #8a5a17;
-  }
-
-  .sheet :global(.freitext__reference--ready .freitext__reference-status) {
-    color: #166534;
-  }
-
-  .sheet :global(.freitext__lock-message) {
-    margin: -2px 0 0;
-    color: #8a5a17;
-    font-size: 12px;
-    font-weight: 700;
   }
 
   .sheet :global(.freitext__premise-hint) {
@@ -1409,6 +1387,109 @@
 
   :global(.feedback--falsch::after) {
     border-bottom-color: #fde7e7;
+  }
+
+  :global(.feedback.feedback--structured) {
+    max-width: min(31rem, 92vw);
+    min-width: min(21rem, 86vw);
+    padding: 0.55rem;
+    white-space: normal;
+    line-height: 1.35;
+  }
+
+  :global(.feedback .freitext-feedback) {
+    display: grid;
+    gap: 8px;
+    color: #334155;
+  }
+
+  :global(.freitext-feedback__prompt),
+  :global(.freitext-feedback__summary),
+  :global(.freitext-feedback__group) {
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: rgba(255, 255, 255, 0.92);
+  }
+
+  :global(.freitext-feedback__prompt) {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+  }
+
+  :global(.freitext-feedback__summary) {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+  }
+
+  :global(.freitext-feedback__heading),
+  :global(.freitext-feedback__group-title) {
+    margin: 0 0 4px;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #475569;
+  }
+
+  :global(.freitext-feedback__prompt .freitext-feedback__heading) {
+    color: #1d4ed8;
+  }
+
+  :global(.freitext-feedback__body) {
+    color: #1f2937;
+    overflow-wrap: anywhere;
+  }
+
+  :global(.freitext-feedback__groups) {
+    display: grid;
+    gap: 6px;
+  }
+
+  :global(.freitext-feedback__group--fulfilled) {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+  }
+
+  :global(.freitext-feedback__group--partial) {
+    border-color: #fde68a;
+    background: #fffbeb;
+  }
+
+  :global(.freitext-feedback__group--wrong) {
+    border-color: #fecaca;
+    background: #fff1f2;
+  }
+
+  :global(.freitext-feedback__group--missing) {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+  }
+
+  :global(.freitext-feedback__group--fulfilled .freitext-feedback__group-title) {
+    color: #15803d;
+  }
+
+  :global(.freitext-feedback__group--partial .freitext-feedback__group-title) {
+    color: #b45309;
+  }
+
+  :global(.freitext-feedback__group--wrong .freitext-feedback__group-title) {
+    color: #b91c1c;
+  }
+
+  :global(.freitext-feedback__group--missing .freitext-feedback__group-title) {
+    color: #475569;
+  }
+
+  :global(.freitext-feedback__list) {
+    margin: 0;
+    padding-left: 1rem;
+    color: #1f2937;
+  }
+
+  :global(.freitext-feedback__list li + li) {
+    margin-top: 3px;
   }
 
   :global(umfrage-matrix) {

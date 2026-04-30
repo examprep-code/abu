@@ -227,7 +227,7 @@
       <div>
         <p class="eyebrow">ABU</p>
         <h1>Lernendenportal</h1>
-        <p class="meta">Deine freigegebenen Arbeitsblätter.</p>
+        <p class="meta">Ihre freigegebenen Arbeitsblätter.</p>
       </div>
       {#if learner}
         <div class="status-card">

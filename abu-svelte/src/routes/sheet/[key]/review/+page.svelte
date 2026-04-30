@@ -162,7 +162,7 @@
   };
 
   const transformGaps = (container) => {
-    const gaps = Array.from(container.querySelectorAll('luecke-gap, freitext-block'));
+    const gaps = Array.from(container.querySelectorAll('luecke-gap, textdokument-feld, freitext-block'));
     gaps.forEach((gap, idx) => {
       const key = gap.getAttribute('name') || `gap-${idx + 1}`;
       const tag = gap.tagName.toLowerCase();

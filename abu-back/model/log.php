@@ -2,8 +2,9 @@
 
 $m['log']=[
     'id' => ['id'],
-    'request' => ['array'],
-    'chatgpt' => ['array'],
+    'request' => ['longtext'],
+    'request_with_prompt_keys' => ['longtext'],
+    'chatgpt' => ['longtext'],
     'created_at' => ['timestamp'],
     'updated_at' => ['timestamp'],
 ];

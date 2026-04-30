@@ -1160,9 +1160,10 @@
     const content = sheet?.content ?? '';
     const plainText = stripHtml(content);
     const lueckeCount = countMatches(content, /name="luecke\d+"/gi);
+    const textdokumentCount = countMatches(content, /<\s*textdokument-feld\b/gi);
     const freitextCount = countMatches(content, /freitext/gi);
     const umfrageCount = countMatches(content, /umfrage/gi);
-    const interactionCount = lueckeCount + freitextCount + umfrageCount;
+    const interactionCount = lueckeCount + textdokumentCount + freitextCount + umfrageCount;
     const moduleCount = clamp(
       Math.max(1, Math.ceil(plainText.length / 420)) + Math.ceil(interactionCount / 4),
       1,

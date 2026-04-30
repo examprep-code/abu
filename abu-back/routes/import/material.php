@@ -132,6 +132,7 @@ foreach ($files as $file) {
         'content_html ist ein HTML-Fragment (ohne <html>/<body>) mit normalen Tags (h2,p,ul,li,table).',
         'Erzeuge Lücken mit <luecke-gap>LOESUNG</luecke-gap>. Für volle Breite: <luecke-gap width="100%">LOESUNG</luecke-gap>.',
         'Die Lösung steht im TextContent des Tags (nicht als Attribut). Kein Script, kein CSS.',
+        'Formuliere alle Arbeitsaufträge für Lernende in der Höflichkeitsform mit Sie/Ihnen/Ihre.',
         'Mindestens 8 und maximal 20 Lücken. Schreibe auf Deutsch.',
     ]);
 

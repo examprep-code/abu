@@ -12,6 +12,9 @@ export type LueckeRuntimeOptions = {
   sheetKey: string;
   user: string;
   classroom?: string | number | null;
+  previewSchool?: string | number | null;
+  previewClassroom?: string | number | null;
+  previewLearner?: string | null;
   previewMode?: boolean;
   onProgress?: (progress: LueckeProgress) => void;
   onSaveState?: (event: {
@@ -297,8 +300,7 @@ function setClasses(
   input: HTMLInputElement | null,
   button: HTMLButtonElement | null,
   feedback: HTMLElement | null,
-  label: 'RICHTIG' | 'TEILWEISE' | 'FALSCH' | null,
-  lockCorrectAnswer = true
+  label: 'RICHTIG' | 'TEILWEISE' | 'FALSCH' | null
 ): void {
   if (input) {
     input.classList.remove('luecke--richtig', 'luecke--teilweise', 'luecke--falsch');
@@ -325,8 +327,8 @@ function setClasses(
     input?.classList.add('luecke--richtig');
     button?.classList.add('check-btn--richtig');
     feedback?.classList.add('feedback--richtig');
-    if (input) input.disabled = lockCorrectAnswer;
-    if (button) button.disabled = lockCorrectAnswer;
+    if (input) input.disabled = false;
+    if (button) button.disabled = false;
   } else if (label === 'TEILWEISE') {
     input?.classList.add('luecke--teilweise');
     button?.classList.add('check-btn--teilweise');
@@ -340,6 +342,28 @@ function setClasses(
     if (input) input.disabled = false;
     if (button) button.disabled = false;
   }
+}
+
+function rememberCheckedValue(
+  input: HTMLInputElement,
+  label: 'RICHTIG' | 'TEILWEISE' | 'FALSCH' | null
+): void {
+  if (label) {
+    input.dataset.checkedValue = input.value.trim();
+  } else {
+    delete input.dataset.checkedValue;
+  }
+}
+
+function clearCheckedStateIfEdited(input: HTMLInputElement): void {
+  if (!Object.prototype.hasOwnProperty.call(input.dataset, 'checkedValue')) return;
+  if (input.value.trim() === input.dataset.checkedValue) return;
+
+  const button = input.parentElement?.querySelector('.check-btn') as HTMLButtonElement | null;
+  const feedback = input.parentElement?.querySelector('.feedback') as HTMLElement | null;
+  setClasses(input, button, feedback, null);
+  clearFeedback(feedback);
+  delete input.dataset.checkedValue;
 }
 
 function updateProgress(root: HTMLElement, onProgress?: (progress: LueckeProgress) => void): LueckeProgress {
@@ -371,7 +395,13 @@ function notifySaveState(
 }
 
 function previewPayload(options: LueckeRuntimeOptions): Record<string, string> {
-  return options.previewMode ? { preview_mode: '1' } : {};
+  if (!options.previewMode) return {};
+  return {
+    preview_mode: '1',
+    ...(options.previewSchool ? { preview_school: String(options.previewSchool) } : {}),
+    ...(options.previewClassroom ? { preview_classroom: String(options.previewClassroom) } : {}),
+    ...(options.previewLearner ? { preview_learner: String(options.previewLearner) } : {})
+  };
 }
 
 export function ensureLueckeElements(): void {
@@ -513,7 +543,7 @@ async function prefillAnswers(options: LueckeRuntimeOptions): Promise<void> {
 
       const stored = parseStoredLueckeValue(entry.value || '');
 
-      if (!input.value) {
+      if (input.dataset.userEdited !== '1' && !input.value) {
         input.value = stored.answer || '';
       }
       input.title = input.value || '';
@@ -524,10 +554,13 @@ async function prefillAnswers(options: LueckeRuntimeOptions): Promise<void> {
       }
 
       const { label } = classificationInfo(entry.classification, entry.classification_label);
+      const storedAnswer = stored.answer.trim();
+      const appliedLabel = storedAnswer !== '' && input.value.trim() === storedAnswer ? label : null;
       const button = input.parentElement?.querySelector('.check-btn') as HTMLButtonElement | null;
       const feedback = input.parentElement?.querySelector('.feedback') as HTMLElement | null;
       clearFeedback(feedback);
-      setClasses(input, button, feedback, label, !options.previewMode);
+      setClasses(input, button, feedback, appliedLabel);
+      rememberCheckedValue(input, appliedLabel);
     });
   } catch {
     // ignore prefill errors
@@ -580,6 +613,15 @@ async function checkGap(
     prompt
   });
 
+  if (input.value.trim() !== answer) {
+    const message = 'Antwort wurde geändert. Bitte erneut prüfen.';
+    notifySaveState(options, 'error', message);
+    setClasses(input, button, feedback, null);
+    showFeedback(feedback, message);
+    button.dataset.lueckeBusy = '';
+    return;
+  }
+
   const backendError = (backendResponse && (backendResponse.error || backendResponse.warning)) || null;
   if (backendError) {
     notifySaveState(options, 'error', String(backendError));
@@ -626,11 +668,12 @@ async function checkGap(
       explLower.includes('stimmt nicht');
 
     if (overrideByAccepted || overrideByRough || soundsNegative) {
-      explanation = 'Korrekt. Deine Antwort ist in diesem Kontext inhaltlich passend.';
+      explanation = 'Korrekt. Ihre Antwort ist in diesem Kontext inhaltlich passend.';
     }
   }
 
   input.title = answer;
+  delete input.dataset.userEdited;
   if (sourceContext) {
     input.dataset.sourceContext = JSON.stringify(sourceContext);
   } else {
@@ -638,7 +681,8 @@ async function checkGap(
   }
   showFeedback(feedback, explanation);
 
-  setClasses(input, button, feedback, label, !options.previewMode);
+  setClasses(input, button, feedback, label);
+  rememberCheckedValue(input, label);
   button.disabled = false;
   updateProgress(options.root, options.onProgress);
   notifySaveState(options, 'saved');
@@ -686,6 +730,8 @@ export function createLueckeRuntime(options: LueckeRuntimeOptions): {
     inputs.forEach((input) => {
       if (inputHandlers.has(input)) return;
       const handler = () => {
+        input.dataset.userEdited = '1';
+        clearCheckedStateIfEdited(input);
         updateProgress(options.root, options.onProgress);
       };
       inputHandlers.set(input, handler);

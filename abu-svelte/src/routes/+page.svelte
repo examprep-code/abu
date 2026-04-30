@@ -7,6 +7,10 @@
   import { loadConfig } from '$lib/config';
   import { tokenizeCss, tokenizeHtml } from '$lib/codeTokens';
   import { createLueckeRuntime, ensureLueckeElements } from '$lib/custom-elements/luecke';
+  import {
+    createTextdokumentRuntime,
+    ensureTextdokumentElements
+  } from '$lib/custom-elements/textdokument';
   import { createFreitextRuntime, ensureFreitextElements } from '$lib/custom-elements/freitext';
   import { createUmfrageRuntime, ensureUmfrageElements } from '$lib/custom-elements/umfrage';
   import { applySchoolCiCss } from '$lib/ci';
@@ -128,7 +132,6 @@
   let editorReturnTab = 'collections';
   let showTopbarMenu = false;
   let editorView = 'visual';
-  let lueckeInsertWidth = '25ch';
   let topbarMenuEl = null;
   let sheetHtmlTokens = [];
   let sheetHtmlHighlightContent = '';
@@ -217,10 +220,19 @@
 
   let previewEl = null;
   let previewLueckeRuntime = null;
+  let previewTextdokumentRuntime = null;
   let previewFreitextRuntime = null;
   let previewUmfrageRuntime = null;
   let previewPending = false;
   let previewUser = '';
+  let previewSchoolId = '';
+  let previewClassId = '';
+  let previewLearnerCode = '';
+  let previewLearners = [];
+  let previewLearnersLoading = false;
+  let previewLearnersError = '';
+  let previewLearnersClassKey = null;
+  let previewLearnersRequestId = 0;
 
   let visualBlocks = [];
   let visualBlockIds = [];
@@ -245,13 +257,15 @@
   let visibleBlockInsertIndexes = new Set();
   let blockInsertIndex = null;
   let lueckeEditorOpen = false;
+  let lueckeEditorKind = 'luecke';
   let lueckeEditorBlockIndex = null;
+  let lueckeEditorOriginalName = '';
   let lueckeEditorName = '';
   let lueckeEditorSolution = '';
   let lueckeEditorPrompt = '';
   let lueckeEditorWidth = '25ch';
   let lueckeEditorError = '';
-  let lueckeSolutionInputEl = null;
+  let lueckeNameInputEl = null;
   const VISUAL_HISTORY_LIMIT = 200;
   const VISUAL_HISTORY_CHUNK_MS = 900;
   const VISUAL_INPUT_COMMIT_DELAY_MS = 650;
@@ -331,6 +345,7 @@
   let answersRenderMode = 'aggregate';
   let answersRenderKey = 0;
   let answersLueckeRuntime = null;
+  let answersTextdokumentRuntime = null;
   let answersFreitextRuntime = null;
   let answersUmfrageRuntime = null;
   let answersCiCss = '';
@@ -547,10 +562,10 @@
   $: isCurrentVersion = selectedVersion ? Number(selectedVersion.is_current) === 1 : false;
   $: sheetVersionNumbers = buildVersionNumberMap(sheetVersions);
 
-  $: {
-    schoolMap;
-    if (
-      classSchoolFilter &&
+	  $: {
+	    schoolMap;
+	    if (
+	      classSchoolFilter &&
       !schools.some((school) => String(school.id) === String(classSchoolFilter))
     ) {
       classSchoolFilter = '';
@@ -580,11 +595,25 @@
       return nameA.localeCompare(nameB, undefined, {
         numeric: true,
         sensitivity: 'base'
-      });
-    });
+	      });
+	    });
+	  }
+  $: previewClassOptions = previewSchoolId
+    ? classes.filter(
+        (entry) => String(normalizeSchoolId(entry?.school)) === String(previewSchoolId)
+      )
+    : classes;
+  $: previewClassIdValue = normalizeClassId(previewClassId);
+  $: previewSelectedClass =
+    previewClassOptions.find((entry) => normalizeClassId(entry?.id) === previewClassIdValue) ??
+    null;
+  $: previewContextClassId = previewSelectedClass ? normalizeClassId(previewSelectedClass.id) : null;
+  $: if (previewContextClassId !== previewLearnersClassKey) {
+    previewLearnerCode = '';
+    fetchPreviewLearners(previewContextClassId);
   }
 
-  const sheetColumns = [
+	  const sheetColumns = [
     {
       key: 'name',
       label: 'Titel',
@@ -1208,6 +1237,18 @@
 
   onMount(() => {
     if (!browser) return undefined;
+    const handleSelectionChange = () => {
+      scheduleVisualAtomicSelectionMarkerRefresh();
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange);
+      clearVisualAtomicSelectionMarkerFrame();
+    };
+  });
+
+  onMount(() => {
+    if (!browser) return undefined;
     const handleBeforeUnload = (event) => {
       if (!hasUnsavedSheetChanges()) return;
       event.preventDefault();
@@ -1228,6 +1269,7 @@
         ? config.apiBaseUrl
         : `${config.apiBaseUrl}/`;
       ensureLueckeElements();
+      ensureTextdokumentElements();
       ensureFreitextElements();
       ensureUmfrageElements();
     } catch (err) {
@@ -1704,7 +1746,21 @@
     answersContent = '';
     answersRenderMode = 'aggregate';
     answersRenderKey = 0;
-    agentPrompt = '';
+    previewLueckeRuntime?.destroy();
+    previewTextdokumentRuntime?.destroy();
+    previewFreitextRuntime?.destroy();
+    previewUmfrageRuntime?.destroy();
+    previewLueckeRuntime = null;
+	    previewTextdokumentRuntime = null;
+	    previewFreitextRuntime = null;
+	    previewUmfrageRuntime = null;
+    previewUser = '';
+    previewSchoolId = '';
+    previewClassId = '';
+    previewLearnerCode = '';
+    previewLearners = [];
+    previewLearnersClassKey = null;
+	    agentPrompt = '';
     agentStatus = '';
     agentPending = false;
     agentHistory = [];
@@ -2232,11 +2288,20 @@
     editorView = 'visual';
     resetSheetVersions();
     previewLueckeRuntime?.destroy();
+    previewTextdokumentRuntime?.destroy();
+    previewFreitextRuntime?.destroy();
     previewUmfrageRuntime?.destroy();
     previewLueckeRuntime = null;
-    previewUmfrageRuntime = null;
-    previewUser = '';
-    answers = [];
+    previewTextdokumentRuntime = null;
+	    previewFreitextRuntime = null;
+	    previewUmfrageRuntime = null;
+	    previewUser = '';
+    previewSchoolId = '';
+    previewClassId = '';
+    previewLearnerCode = '';
+    previewLearners = [];
+    previewLearnersClassKey = null;
+	    answers = [];
     answersError = '';
     answersMeta = '';
     answersKey = '';
@@ -3162,6 +3227,28 @@
     return `luecke${index}`;
   };
 
+  const getNextTextdokumentIndex = () => {
+    const source = `${editorContent || ''}\n${visualBlocks.join('\n')}`;
+    const matches = Array.from(source.matchAll(/name="(?:textdokument|textfeld)(\d+)"/g));
+    const max = matches.reduce((acc, match) => {
+      const value = parseInt(match[1], 10);
+      return Number.isFinite(value) ? Math.max(acc, value) : acc;
+    }, 0);
+    return max + 1;
+  };
+
+  const getNextTextdokumentName = () => {
+    const source = `${editorContent || ''}\n${visualBlocks.join('\n')}`;
+    const names = new Set(
+      Array.from(source.matchAll(/<\s*textdokument-feld\b[^>]*\bname="([^"]+)"/gi))
+        .map((match) => match[1])
+        .filter(Boolean)
+    );
+    let index = getNextTextdokumentIndex();
+    while (names.has(`textfeld${index}`) || names.has(`textdokument${index}`)) index += 1;
+    return `textfeld${index}`;
+  };
+
   const getNextUmfrageIndex = () => {
     const matches = Array.from(editorContent.matchAll(/name="umfrage(\d+)"/g));
     const max = matches.reduce((acc, match) => {
@@ -3591,8 +3678,8 @@
     if (!visualHistoryApplying) {
       resetVisualHistory();
     }
-    const blocks = mergeInstructionBlocksIntoFreitextBlocks(
-      extractParagraphBlocks(editorContent || '')
+    const blocks = normalizeTextdokumentFieldKeysInBlocks(
+      mergeInstructionBlocksIntoFreitextBlocks(extractParagraphBlocks(editorContent || ''))
     );
     visualBlocks = blocks;
     visualBlockIds = normalizeVisualBlockIds(visualBlockIds, blocks.length);
@@ -3612,9 +3699,11 @@
   const isFreitextBlockHtml = (value = '') =>
     /^\s*<\s*freitext-block\b/i.test(value || '');
 
-  const stripLueckeEditorOnlyAttributes = (value = '') =>
-    String(value || '').replace(/<\s*luecke-gap\b[^>]*>/gi, (tag) =>
-      tag.replace(/\scontenteditable\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+  const stripInlineAnswerEditorOnlyAttributes = (value = '') =>
+    String(value || '').replace(/<\s*(?:luecke-gap|textdokument-feld)\b[^>]*>/gi, (tag) =>
+      tag
+        .replace(/\scontenteditable\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+        .replace(/\sdata-editor-selected\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     );
 
   const stripVisualTerminalCaretText = (value = '') =>
@@ -3622,7 +3711,7 @@
 
   const normalizeBlockContent = (value) => {
     const html = stripVisualTerminalCaretText(
-      stripLueckeEditorOnlyAttributes(value || '')
+      stripInlineAnswerEditorOnlyAttributes(value || '')
     );
     if (isFreitextBlockHtml(html)) return html.trim();
     return html.replace(/<\/?p\b[^>]*>/gi, '');
@@ -3639,13 +3728,13 @@
   const FREITEXT_CRITERION_SELECTOR = 'freitext-teil, freitext-part, freitext-kriterium';
   const FREITEXT_PREMISE_SELECTOR =
     'freitext-prämisse, freitext-praemisse, freitext-premise, freitext-wert, freitext-value';
-  const FREITEXT_REFERENCE_SELECTOR =
-    'freitext-ref, freitext-reference, freitext-verknuepfung, freitext-abhaengigkeit';
-  const FREITEXT_REFERENCE_PROMPT_SELECTOR = 'freitext-ref-prompt, freitext-reference-prompt';
 
   const normalizeFreitextAnswerSourceType = (value = '') => {
     const type = String(value || '').trim().toLowerCase();
     if (type === 'gap' || type === 'luecke') return 'luecke';
+    if (type === 'textdokument' || type === 'text-document' || type === 'document') {
+      return 'textdokument';
+    }
     if (type === 'free-text' || type === 'freitext') return 'freitext';
     return '';
   };
@@ -3659,33 +3748,6 @@
   const normalizeFreitextPremiseType = (value = '') => {
     const type = String(value || '').trim().toLowerCase();
     return ['date', 'email', 'number', 'text', 'url'].includes(type) ? type : 'text';
-  };
-
-  const parseFreitextReferenceThreshold = (entry) => {
-    const raw = String(
-      entry?.getAttribute?.('min-classification') ||
-        entry?.getAttribute?.('min-score') ||
-        entry?.getAttribute?.('threshold') ||
-        entry?.getAttribute?.('min') ||
-        ''
-    )
-      .trim()
-      .toLowerCase();
-    if (!raw) return 900;
-    if (raw === 'any' || raw === 'answered' || raw === 'eingetragen' || raw === 'vorhanden') return 0;
-    if (raw === 'richtig' || raw === 'correct') return 900;
-    if (raw === 'teilweise' || raw === 'partial') return 101;
-    if (raw === 'falsch' || raw === 'false') return 0;
-    const numeric = Number(raw);
-    return Number.isNaN(numeric) ? 900 : Math.max(0, Math.min(1000, Math.floor(numeric)));
-  };
-
-  const normalizeFreitextReferenceThreshold = (value) => {
-    const raw = Number(value);
-    if (!Number.isFinite(raw)) return 900;
-    if (raw >= 900) return 900;
-    if (raw >= 101) return 101;
-    return 0;
   };
 
   const setOptionalAttribute = (node, name, value) => {
@@ -3759,10 +3821,41 @@
     return Number.isFinite(rows) && rows > 0 ? Math.floor(rows) : 10;
   };
 
+  const normalizeFreitextLengthLimit = (value = '') => {
+    const digits = String(value ?? '').replace(/[^\d]/g, '');
+    if (!digits) return '';
+    const numeric = Number(digits);
+    if (!Number.isFinite(numeric) || numeric <= 0) return '';
+    return String(Math.floor(numeric));
+  };
+
+  const getFreitextLengthLimits = (html = '') => {
+    const openingTag = getFreitextOpeningTagFromString(html);
+    const fromOpeningTag = {
+      min: normalizeFreitextLengthLimit(getHtmlAttributeFromString(openingTag, 'min-length')),
+      max: normalizeFreitextLengthLimit(getHtmlAttributeFromString(openingTag, 'max-length'))
+    };
+    if (fromOpeningTag.min || fromOpeningTag.max || !browser) return fromOpeningTag;
+
+    const { container } = parseHtmlFragment(html);
+    const freitext = getFreitextElementFromContainer(container);
+    return {
+      min: normalizeFreitextLengthLimit(freitext?.getAttribute?.('min-length') || ''),
+      max: normalizeFreitextLengthLimit(freitext?.getAttribute?.('max-length') || '')
+    };
+  };
+
+  const formatFreitextLengthLimits = (limits = {}) => {
+    const parts = [];
+    if (limits.min) parts.push(`mind. ${limits.min} Zeichen`);
+    if (limits.max) parts.push(`max. ${limits.max} Zeichen`);
+    return parts.join(' · ');
+  };
+
   const getFreitextPlaceholder = (html = '') => {
     const { container } = parseHtmlFragment(html);
     const freitext = getFreitextElementFromContainer(container);
-    return freitext?.getAttribute?.('placeholder') || 'Schreibe deinen Text hier...';
+    return freitext?.getAttribute?.('placeholder') || 'Schreiben Sie Ihren Text hier...';
   };
 
   const getFreitextMainPrompt = (html = '') => {
@@ -3791,6 +3884,14 @@
           ''
         ).trim();
         const description = (entry.textContent || '').replace(/\s+/g, ' ').trim();
+        const example = (
+          entry.getAttribute('example') ||
+          entry.getAttribute('data-example') ||
+          entry.getAttribute('beispiel') ||
+          ''
+        )
+          .replace(/\s+/g, ' ')
+          .trim();
         const internalDescription = (
           entry.getAttribute('internal-description') ||
           entry.getAttribute('data-internal-description') ||
@@ -3799,11 +3900,12 @@
         )
           .replace(/\s+/g, ' ')
           .trim();
-        if (!key && !rawLabel && !description && !internalDescription) return null;
+        if (!key && !rawLabel && !description && !example && !internalDescription) return null;
         return {
           key,
           label: rawLabel || `Element ${index + 1}`,
           description,
+          example,
           internalDescription
         };
       }
@@ -3891,60 +3993,6 @@
     ).filter(Boolean);
   };
 
-  const getFreitextReferencePrompt = (entry) => {
-    const promptNode = entry?.querySelector?.(FREITEXT_REFERENCE_PROMPT_SELECTOR);
-    return (
-      entry?.getAttribute?.('prompt') ||
-      entry?.getAttribute?.('instruction') ||
-      promptNode?.textContent ||
-      entry?.textContent ||
-      ''
-    )
-      .replace(/\s+/g, ' ')
-      .trim();
-  };
-
-  const getFreitextReferences = (html = '') => {
-    const { container } = parseHtmlFragment(html);
-    const freitext = getFreitextElementFromContainer(container);
-    if (!freitext) return [];
-    return Array.from(freitext.querySelectorAll(FREITEXT_REFERENCE_SELECTOR))
-      .map((entry, index) => {
-        const sourceKey = (
-          entry.getAttribute('source-key') ||
-          entry.getAttribute('answer-key') ||
-          entry.getAttribute('source') ||
-          entry.getAttribute('ref') ||
-          entry.getAttribute('target') ||
-          entry.getAttribute('key') ||
-          ''
-        ).trim();
-        const rawLabel = (
-          entry.getAttribute('label') ||
-          entry.getAttribute('title') ||
-          entry.getAttribute('name') ||
-          sourceKey ||
-          ''
-        ).trim();
-        const prompt = getFreitextReferencePrompt(entry);
-        if (!sourceKey && !rawLabel && !prompt) return null;
-        return {
-          key: (entry.getAttribute('key') || entry.getAttribute('name') || '').trim(),
-          label: rawLabel || `Verknüpfung ${index + 1}`,
-          sourceKey,
-          sourceType: (
-            entry.getAttribute('type') ||
-            entry.getAttribute('source-type') ||
-            'answer'
-          ).trim(),
-          prompt,
-          minClassification: parseFreitextReferenceThreshold(entry),
-          required: parseFreitextPremiseRequired(entry)
-        };
-      })
-      .filter(Boolean);
-  };
-
   const truncateEditorLabel = (value = '', max = 54) => {
     const text = String(value || '').replace(/\s+/g, ' ').trim();
     if (text.length <= max) return text;
@@ -3969,6 +4017,151 @@
     return (freitext?.getAttribute?.('name') || '').trim();
   };
 
+  const normalizeAnswerElementKey = (value = '') =>
+    String(value ?? '').replace(/\s+/g, ' ').trim();
+
+  const isDefaultTextdokumentLabel = (value = '') => {
+    const normalized = normalizeAnswerElementKey(value).toLowerCase();
+    return normalized === '' || normalized === 'textdokument' || normalized === 'textfeld';
+  };
+
+  const getTextdokumentFieldLabelKey = (field) => {
+    const label = normalizeAnswerElementKey(
+      field?.getAttribute?.('label') || field?.getAttribute?.('title') || ''
+    );
+    return isDefaultTextdokumentLabel(label) ? '' : label;
+  };
+
+  const getTextdokumentFieldEffectiveKey = (field) =>
+    getTextdokumentFieldLabelKey(field) ||
+    normalizeAnswerElementKey(field?.getAttribute?.('name') || '');
+
+  const getAnswerElementKind = (element) => {
+    const tag = element?.tagName?.toLowerCase?.() || '';
+    if (tag === 'luecke-gap') return 'luecke';
+    if (tag === 'textdokument-feld') return 'textdokument';
+    if (tag === 'freitext-block') return 'freitext';
+    return '';
+  };
+
+  const isAnswerElementKeyAvailable = (key = '', current = {}) => {
+    const normalizedKey = normalizeAnswerElementKey(key);
+    if (!normalizedKey || !browser) return false;
+    const currentBlockIndex = Number.isInteger(current?.blockIndex) ? current.blockIndex : -1;
+    const currentKind = String(current?.kind || '');
+    const currentOriginalName = normalizeAnswerElementKey(current?.originalName || '');
+    let skippedCurrent = false;
+
+    for (let blockIndex = 0; blockIndex < visualBlocks.length; blockIndex += 1) {
+      const { container } = parseHtmlFragment(visualBlocks[blockIndex] || '');
+      if (!container) continue;
+      const elements = Array.from(
+        container.querySelectorAll(`luecke-gap, textdokument-feld, ${FREITEXT_BLOCK_SELECTOR}`)
+      );
+      for (const element of elements) {
+        const elementKey = normalizeAnswerElementKey(element.getAttribute('name') || '');
+        if (!elementKey) continue;
+        const elementKind = getAnswerElementKind(element);
+        const isCurrentElement =
+          blockIndex === currentBlockIndex &&
+          elementKind === currentKind &&
+          elementKey === currentOriginalName &&
+          !skippedCurrent;
+        if (isCurrentElement) {
+          skippedCurrent = true;
+          continue;
+        }
+        if (elementKey === normalizedKey) return false;
+      }
+    }
+
+    return true;
+  };
+
+  const renameFreitextPremiseSourceKeysInHtml = (html = '', oldKey = '', newKey = '') => {
+    const normalizedOldKey = normalizeAnswerElementKey(oldKey);
+    const normalizedNewKey = normalizeAnswerElementKey(newKey);
+    if (!normalizedOldKey || !normalizedNewKey || normalizedOldKey === normalizedNewKey) {
+      return html || '';
+    }
+    const { container } = parseHtmlFragment(html);
+    if (!container) return html || '';
+    let changed = false;
+    const sourceAttributes = ['source-key', 'answer-key', 'target', 'ref'];
+    Array.from(container.querySelectorAll(FREITEXT_PREMISE_SELECTOR)).forEach((entry) => {
+      sourceAttributes.forEach((attribute) => {
+        if (normalizeAnswerElementKey(entry.getAttribute(attribute) || '') !== normalizedOldKey) {
+          return;
+        }
+        entry.setAttribute(attribute, normalizedNewKey);
+        changed = true;
+      });
+    });
+    return changed ? container.innerHTML : html || '';
+  };
+
+  const normalizeTextdokumentFieldKeysInBlocks = (blocks = []) => {
+    if (!browser) return blocks;
+    const usedKeys = new Set();
+
+    blocks.forEach((block) => {
+      const { container } = parseHtmlFragment(block);
+      if (!container) return;
+      Array.from(
+        container.querySelectorAll(`luecke-gap, textdokument-feld, ${FREITEXT_BLOCK_SELECTOR}`)
+      ).forEach((element) => {
+        const key = normalizeAnswerElementKey(element.getAttribute('name') || '');
+        if (key) usedKeys.add(key);
+      });
+    });
+
+    const renames = [];
+    const nextBlocks = blocks.map((block) => {
+      const { container } = parseHtmlFragment(block);
+      if (!container) return block;
+      let changed = false;
+
+      Array.from(container.querySelectorAll('textdokument-feld')).forEach((field) => {
+        const oldKey = normalizeAnswerElementKey(field.getAttribute('name') || '');
+        const labelKey = getTextdokumentFieldLabelKey(field);
+        if (!labelKey || labelKey === oldKey || usedKeys.has(labelKey)) return;
+
+        field.setAttribute('name', labelKey);
+        field.setAttribute('label', labelKey);
+        if (oldKey) {
+          usedKeys.delete(oldKey);
+          renames.push({ oldKey, newKey: labelKey });
+        }
+        usedKeys.add(labelKey);
+        changed = true;
+      });
+
+      return changed ? container.innerHTML : block;
+    });
+
+    if (!renames.length) return nextBlocks;
+    return renames.reduce(
+      (currentBlocks, rename) =>
+        currentBlocks.map((block) =>
+          renameFreitextPremiseSourceKeysInHtml(block, rename.oldKey, rename.newKey)
+        ),
+      nextBlocks
+    );
+  };
+
+  const updateVisualBlocks = (nextBlocks = [], historyOptions = {}) => {
+    const normalizedBlocks = nextBlocks.map((block) => normalizeBlockContent(block));
+    if (
+      normalizedBlocks.length === visualBlocks.length &&
+      normalizedBlocks.every((block, index) => block === (visualBlocks[index] ?? ''))
+    ) {
+      return;
+    }
+    pushVisualHistorySnapshot(historyOptions);
+    visualBlocks = normalizedBlocks.length ? normalizedBlocks : [''];
+    commitVisualBlocks();
+  };
+
   const getSelectableAnswerElements = (currentBlockIndex = -1) => {
     if (!browser) return [];
     const byKey = new Map();
@@ -3988,6 +4181,18 @@
         });
       });
 
+      Array.from(container.querySelectorAll('textdokument-feld')).forEach((field) => {
+        const key = getTextdokumentFieldEffectiveKey(field);
+        if (!key || byKey.has(key)) return;
+        const legacyKey = normalizeAnswerElementKey(field.getAttribute('name') || '');
+        byKey.set(key, {
+          key,
+          legacyKey: legacyKey && legacyKey !== key ? legacyKey : '',
+          type: 'textdokument',
+          label: `${key} · Textfeld`
+        });
+      });
+
       Array.from(container.querySelectorAll(FREITEXT_BLOCK_SELECTOR)).forEach((freitext) => {
         if (blockIndex === currentBlockIndex) return;
         const key = (freitext.getAttribute('name') || '').trim();
@@ -4004,11 +4209,22 @@
     return Array.from(byKey.values());
   };
 
+  const getAnswerElementForKey = (elements = [], key = '') => {
+    const normalizedKey = normalizeAnswerElementKey(key);
+    return (
+      elements.find(
+        (entry) =>
+          normalizeAnswerElementKey(entry?.key || '') === normalizedKey ||
+          normalizeAnswerElementKey(entry?.legacyKey || '') === normalizedKey
+      ) || null
+    );
+  };
+
   const getAnswerElementTypeForKey = (elements = [], key = '') =>
-    elements.find((entry) => entry.key === String(key || '').trim())?.type || '';
+    getAnswerElementForKey(elements, key)?.type || '';
 
   const getAnswerElementLabelForKey = (elements = [], key = '') =>
-    elements.find((entry) => entry.key === String(key || '').trim())?.label || '';
+    getAnswerElementForKey(elements, key)?.label || '';
 
   const buildLegacyFreitextInstructionHtml = (freitext) => {
     if (!freitext) return '';
@@ -4071,18 +4287,20 @@
         key: String(criterion?.key ?? '').trim(),
         label: String(criterion?.label ?? '').trim() || `Element ${index + 1}`,
         description: String(criterion?.description ?? '').trim(),
+        example: String(criterion?.example ?? '').trim(),
         internalDescription: String(criterion?.internalDescription ?? '').trim()
       }))
       .filter(
-        (criterion) => criterion.label || criterion.description || criterion.internalDescription
+        (criterion) =>
+          criterion.label ||
+          criterion.description ||
+          criterion.example ||
+          criterion.internalDescription
       );
 
-    const referenceNodes = Array.from(freitext.querySelectorAll(FREITEXT_REFERENCE_SELECTOR));
-    const lastReference = referenceNodes[referenceNodes.length - 1] ?? null;
     const premiseNodes = Array.from(freitext.querySelectorAll(FREITEXT_PREMISE_SELECTOR));
     const lastPremise = premiseNodes[premiseNodes.length - 1] ?? null;
-    const referenceNode =
-      lastReference?.nextSibling ??
+    const insertionPoint =
       lastPremise?.nextSibling ??
       getFreitextInstructionNode(freitext)?.nextSibling ??
       freitext.firstChild;
@@ -4090,13 +4308,14 @@
       const node = doc.createElement('freitext-teil');
       if (criterion.key) node.setAttribute('key', criterion.key);
       node.setAttribute('label', criterion.label);
+      setOptionalAttribute(node, 'example', criterion.example);
       setOptionalAttribute(node, 'internal-description', criterion.internalDescription);
       node.textContent = criterion.description;
-      freitext.insertBefore(doc.createTextNode('\n  '), referenceNode);
-      freitext.insertBefore(node, referenceNode);
+      freitext.insertBefore(doc.createTextNode('\n  '), insertionPoint);
+      freitext.insertBefore(node, insertionPoint);
     });
     if (normalizedCriteria.length) {
-      freitext.insertBefore(doc.createTextNode('\n'), referenceNode);
+      freitext.insertBefore(doc.createTextNode('\n'), insertionPoint);
     }
 
     return container.innerHTML;
@@ -4157,65 +4376,6 @@
     return container.innerHTML;
   };
 
-  const setFreitextReferences = (html = '', references = []) => {
-    const { doc, container } = parseHtmlFragment(html);
-    if (!doc || !container) return html || '';
-    const freitext = getFreitextElementFromContainer(container);
-    if (!freitext) return container.innerHTML;
-
-    Array.from(freitext.querySelectorAll(FREITEXT_REFERENCE_SELECTOR)).forEach((entry) =>
-      entry.remove()
-    );
-
-    const normalizedReferences = references
-      .map((reference, index) => {
-        const sourceKey = String(reference?.sourceKey ?? '').trim();
-        return {
-          key: String(reference?.key ?? '').trim(),
-          label:
-            String(reference?.label ?? '').trim() ||
-            sourceKey ||
-            `Verknüpfung ${index + 1}`,
-          sourceKey,
-          sourceType: String(reference?.sourceType ?? 'answer').trim() || 'answer',
-          prompt: String(reference?.prompt ?? '').trim(),
-          minClassification: normalizeFreitextReferenceThreshold(reference?.minClassification),
-          required: reference?.required !== false
-        };
-      })
-      .filter(
-        (reference) =>
-          reference.key || reference.label || reference.sourceKey || reference.prompt
-      );
-
-    const premiseNodes = Array.from(freitext.querySelectorAll(FREITEXT_PREMISE_SELECTOR));
-    const lastPremise = premiseNodes[premiseNodes.length - 1] ?? null;
-    const instructionNode = getFreitextInstructionNode(freitext);
-    const referenceNode = lastPremise?.nextSibling ?? instructionNode?.nextSibling ?? freitext.firstChild;
-
-    normalizedReferences.forEach((reference) => {
-      const node = doc.createElement('freitext-ref');
-      if (reference.key) node.setAttribute('key', reference.key);
-      node.setAttribute('label', reference.label);
-      setOptionalAttribute(node, 'source-key', reference.sourceKey);
-      if (reference.sourceType && reference.sourceType !== 'answer') {
-        node.setAttribute('source-type', reference.sourceType);
-      }
-      if (reference.minClassification !== 900) {
-        node.setAttribute('min-classification', String(reference.minClassification));
-      }
-      if (!reference.required) node.setAttribute('optional', '');
-      node.textContent = reference.prompt;
-      freitext.insertBefore(doc.createTextNode('\n  '), referenceNode);
-      freitext.insertBefore(node, referenceNode);
-    });
-    if (normalizedReferences.length) {
-      freitext.insertBefore(doc.createTextNode('\n'), referenceNode);
-    }
-
-    return container.innerHTML;
-  };
-
   const setFreitextMainPromptInHtml = (html = '', prompt = '') => {
     const { container } = parseHtmlFragment(html);
     if (!container) return html || '';
@@ -4229,6 +4389,20 @@
     if (normalizedPrompt) {
       freitext.setAttribute('prompt', normalizedPrompt);
     }
+    return container.innerHTML;
+  };
+
+  const setFreitextLengthLimitsInHtml = (html = '', limits = {}) => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return html || '';
+    const freitext = getFreitextElementFromContainer(container);
+    if (!freitext) return container.innerHTML;
+    const min = normalizeFreitextLengthLimit(limits.min || '');
+    const max = normalizeFreitextLengthLimit(limits.max || '');
+    freitext.removeAttribute('min-length');
+    freitext.removeAttribute('max-length');
+    if (min) freitext.setAttribute('min-length', min);
+    if (max) freitext.setAttribute('max-length', max);
     return container.innerHTML;
   };
 
@@ -4343,6 +4517,27 @@
     }));
   };
 
+  const listTextdokumentFieldsFromHtml = (html = '') => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return [];
+    const fields = Array.from(container.querySelectorAll('textdokument-feld'));
+    return fields.map((field) => ({
+      name: (field.getAttribute('name') || '').trim(),
+      label: (
+        field.getAttribute('label') ||
+        field.getAttribute('title') ||
+        field.getAttribute('name') ||
+        'Textfeld'
+      ).trim(),
+      prompt:
+        field.getAttribute('prompt') ||
+        field.getAttribute('teacher-prompt') ||
+        field.getAttribute('data-prompt') ||
+        field.getAttribute('data-teacher-prompt') ||
+        ''
+    }));
+  };
+
   const setLueckeGapPromptInHtml = (html = '', gapName = '', prompt = '') => {
     const { container } = parseHtmlFragment(html);
     if (!container) return html || '';
@@ -4380,7 +4575,11 @@
     return container.innerHTML;
   };
 
-  const setLueckeGapDataInHtml = (html = '', gapName = '', { solution = '', prompt = '', width = '' } = {}) => {
+  const setLueckeGapDataInHtml = (
+    html = '',
+    gapName = '',
+    { name = gapName, solution = '', prompt = '', width = '' } = {}
+  ) => {
     const { container } = parseHtmlFragment(html);
     if (!container) return html || '';
     const normalizedName = String(gapName ?? '').trim();
@@ -4389,6 +4588,10 @@
       (entry) => (entry.getAttribute('name') || '').trim() === normalizedName
     );
     if (!gap) return container.innerHTML;
+    const nextName = normalizeAnswerElementKey(name || gapName);
+    if (nextName) {
+      gap.setAttribute('name', nextName);
+    }
     gap.textContent = String(solution ?? '').trim();
     const normalizedWidth = normalizeLueckeWidth(width);
     if (normalizedWidth) {
@@ -4410,6 +4613,56 @@
     return container.innerHTML;
   };
 
+  const setTextdokumentFieldDataInHtml = (
+    html = '',
+    fieldName = '',
+    { name = fieldName, label = '', prompt = '' } = {}
+  ) => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return html || '';
+    const normalizedName = String(fieldName ?? '').trim();
+    if (!normalizedName) return html || '';
+    const field = Array.from(container.querySelectorAll('textdokument-feld')).find(
+      (entry) => (entry.getAttribute('name') || '').trim() === normalizedName
+    );
+    if (!field) return container.innerHTML;
+
+    const nextName = normalizeAnswerElementKey(name || label || fieldName);
+    if (nextName) {
+      field.setAttribute('name', nextName);
+    }
+
+    const normalizedLabel = normalizeAnswerElementKey(label || nextName);
+    if (normalizedLabel) {
+      field.setAttribute('label', normalizedLabel);
+    } else {
+      field.removeAttribute('label');
+      field.removeAttribute('title');
+    }
+
+    const normalizedPrompt = String(prompt ?? '');
+    const hasLegacyPrompt =
+      field.hasAttribute('teacher-prompt') ||
+      field.hasAttribute('data-prompt') ||
+      field.hasAttribute('data-teacher-prompt');
+    if (normalizedPrompt.trim() === '') {
+      field.removeAttribute('prompt');
+      field.removeAttribute('teacher-prompt');
+      field.removeAttribute('data-prompt');
+      field.removeAttribute('data-teacher-prompt');
+    } else {
+      field.setAttribute('prompt', normalizedPrompt);
+      if (hasLegacyPrompt) {
+        if (field.hasAttribute('teacher-prompt')) field.setAttribute('teacher-prompt', normalizedPrompt);
+        if (field.hasAttribute('data-prompt')) field.setAttribute('data-prompt', normalizedPrompt);
+        if (field.hasAttribute('data-teacher-prompt')) {
+          field.setAttribute('data-teacher-prompt', normalizedPrompt);
+        }
+      }
+    }
+    return container.innerHTML;
+  };
+
   const ensureLueckeGapNameInHtml = (html = '', gapIndex = 0) => {
     const { container } = parseHtmlFragment(html);
     if (!container) return { html: html || '', name: '' };
@@ -4420,6 +4673,25 @@
     if (existingName) return { html: container.innerHTML, name: existingName };
     const name = getNextLueckeName();
     gap.setAttribute('name', name);
+    return { html: container.innerHTML, name };
+  };
+
+  const ensureTextdokumentFieldNameInHtml = (html = '', fieldIndex = 0) => {
+    const { container } = parseHtmlFragment(html);
+    if (!container) return { html: html || '', name: '' };
+    const fields = Array.from(container.querySelectorAll('textdokument-feld'));
+    const field = fields[Math.max(0, Math.min(Number(fieldIndex) || 0, fields.length - 1))];
+    if (!field) return { html: container.innerHTML, name: '' };
+    const existingName = (field.getAttribute('name') || '').trim();
+    if (existingName) return { html: container.innerHTML, name: existingName };
+    const label = normalizeAnswerElementKey(
+      field.getAttribute('label') || field.getAttribute('title') || ''
+    );
+    const name = label && !isDefaultTextdokumentLabel(label) ? label : getNextTextdokumentName();
+    field.setAttribute('name', name);
+    if (!label || isDefaultTextdokumentLabel(label)) {
+      field.setAttribute('label', name);
+    }
     return { html: container.innerHTML, name };
   };
 
@@ -4450,6 +4722,20 @@
     });
   };
 
+  const setVisualBlockFreitextLengthLimit = (index, field, value, event = null) => {
+    const current = visualBlocks[index] ?? '';
+    const limits = getFreitextLengthLimits(current);
+    const next = setFreitextLengthLimitsInHtml(current, {
+      ...limits,
+      [field]: normalizeFreitextLengthLimit(value)
+    });
+    updateVisualBlock(index, next, {
+      coalesce: true,
+      chunkKey: `block:${index}:freitext-length:${field}`,
+      ...(event ? getVisualInputHistoryOptions(index, event, `freitext-length:${field}`) : {})
+    });
+  };
+
   const setVisualBlockGapSolution = (index, gapName, solution) => {
     const current = visualBlocks[index] ?? '';
     const next = setLueckeGapSolutionInHtml(current, gapName, solution);
@@ -4461,7 +4747,9 @@
 
   const closeLueckeEditor = () => {
     lueckeEditorOpen = false;
+    lueckeEditorKind = 'luecke';
     lueckeEditorBlockIndex = null;
+    lueckeEditorOriginalName = '';
     lueckeEditorName = '';
     lueckeEditorSolution = '';
     lueckeEditorPrompt = '';
@@ -4487,7 +4775,9 @@
     const gap = listLueckeGapsFromHtml(current).find((entry) => entry.name === name);
     if (!gap) return;
     visualActiveBlock = blockIndex;
+    lueckeEditorKind = 'luecke';
     lueckeEditorBlockIndex = blockIndex;
+    lueckeEditorOriginalName = name;
     lueckeEditorName = name;
     lueckeEditorSolution = gap.solution || '';
     lueckeEditorPrompt = gap.prompt || '';
@@ -4495,8 +4785,42 @@
     lueckeEditorError = '';
     lueckeEditorOpen = true;
     void tick().then(() => {
-      lueckeSolutionInputEl?.focus?.();
-      lueckeSolutionInputEl?.select?.();
+      lueckeNameInputEl?.focus?.();
+      lueckeNameInputEl?.select?.();
+    });
+  };
+
+  const openTextdokumentEditor = (blockIndex, fieldName = '', fieldIndex = 0) => {
+    if (blockIndex < 0 || blockIndex >= visualBlocks.length) return;
+    let current = visualBlocks[blockIndex] || '';
+    let name = String(fieldName || '').trim();
+    if (!name) {
+      const ensured = ensureTextdokumentFieldNameInHtml(current, fieldIndex);
+      current = ensured.html;
+      name = ensured.name;
+      if (name && current !== visualBlocks[blockIndex]) {
+        updateVisualBlock(blockIndex, current, {
+          coalesce: true,
+          chunkKey: `block:${blockIndex}:textdokument:${name}:name`
+        });
+      }
+    }
+    const field = listTextdokumentFieldsFromHtml(current).find((entry) => entry.name === name);
+    if (!field) return;
+    visualActiveBlock = blockIndex;
+    lueckeEditorKind = 'textdokument';
+    lueckeEditorBlockIndex = blockIndex;
+    lueckeEditorOriginalName = name;
+    lueckeEditorName =
+      field.label && !isDefaultTextdokumentLabel(field.label) ? field.label : field.name || '';
+    lueckeEditorSolution = '';
+    lueckeEditorPrompt = field.prompt || '';
+    lueckeEditorWidth = '';
+    lueckeEditorError = '';
+    lueckeEditorOpen = true;
+    void tick().then(() => {
+      lueckeNameInputEl?.focus?.();
+      lueckeNameInputEl?.select?.();
     });
   };
 
@@ -4508,11 +4832,20 @@
         : target?.parentElement && typeof target.parentElement.closest === 'function'
           ? target.parentElement
           : null;
-    return element?.closest?.('luecke-gap') || null;
+    return element?.closest?.(INLINE_ANSWER_ELEMENT_SELECTOR) || null;
   };
 
   const openLueckeEditorFromElement = (blockIndex, gapElement) => {
     if (!gapElement) return false;
+    if (isTextdokumentNode(gapElement)) {
+      const editorEl = visualBlockEditors[blockIndex];
+      if (editorEl && !editorEl.contains(gapElement)) return false;
+      const fields = Array.from(editorEl?.querySelectorAll('textdokument-feld') || []);
+      const fieldIndex = Math.max(0, fields.indexOf(gapElement));
+      openTextdokumentEditor(blockIndex, gapElement.getAttribute('name') || '', fieldIndex);
+      return true;
+    }
+    if (!isLueckeGapNode(gapElement)) return false;
     const editorEl = visualBlockEditors[blockIndex];
     if (editorEl && !editorEl.contains(gapElement)) return false;
     const gaps = Array.from(editorEl?.querySelectorAll('luecke-gap') || []);
@@ -4530,28 +4863,69 @@
     const pointGap = getLueckeGapAtPoint(editorEl, event);
     if (pointGap) return pointGap;
     const terminalGap = getTerminalGapBeforePoint(editorEl, event);
-    return terminalGap ? { gap: terminalGap, side: 'after' } : null;
+    return terminalGap ? { gap: terminalGap, side: 'after', terminal: true } : null;
   };
 
   const saveLueckeEditor = () => {
     const blockIndex = lueckeEditorBlockIndex;
     if (!Number.isInteger(blockIndex) || blockIndex < 0 || blockIndex >= visualBlocks.length) {
-      lueckeEditorError = 'Diese Lücke ist nicht mehr verfügbar.';
+      lueckeEditorError =
+        lueckeEditorKind === 'textdokument'
+          ? 'Dieses Textfeld ist nicht mehr verfügbar.'
+          : 'Diese Lücke ist nicht mehr verfügbar.';
       return;
     }
-    const name = String(lueckeEditorName || '').trim();
+    const originalName = String(lueckeEditorOriginalName || lueckeEditorName || '').trim();
+    const name = normalizeAnswerElementKey(lueckeEditorName);
     if (!name) {
-      lueckeEditorError = 'Diese Lücke hat keinen Namen.';
+      lueckeEditorError =
+        lueckeEditorKind === 'textdokument'
+          ? 'Dieses Textfeld hat keinen Namen.'
+          : 'Diese Lücke hat keinen Namen.';
       return;
     }
-    const next = setLueckeGapDataInHtml(visualBlocks[blockIndex] || '', name, {
+    if (
+      !isAnswerElementKeyAvailable(name, {
+        blockIndex,
+        kind: lueckeEditorKind,
+        originalName
+      })
+    ) {
+      lueckeEditorError = `Die Bezeichnung "${name}" wird bereits verwendet.`;
+      return;
+    }
+    if (lueckeEditorKind === 'textdokument') {
+      const next = setTextdokumentFieldDataInHtml(visualBlocks[blockIndex] || '', originalName, {
+        name,
+        label: name,
+        prompt: lueckeEditorPrompt
+      });
+      const nextBlocks = visualBlocks.map((block, index) =>
+        index === blockIndex
+          ? renameFreitextPremiseSourceKeysInHtml(next, originalName, name)
+          : renameFreitextPremiseSourceKeysInHtml(block, originalName, name)
+      );
+      updateVisualBlocks(nextBlocks, {
+        coalesce: true,
+        chunkKey: `block:${blockIndex}:textdokument:${originalName}:data`
+      });
+      closeLueckeEditor();
+      return;
+    }
+    const next = setLueckeGapDataInHtml(visualBlocks[blockIndex] || '', originalName, {
+      name,
       solution: lueckeEditorSolution,
       prompt: lueckeEditorPrompt,
       width: lueckeEditorWidth
     });
-    updateVisualBlock(blockIndex, next, {
+    const nextBlocks = visualBlocks.map((block, index) =>
+      index === blockIndex
+        ? renameFreitextPremiseSourceKeysInHtml(next, originalName, name)
+        : renameFreitextPremiseSourceKeysInHtml(block, originalName, name)
+    );
+    updateVisualBlocks(nextBlocks, {
       coalesce: true,
-      chunkKey: `block:${blockIndex}:gap:${name}:data`
+      chunkKey: `block:${blockIndex}:gap:${originalName}:data`
     });
     closeLueckeEditor();
   };
@@ -4605,7 +4979,9 @@
   };
 
   const commitVisualBlocks = () => {
-    const normalized = visualBlocks.map((block) => normalizeBlockContent(block));
+    const normalized = normalizeTextdokumentFieldKeysInBlocks(
+      visualBlocks.map((block) => normalizeBlockContent(block))
+    );
     const hasChanges = normalized.some((block, idx) => block !== visualBlocks[idx]);
     if (hasChanges) {
       visualBlocks = normalized;
@@ -4699,11 +5075,20 @@
 
   const isEditableDragTarget = (event) => {
     const target = event?.target;
-    if (!target || !(target instanceof Element)) return false;
+    const element =
+      target instanceof Element
+        ? target
+        : target?.parentElement instanceof Element
+          ? target.parentElement
+          : null;
+    if (!element) return false;
     return Boolean(
-      target.closest(
+      element.closest(
         [
           '.block-format-tools',
+          '.block-editor__visual',
+          '.code-editor',
+          '[contenteditable="true"]',
           'input',
           'textarea',
           'select',
@@ -4712,6 +5097,49 @@
         ].join(', ')
       )
     );
+  };
+
+  let blockDragDisabledFromTextEditorEl = null;
+
+  const isTextEditorDragSurface = (event) => {
+    const target = event?.target;
+    const element =
+      target instanceof Element
+        ? target
+        : target?.parentElement instanceof Element
+          ? target.parentElement
+          : null;
+    if (!element) return false;
+    return Boolean(
+      element.closest(
+        [
+          '.block-editor__visual',
+          '.code-editor',
+          '[contenteditable="true"]',
+          'input',
+          'textarea',
+          'select'
+        ].join(', ')
+      )
+    );
+  };
+
+  const restoreBlockDragAfterTextEditorPointer = () => {
+    if (blockDragDisabledFromTextEditorEl?.isConnected) {
+      blockDragDisabledFromTextEditorEl.draggable = true;
+    }
+    blockDragDisabledFromTextEditorEl = null;
+  };
+
+  const disableBlockDragForTextEditorPointer = (event) => {
+    const blockEl = event?.currentTarget;
+    if (!(blockEl instanceof HTMLElement)) return;
+    blockDragDisabledFromTextEditorEl = blockEl;
+    blockEl.draggable = false;
+    if (!browser) return;
+    window.addEventListener('pointerup', restoreBlockDragAfterTextEditorPointer, { once: true });
+    window.addEventListener('pointercancel', restoreBlockDragAfterTextEditorPointer, { once: true });
+    window.addEventListener('blur', restoreBlockDragAfterTextEditorPointer, { once: true });
   };
 
   const removeBlockDragImage = () => {
@@ -4757,7 +5185,7 @@
   };
 
   const handleBlockDragStart = (event, index) => {
-    if (isEditableDragTarget(event)) {
+    if (blockDragDisabledFromTextEditorEl || isEditableDragTarget(event)) {
       event.preventDefault();
       return;
     }
@@ -4816,6 +5244,7 @@
   };
 
   const handleBlockDragEnd = () => {
+    restoreBlockDragAfterTextEditorPointer();
     removeBlockDragImage();
     dragIndex = null;
     dragOverIndex = null;
@@ -4911,6 +5340,9 @@
 
   const handleVisualBlockPointerDown = (event, index) => {
     if (event?.button !== undefined && event.button !== 0) return;
+    if (isTextEditorDragSurface(event)) {
+      disableBlockDragForTextEditorPointer(event);
+    }
     const target = event?.target;
     if (
       target instanceof Element &&
@@ -4920,14 +5352,24 @@
     }
     const pointerGap = getLueckeGapFromPointerEvent(index, event);
     if (pointerGap?.gap) {
+      if (pointerGap.terminal) {
+        const editorEl = visualBlockEditors[index];
+        if (visualBlockViews[index] !== 'visual') setVisualBlockView(index, 'visual');
+        activateVisualBlock(index);
+        ensureTerminalCaretTextAfterNode(pointerGap.gap, editorEl);
+        return;
+      }
       if ((event?.detail || 0) > 1 && openLueckeEditorFromElement(index, pointerGap.gap)) {
         if (visualBlockViews[index] !== 'visual') setVisualBlockView(index, 'visual');
         event?.preventDefault?.();
         event?.stopPropagation?.();
         return;
       }
+      if (visualBlockViews[index] !== 'visual') setVisualBlockView(index, 'visual');
+      activateVisualBlock(index);
       event?.preventDefault?.();
       event?.stopPropagation?.();
+      if (selectVisualAtomicElement(index, pointerGap.gap)) return;
       void placeVisualCaretAroundGapFromEvent(index, pointerGap.gap, event, pointerGap.side);
       return;
     }
@@ -4935,7 +5377,13 @@
 
   const handleVisualBlockDoubleClick = (event, index) => {
     const pointerGap = getLueckeGapFromPointerEvent(index, event);
-    if (!pointerGap?.gap || !openLueckeEditorFromElement(index, pointerGap.gap)) return;
+    if (
+      pointerGap?.terminal ||
+      !pointerGap?.gap ||
+      !openLueckeEditorFromElement(index, pointerGap.gap)
+    ) {
+      return;
+    }
     if (visualBlockViews[index] !== 'visual') setVisualBlockView(index, 'visual');
     event?.preventDefault?.();
     event?.stopPropagation?.();
@@ -4990,6 +5438,9 @@
     return `<luecke-gap name="${escapeHtml(name)}"${widthAttr}>${escapeHtml(solution)}</luecke-gap>`;
   };
 
+  const buildTextdokumentSnippet = (name = getNextTextdokumentName(), label = name) =>
+    `<textdokument-feld name="${escapeHtml(name)}" label="${escapeHtml(label)}"></textdokument-feld>`;
+
   const buildHtmlSnippet = () => `<div>
   <p>HTML Block</p>
 </div>`;
@@ -4999,13 +5450,13 @@
     return `<freitext-block
   name="freitext${index}"
   title="Freitext-Aufgabe"
-  task="Schreibe einen zusammenhängenden Text und achte auf alle Angaben."
+  task="Schreiben Sie einen zusammenhängenden Text und achten Sie auf alle Angaben."
   rows="12"
-  placeholder="Schreibe deinen Text hier..."
+  placeholder="Schreiben Sie Ihren Text hier..."
 >
   <freitext-anweisung>
     <h2>Freitext-Aufgabe</h2>
-    <p>Schreibe einen zusammenhängenden Text und achte auf alle Angaben.</p>
+    <p>Schreiben Sie einen zusammenhängenden Text und achten Sie auf alle Angaben.</p>
   </freitext-anweisung>
 </freitext-block>`;
   };
@@ -5026,6 +5477,7 @@
     umfrage: buildUmfrageSnippet
   };
   const LUECKE_ELEMENT_TYPE = getWorksheetElementType('luecke');
+  const TEXTDOKUMENT_ELEMENT_TYPE = getWorksheetElementType('textdokument');
   const BLOCK_TEMPLATES = BLOCK_TEMPLATE_DEFINITIONS.map((template) => ({
     ...template,
     getHtml: BLOCK_TEMPLATE_BUILDERS[template.id] || (() => '')
@@ -5103,6 +5555,22 @@
         html: buildLueckeSnippet(width),
         blockLevel: false,
         label: 'Lücke',
+        view: 'visual'
+      };
+    }
+
+    if (
+      (lower.includes('textfeld') && !lower.includes('eingabe') && !lower.includes('input')) ||
+      lower.includes('textdokument') ||
+      lower.includes('text dokument') ||
+      lower.includes('dokument') ||
+      lower.includes('wohnungsinserat') ||
+      lower.includes('inserat')
+    ) {
+      return {
+        html: buildTextdokumentSnippet(),
+        blockLevel: false,
+        label: 'Textfeld',
         view: 'visual'
       };
     }
@@ -5674,7 +6142,9 @@
 
   const flushFitTextareaQueue = () => {
     fitTextareaFrame = null;
-    const nodes = Array.from(fitTextareaQueue).filter((entry) => entry?.isConnected);
+    const nodes = Array.from(fitTextareaQueue).filter(
+      (entry) => entry?.isConnected && entry.getClientRects().length > 0
+    );
     fitTextareaQueue.clear();
     nodes.forEach((entry) => {
       entry.style.height = 'auto';
@@ -5696,18 +6166,41 @@
   };
 
   const fitTextareaToContent = (node) => {
+    let followUpFrame = null;
+    let observedWidth = node.clientWidth;
+
     const resizeSoon = () => {
       scheduleFitTextarea(node);
+      if (followUpFrame !== null || typeof requestAnimationFrame !== 'function') return;
+      followUpFrame = requestAnimationFrame(() => {
+        followUpFrame = null;
+        scheduleFitTextarea(node);
+      });
     };
 
     resizeSoon();
     node.addEventListener('input', resizeSoon);
 
+    const resizeObserver =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver((entries) => {
+            const nextWidth = entries[0]?.contentRect?.width ?? node.clientWidth;
+            if (Math.abs(nextWidth - observedWidth) < 0.5) return;
+            observedWidth = nextWidth;
+            resizeSoon();
+          })
+        : null;
+    resizeObserver?.observe(node);
+
     return {
       update: resizeSoon,
       destroy() {
+        if (followUpFrame !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(followUpFrame);
+        }
         fitTextareaQueue.delete(node);
         node.removeEventListener('input', resizeSoon);
+        resizeObserver?.disconnect();
       }
     };
   };
@@ -6409,20 +6902,28 @@
   const wrapHtmlSelection = (index, prefix, suffix, placeholder = '') =>
     insertHtmlSelection(index, { prefix, suffix }, { placeholder });
 
+  const INLINE_ANSWER_ELEMENT_SELECTOR = 'luecke-gap, textdokument-feld';
+  const INLINE_ANSWER_CLIPBOARD_PATTERN = /<\s*(?:luecke-gap|textdokument-feld)\b/i;
+
   const isLueckeGapNode = (node) =>
     node instanceof HTMLElement && node.tagName?.toLowerCase() === 'luecke-gap';
+
+  const isTextdokumentNode = (node) =>
+    node instanceof HTMLElement && node.tagName?.toLowerCase() === 'textdokument-feld';
+
+  const isInlineAnswerElementNode = (node) => isLueckeGapNode(node) || isTextdokumentNode(node);
 
   const isLineBreakNode = (node) =>
     node instanceof HTMLElement && node.tagName?.toLowerCase() === 'br';
 
-  const isVisualAtomicNode = (node) => isLueckeGapNode(node) || isLineBreakNode(node);
+  const isVisualAtomicNode = (node) => isInlineAnswerElementNode(node) || isLineBreakNode(node);
 
   const getNodeElement = (node) =>
     node instanceof Element ? node : node?.parentElement || null;
 
   const getClosestLueckeGap = (node, root = null) => {
     const element = getNodeElement(node);
-    const gap = element?.closest?.('luecke-gap') || null;
+    const gap = element?.closest?.(INLINE_ANSWER_ELEMENT_SELECTOR) || null;
     if (!gap || (root && !root.contains(gap))) return null;
     return gap;
   };
@@ -6492,7 +6993,7 @@
 
   const getTerminalLueckeGap = (root) => {
     const last = getLastVisibleVisualContentNode(root);
-    return isLueckeGapNode(last) ? last : null;
+    return isInlineAnswerElementNode(last) ? last : null;
   };
 
   const ensureTerminalCaretTextInEditor = (editorEl) => {
@@ -6558,6 +7059,24 @@
     );
     const caretOffset = side === 'before' ? gapStart : gapStart + getVisualUnitLength(gapElement);
     visualBlockSelections[index] = { start: caretOffset, end: caretOffset };
+    updateVisualAtomicSelectionMarkers(editorEl);
+    return true;
+  };
+
+  const selectVisualAtomicElement = (index, element) => {
+    const editorEl = visualBlockEditors[index];
+    if (!editorEl || !element || !editorEl.contains(element) || !isInlineAnswerElementNode(element)) {
+      return false;
+    }
+    const selection = window?.getSelection ? window.getSelection() : null;
+    if (!selection) return false;
+
+    focusEditableElement(editorEl);
+    const range = document.createRange();
+    range.selectNode(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    captureVisualSelection(index);
     return true;
   };
 
@@ -6592,7 +7111,7 @@
     }
 
     let candidate = null;
-    Array.from(editorEl.querySelectorAll('luecke-gap')).forEach((gap) => {
+    Array.from(editorEl.querySelectorAll(INLINE_ANSWER_ELEMENT_SELECTOR)).forEach((gap) => {
       const rects = Array.from(gap.getClientRects?.() || []);
       rects.forEach((rect) => {
         const insideX = event.clientX >= rect.left && event.clientX <= rect.right;
@@ -6618,7 +7137,7 @@
     }
 
     let candidate = null;
-    Array.from(editorEl.querySelectorAll('luecke-gap')).forEach((gap) => {
+    Array.from(editorEl.querySelectorAll(INLINE_ANSWER_ELEMENT_SELECTOR)).forEach((gap) => {
       const rects = Array.from(gap.getClientRects?.() || []);
       rects.forEach((rect) => {
         const sameLine = event.clientY >= rect.top - 3 && event.clientY <= rect.bottom + 3;
@@ -6679,23 +7198,25 @@
   ) => {
     if (!gapElement) return false;
     const editorEl = visualBlockEditors[index];
-    const gapIndex = Array.from(editorEl?.querySelectorAll('luecke-gap') || []).indexOf(
-      gapElement
-    );
+    const gapIndex = Array.from(
+      editorEl?.querySelectorAll(INLINE_ANSWER_ELEMENT_SELECTOR) || []
+    ).indexOf(gapElement);
     const side = sideOverride || getGapCaretSideFromPoint(gapElement, event);
     const activationView = 'visual';
     if (visualBlockViews[index] !== activationView) setVisualBlockView(index, activationView);
     activateVisualBlock(index);
     await tick();
 
-    const nextGaps = Array.from(visualBlockEditors[index]?.querySelectorAll('luecke-gap') || []);
+    const nextGaps = Array.from(
+      visualBlockEditors[index]?.querySelectorAll(INLINE_ANSWER_ELEMENT_SELECTOR) || []
+    );
     const nextGap = (gapIndex >= 0 ? nextGaps[gapIndex] : null) || gapElement;
     return setVisualCaretAroundGap(index, nextGap, side);
   };
 
   const getVisualUnitLength = (node) => {
     if (!node) return 0;
-    if (isLueckeGapNode(node)) return 1;
+    if (isInlineAnswerElementNode(node)) return 1;
     if (isLineBreakNode(node)) return 1;
     if (node.nodeType === Node.TEXT_NODE) return getVisualTextLength(node.textContent || '');
     return Array.from(node.childNodes || []).reduce(
@@ -6737,7 +7258,7 @@
         if (node.nodeType === Node.TEXT_NODE) {
           const text = node.textContent || '';
           total += Math.min(getVisualTextOffset(text, boundaryOffset), getVisualTextLength(text));
-        } else if (isLueckeGapNode(node) || isLineBreakNode(node)) {
+        } else if (isInlineAnswerElementNode(node) || isLineBreakNode(node)) {
           total += boundaryOffset > 0 ? 1 : 0;
         } else {
           addChildrenBeforeOffset(node, boundaryOffset);
@@ -6840,6 +7361,7 @@
     const editorEl = visualBlockEditors[index];
     const range = getCurrentVisualSelectionRange(editorEl);
     if (!range) return false;
+    if (!range.collapsed) return false;
     return moveVisualRangeOutsideLueckeGap(index, range, fallbackSide);
   };
 
@@ -6944,6 +7466,7 @@
 
   const captureVisualSelection = (index) => {
     const el = visualBlockEditors[index];
+    updateVisualAtomicSelectionMarkers(el);
     const offsets = getVisualSelectionOffsets(el);
     if (!offsets) return;
     visualBlockSelections[index] = offsets;
@@ -7100,7 +7623,7 @@
   };
 
   const getLueckeGapsIntersectingRange = (editorEl, range) =>
-    Array.from(editorEl.querySelectorAll('luecke-gap')).filter((gap) => {
+    Array.from(editorEl.querySelectorAll(INLINE_ANSWER_ELEMENT_SELECTOR)).filter((gap) => {
       try {
         return range.intersectsNode(gap);
       } catch (err) {
@@ -7111,8 +7634,44 @@
   const uniqueLueckeGaps = (gaps = []) =>
     Array.from(new Set(gaps.filter((gap) => gap && gap instanceof HTMLElement)));
 
+  const updateVisualAtomicSelectionMarkers = (editorEl) => {
+    if (!editorEl?.querySelectorAll) return;
+    editorEl
+      .querySelectorAll(`${INLINE_ANSWER_ELEMENT_SELECTOR}[data-editor-selected='true']`)
+      .forEach((element) => element.removeAttribute('data-editor-selected'));
+
+    const range = getCurrentVisualSelectionRange(editorEl);
+    if (!range || range.collapsed) return;
+    uniqueLueckeGaps(getLueckeGapsIntersectingRange(editorEl, range)).forEach((element) => {
+      element.setAttribute('data-editor-selected', 'true');
+    });
+  };
+
+  let visualAtomicSelectionMarkerFrame = null;
+
+  const clearVisualAtomicSelectionMarkerFrame = () => {
+    if (visualAtomicSelectionMarkerFrame === null || !browser) return;
+    window.cancelAnimationFrame(visualAtomicSelectionMarkerFrame);
+    visualAtomicSelectionMarkerFrame = null;
+  };
+
+  const scheduleVisualAtomicSelectionMarkerRefresh = () => {
+    if (!browser || visualAtomicSelectionMarkerFrame !== null) return;
+    visualAtomicSelectionMarkerFrame = window.requestAnimationFrame(() => {
+      visualAtomicSelectionMarkerFrame = null;
+      visualBlockEditors.forEach((editorEl) => updateVisualAtomicSelectionMarkers(editorEl));
+    });
+  };
+
   const getLueckeDeleteLabel = (gap) => {
     const name = (gap?.getAttribute?.('name') || '').trim();
+    if (isTextdokumentNode(gap)) {
+      const rawLabel = gap?.getAttribute?.('label') || gap?.getAttribute?.('title') || '';
+      const label = isDefaultTextdokumentLabel(rawLabel) ? '' : truncateEditorLabel(rawLabel, 28);
+      if (name && label) return `Textfeld "${name}" (${label})`;
+      if (name) return `Textfeld "${name}"`;
+      return 'Textfeld';
+    }
     const solution = truncateEditorLabel(gap?.textContent || '', 28);
     if (name && solution) return `Lücke "${name}" (${solution})`;
     if (name) return `Lücke "${name}"`;
@@ -7125,15 +7684,15 @@
     if (uniqueGaps.length === 1) {
       return window.confirm(`${getLueckeDeleteLabel(uniqueGaps[0])} wirklich vollständig löschen?`);
     }
-    return window.confirm(`${uniqueGaps.length} Lücken wirklich vollständig löschen?`);
+    return window.confirm(`${uniqueGaps.length} Elemente wirklich vollständig löschen?`);
   };
 
   const LUECKE_GAP_HTML_PATTERN =
-    /<\s*luecke-gap\b[^>]*(?:\/\s*>|>[\s\S]*?<\s*\/\s*luecke-gap\s*>)/gi;
+    /<\s*(luecke-gap|textdokument-feld)\b[^>]*(?:\/\s*>|>[\s\S]*?<\s*\/\s*\1\s*>)/gi;
 
   const getLueckeDeleteLabelFromHtml = (html = '') => {
     const { container } = parseHtmlFragment(html);
-    const gap = container?.querySelector?.('luecke-gap');
+    const gap = container?.querySelector?.(INLINE_ANSWER_ELEMENT_SELECTOR);
     return gap ? getLueckeDeleteLabel(gap) : 'Lücke';
   };
 
@@ -7166,7 +7725,7 @@
     if (ranges.length === 1) {
       return window.confirm(`${ranges[0].label} wirklich vollständig löschen?`);
     }
-    return window.confirm(`${ranges.length} Lücken wirklich vollständig löschen?`);
+    return window.confirm(`${ranges.length} Elemente wirklich vollständig löschen?`);
   };
 
   const handleHtmlTextareaGapDelete = async (event, value, applyValue) => {
@@ -7244,6 +7803,58 @@
     });
 
     return deletionRange;
+  };
+
+  const serializeVisualSelectionForClipboard = (editorEl) => {
+    const range = getCurrentVisualSelectionRange(editorEl);
+    if (!range || range.collapsed) return '';
+    const selectedGaps = uniqueLueckeGaps(getLueckeGapsIntersectingRange(editorEl, range));
+    if (!selectedGaps.length) return '';
+
+    const copyRange = buildGapDeletionRange(range, selectedGaps);
+    const container = document.createElement('div');
+    container.appendChild(copyRange.cloneContents());
+    return normalizeBlockContent(container.innerHTML).trim();
+  };
+
+  const getInlineAnswerClipboardHtml = (event) => {
+    if (!browser || !event?.clipboardData) return '';
+    const candidates = [
+      event.clipboardData.getData('text/html'),
+      event.clipboardData.getData('text/plain')
+    ];
+
+    for (const candidate of candidates) {
+      const raw = String(candidate || '');
+      if (!INLINE_ANSWER_CLIPBOARD_PATTERN.test(raw)) continue;
+      const doc = new DOMParser().parseFromString(raw, 'text/html');
+      const body = doc.body;
+      if (!body?.querySelector?.(INLINE_ANSWER_ELEMENT_SELECTOR)) continue;
+      const html = normalizeBlockContent(body.innerHTML).trim();
+      if (INLINE_ANSWER_CLIPBOARD_PATTERN.test(html)) return html;
+    }
+    return '';
+  };
+
+  const handleVisualCopy = (event, index) => {
+    if (!Number.isInteger(index)) return;
+    const editorEl = event?.currentTarget || visualBlockEditors[index];
+    const html = serializeVisualSelectionForClipboard(editorEl);
+    if (!html || !event?.clipboardData) return;
+
+    event.preventDefault();
+    event.clipboardData.setData('text/html', html);
+    event.clipboardData.setData('text/plain', html);
+  };
+
+  const handleVisualPaste = (event, index) => {
+    if (!Number.isInteger(index) || visualBlockViews[index] !== 'visual') return;
+    const html = getInlineAnswerClipboardHtml(event);
+    if (!html) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    insertHtmlIntoVisualBlock(index, html, { currentSelection: true });
   };
 
   const handleVisualGapDeleteRequest = (index, event) => {
@@ -7483,6 +8094,7 @@
         key: '',
         label: `Element ${criteria.length + 1}`,
         description: '',
+        example: '',
         internalDescription: ''
       }
     ];
@@ -7551,50 +8163,6 @@
     const premises = getFreitextPremises(current);
     const nextPremises = premises.filter((_, index) => index !== premiseIndex);
     updateVisualBlock(blockIndex, setFreitextPremises(current, nextPremises));
-  };
-
-  const updateFreitextReference = (blockIndex, referenceIndex, patch, event = null) => {
-    const current = visualBlocks[blockIndex] || '';
-    const references = getFreitextReferences(current);
-    if (!references[referenceIndex]) return;
-    const nextReferences = references.map((reference, index) =>
-      index === referenceIndex ? { ...reference, ...patch } : reference
-    );
-    const field = Object.keys(patch || {})[0] || 'item';
-    updateVisualBlock(
-      blockIndex,
-      setFreitextReferences(current, nextReferences),
-      getVisualInputHistoryOptions(
-        blockIndex,
-        event,
-        `freitext-reference:${referenceIndex}:${field}`
-      )
-    );
-  };
-
-  const addFreitextReference = (blockIndex) => {
-    const current = visualBlocks[blockIndex] || '';
-    const references = getFreitextReferences(current);
-    const nextReferences = [
-      ...references,
-      {
-        key: '',
-        label: `Verknüpfung ${references.length + 1}`,
-        sourceKey: '',
-        sourceType: 'answer',
-        prompt: '',
-        minClassification: 900,
-        required: true
-      }
-    ];
-    updateVisualBlock(blockIndex, setFreitextReferences(current, nextReferences));
-  };
-
-  const deleteFreitextReference = (blockIndex, referenceIndex) => {
-    const current = visualBlocks[blockIndex] || '';
-    const references = getFreitextReferences(current);
-    const nextReferences = references.filter((_, index) => index !== referenceIndex);
-    updateVisualBlock(blockIndex, setFreitextReferences(current, nextReferences));
   };
 
   const handleVisualGapArrowNavigation = (index, event) => {
@@ -7669,16 +8237,24 @@
     }
   };
 
-  const insertHtmlIntoVisualBlock = (index, html) => {
+  const insertHtmlIntoVisualBlock = (index, html, options = {}) => {
     const el = visualBlockEditors[index];
     if (!el) return;
     el.focus();
-    const range = restoreVisualSelection(index);
+    const range = options?.currentSelection
+      ? getCurrentVisualSelectionRange(el) || restoreVisualSelection(index)
+      : restoreVisualSelection(index);
     if (!range) return;
     const fragment = range.createContextualFragment(html);
+    const lastInsertedNode = options?.currentSelection ? fragment.lastChild : null;
     range.deleteContents();
     range.insertNode(fragment);
-    range.collapse(false);
+    if (lastInsertedNode?.parentNode) {
+      range.setStartAfter(lastInsertedNode);
+      range.collapse(true);
+    } else {
+      range.collapse(false);
+    }
     const selection = window?.getSelection ? window.getSelection() : null;
     if (selection) {
       selection.removeAllRanges();
@@ -7838,6 +8414,18 @@
     openLueckeEditor(index, name);
   };
 
+  const insertTextdokumentIntoBlock = async (index) => {
+    const name = getNextTextdokumentName();
+    const snippet = buildTextdokumentSnippet(name);
+    if (visualBlockViews[index] === 'visual') {
+      insertHtmlIntoVisualBlock(index, snippet);
+    } else {
+      await insertHtmlSelection(index, { prefix: snippet, suffix: '' });
+    }
+    await tick();
+    openTextdokumentEditor(index, name);
+  };
+
   $: if (activeTab === 'editor' && editorView === 'visual') {
     editorContent;
     if (editorContent !== visualSyncHtml || visualBlocks.length === 0) {
@@ -7845,11 +8433,14 @@
     }
   }
 
-  $: if (activeTab === 'editor' && editorView === 'preview' && previewEl && apiBaseUrl) {
-    editorContent;
-    selectedKey;
-    schedulePreviewRefresh();
-  }
+	  $: if (activeTab === 'editor' && editorView === 'preview' && previewEl && apiBaseUrl) {
+	    editorContent;
+	    selectedKey;
+    previewSchoolId;
+    previewClassId;
+    previewLearnerCode;
+	    schedulePreviewRefresh();
+	  }
 
   $: if (activeTab === 'editor' && editorView === 'answers' && answersEl && apiBaseUrl) {
     editorContent;
@@ -7868,14 +8459,17 @@
     (activeTab !== 'editor' || editorView !== 'preview') &&
     (
       previewLueckeRuntime ||
+      previewTextdokumentRuntime ||
       previewFreitextRuntime ||
       previewUmfrageRuntime
     )
   ) {
     previewLueckeRuntime?.destroy();
+    previewTextdokumentRuntime?.destroy();
     previewFreitextRuntime?.destroy();
     previewUmfrageRuntime?.destroy();
     previewLueckeRuntime = null;
+    previewTextdokumentRuntime = null;
     previewFreitextRuntime = null;
     previewUmfrageRuntime = null;
     previewUser = '';
@@ -7883,9 +8477,11 @@
 
   const destroyAnswersRuntime = () => {
     answersLueckeRuntime?.destroy();
+    answersTextdokumentRuntime?.destroy();
     answersFreitextRuntime?.destroy();
     answersUmfrageRuntime?.destroy();
     answersLueckeRuntime = null;
+    answersTextdokumentRuntime = null;
     answersFreitextRuntime = null;
     answersUmfrageRuntime = null;
   };
@@ -7901,18 +8497,56 @@
     return true;
   };
 
-  $: if (
-    (activeTab !== 'editor' || editorView !== 'answers' || !answersUserFilter) &&
+	  $: if (
+	    (activeTab !== 'editor' || editorView !== 'answers' || !answersUserFilter) &&
     (
       answersLueckeRuntime ||
+      answersTextdokumentRuntime ||
       answersFreitextRuntime ||
       answersUmfrageRuntime
     )
-  ) {
-    destroyAnswersRuntime();
-  }
+	  ) {
+	    destroyAnswersRuntime();
+	  }
 
-  const schedulePreviewRefresh = async () => {
+  const handlePreviewSchoolChange = () => {
+    if (!previewSchoolId) return;
+    const selectedClass = classes.find(
+      (entry) => normalizeClassId(entry?.id) === normalizeClassId(previewClassId)
+    );
+    const classSchool = selectedClass ? String(normalizeSchoolId(selectedClass?.school)) : '';
+    if (selectedClass && classSchool !== String(previewSchoolId)) {
+      previewClassId = '';
+      previewLearnerCode = '';
+    }
+  };
+
+  const handlePreviewClassChange = () => {
+    previewLearnerCode = '';
+  };
+
+  const previewContext = () => {
+    const classId = previewContextClassId;
+    const learnerCode = (previewLearnerCode || '').trim();
+    const schoolId =
+      normalizeClassId(previewSchoolId) ??
+      normalizeClassId(normalizeSchoolId(previewSelectedClass?.school));
+    return {
+      school: schoolId,
+      classroom: classId,
+      learner: learnerCode
+    };
+  };
+
+  const previewContextUser = (context) => {
+    const sheetPart = selectedKey || 'draft';
+    const schoolPart = context?.school ? `s${context.school}` : 's0';
+    const classPart = context?.classroom ? `c${context.classroom}` : 'c0';
+    const learnerPart = context?.learner ? `l${context.learner}` : 'l0';
+    return `preview:${sheetPart}:${schoolPart}:${classPart}:${learnerPart}`;
+  };
+
+	  const schedulePreviewRefresh = async () => {
     if (previewPending) return;
     previewPending = true;
     await tick();
@@ -7920,36 +8554,63 @@
 
     if (!previewEl || !apiBaseUrl || activeTab !== 'editor' || editorView !== 'preview') return;
     ensureLueckeElements();
+    ensureTextdokumentElements();
     ensureFreitextElements();
     ensureUmfrageElements();
 
-    const nextUser = `preview:${selectedKey || 'draft'}`;
-    previewLueckeRuntime?.destroy();
+    const context = previewContext();
+	    const nextUser = previewContextUser(context);
+	    previewLueckeRuntime?.destroy();
+    previewTextdokumentRuntime?.destroy();
     previewFreitextRuntime?.destroy();
     previewUmfrageRuntime?.destroy();
-    previewLueckeRuntime = createLueckeRuntime({
+	    previewLueckeRuntime = createLueckeRuntime({
+	      root: previewEl,
+	      apiBaseUrl,
+	      sheetKey: selectedKey || 'draft',
+	      user: nextUser,
+      classroom: context.classroom,
+      previewSchool: context.school,
+      previewClassroom: context.classroom,
+      previewLearner: context.learner,
+	      previewMode: true
+	    });
+    previewTextdokumentRuntime = createTextdokumentRuntime({
       root: previewEl,
-      apiBaseUrl,
-      sheetKey: selectedKey || 'draft',
-      user: nextUser,
-      previewMode: true
-    });
+	      apiBaseUrl,
+	      sheetKey: selectedKey || 'draft',
+	      user: nextUser,
+      classroom: context.classroom,
+      previewSchool: context.school,
+      previewClassroom: context.classroom,
+      previewLearner: context.learner,
+	      previewMode: true
+	    });
     previewFreitextRuntime = createFreitextRuntime({
       root: previewEl,
-      apiBaseUrl,
-      sheetKey: selectedKey || 'draft',
-      user: nextUser,
-      previewMode: true
-    });
+	      apiBaseUrl,
+	      sheetKey: selectedKey || 'draft',
+	      user: nextUser,
+      classroom: context.classroom,
+      previewSchool: context.school,
+      previewClassroom: context.classroom,
+      previewLearner: context.learner,
+	      previewMode: true
+	    });
     previewUmfrageRuntime = createUmfrageRuntime({
       root: previewEl,
-      apiBaseUrl,
-      sheetKey: selectedKey || 'draft',
-      user: nextUser,
-      previewMode: true
-    });
+	      apiBaseUrl,
+	      sheetKey: selectedKey || 'draft',
+	      user: nextUser,
+      classroom: context.classroom,
+      previewSchool: context.school,
+      previewClassroom: context.classroom,
+      previewLearner: context.learner,
+	      previewMode: true
+	    });
     previewUser = nextUser;
     await previewLueckeRuntime.refresh();
+    await previewTextdokumentRuntime.refresh();
     await previewFreitextRuntime.refresh();
     await previewUmfrageRuntime.refresh();
   };
@@ -8019,7 +8680,7 @@
   const formatVersionLabel = (version) => {
     if (!version) return '';
     const versionNumber = getVersionNumber(version);
-    const number = versionNumber ? `V${versionNumber}` : '';
+    const number = versionNumber ? `#${versionNumber}` : '';
     const stamp = formatVersionDate(version.updated_at || version.created_at);
     return [number, stamp].filter(Boolean).join(' · ');
   };
@@ -8027,7 +8688,7 @@
   const describeVersion = (version) => {
     if (!version) return 'Version';
     const versionNumber = getVersionNumber(version);
-    const number = versionNumber ? `V${versionNumber}` : '';
+    const number = versionNumber ? `#${versionNumber}` : '';
     const stamp = formatVersionDate(version.updated_at || version.created_at);
     return [number, stamp].filter(Boolean).join(' · ') || 'Version';
   };
@@ -8093,7 +8754,7 @@
 
   const transformGaps = (container) => {
     const gaps = Array.from(
-      container.querySelectorAll(`luecke-gap, ${FREITEXT_BLOCK_SELECTOR}`)
+      container.querySelectorAll(`luecke-gap, textdokument-feld, ${FREITEXT_BLOCK_SELECTOR}`)
     );
     gaps.forEach((gap, idx) => {
       const key = gap.getAttribute('name') || `gap-${idx + 1}`;
@@ -8188,8 +8849,8 @@
     });
   };
 
-  const fetchAnswersLearners = async (classId) => {
-    const normalizedClassId = normalizeClassId(classId);
+	  const fetchAnswersLearners = async (classId) => {
+	    const normalizedClassId = normalizeClassId(classId);
     const requestId = ++answersLearnersRequestId;
     answersLearnersClassKey = normalizedClassId;
     answersLearners = [];
@@ -8227,10 +8888,49 @@
       if (requestId === answersLearnersRequestId) {
         answersLearnersLoading = false;
       }
+	    }
+	  };
+
+  const fetchPreviewLearners = async (classId) => {
+    const normalizedClassId = normalizeClassId(classId);
+    const requestId = ++previewLearnersRequestId;
+    previewLearnersClassKey = normalizedClassId;
+    previewLearners = [];
+    previewLearnersError = '';
+    if (!token || !normalizedClassId) {
+      if (requestId === previewLearnersRequestId) {
+        previewLearnersLoading = false;
+      }
+      return;
+    }
+    previewLearnersLoading = true;
+    try {
+      const res = await apiFetch(`learner?classroom=${normalizedClassId}`);
+      const payload = await readPayload(res);
+      if (requestId !== previewLearnersRequestId) return;
+      if (!res.ok) {
+        previewLearnersError = payload?.warning || 'Lernende konnten nicht geladen werden';
+        return;
+      }
+      previewLearners = payload?.data?.learner ?? [];
+      if (
+        previewLearnerCode &&
+        !previewLearners.find((entry) => String(entry?.code ?? '') === String(previewLearnerCode))
+      ) {
+        previewLearnerCode = '';
+      }
+    } catch (err) {
+      if (requestId !== previewLearnersRequestId) return;
+      previewLearnersError = err?.message ?? 'Lernende konnten nicht geladen werden';
+      previewLearners = [];
+    } finally {
+      if (requestId === previewLearnersRequestId) {
+        previewLearnersLoading = false;
+      }
     }
   };
 
-  const fetchAgentLearnersByClass = async (classId) => {
+	  const fetchAgentLearnersByClass = async (classId) => {
     const normalizedClassId = normalizeClassId(classId);
     if (!token || !normalizedClassId) return [];
     try {
@@ -8318,10 +9018,18 @@
     try {
       await ensureAnswersCiCss(classId);
       ensureLueckeElements();
+      ensureTextdokumentElements();
       ensureFreitextElements();
       ensureUmfrageElements();
       destroyAnswersRuntime();
       answersLueckeRuntime = createLueckeRuntime({
+        root: answersEl,
+        apiBaseUrl,
+        sheetKey: key,
+        user: userCode,
+        classroom: classId
+      });
+      answersTextdokumentRuntime = createTextdokumentRuntime({
         root: answersEl,
         apiBaseUrl,
         sheetKey: key,
@@ -8343,6 +9051,7 @@
         classroom: classId
       });
       await answersLueckeRuntime.refresh();
+      await answersTextdokumentRuntime.refresh();
       await answersFreitextRuntime.refresh();
       await answersUmfrageRuntime.refresh();
       answersKey = key;
@@ -8426,6 +9135,7 @@
         answersUserFilter !== answersUserKey ||
         editorContent !== answersContent ||
         !answersLueckeRuntime ||
+        !answersTextdokumentRuntime ||
         !answersFreitextRuntime ||
         !answersUmfrageRuntime;
       if (shouldInitLearnerRuntime) {
@@ -9171,7 +9881,7 @@
         <div class="auth-card__body">
           <h2>Einloggen als Studierende</h2>
           <p class="auth-card__copy">
-            Mit deinem persönlichen Token direkt in deine freigegebenen Arbeitsblätter.
+            Mit Ihrem persönlichen Token direkt in Ihre freigegebenen Arbeitsblätter.
           </p>
           <form class="auth-form" on:submit|preventDefault={loginLearner}>
             <label>
@@ -9663,22 +10373,33 @@
                                     <option value="'Georgia', 'Times New Roman', serif">Aa Serif</option>
                                     <option value="'Courier New', Courier, monospace">Aa Mono</option>
                                   </select>
-                                  <select class="ghost ci-btn-outline tool-select" aria-label="Lückenbreite" bind:value={lueckeInsertWidth}>
-                                    {#each LUECKE_WIDTH_OPTIONS as option}
-                                      <option value={option.value}>{option.label}</option>
-                                    {/each}
-                                  </select>
                                   <button
                                     class="ghost ci-btn-outline tool-btn"
                                     type="button"
                                     title="Lücke einfügen"
                                     aria-label="Lücke einfügen"
                                     on:mousedown|preventDefault
-                                    on:click={() => insertSnippetIntoBlock(idx, lueckeInsertWidth)}
+                                    on:click={() => insertSnippetIntoBlock(idx)}
                                   >
                                     <span class="worksheet-type-icon tool-icon tool-icon--gap" aria-hidden="true">
                                       <svg viewBox={LUECKE_ELEMENT_TYPE.icon.viewBox} focusable="false">
                                         {#each LUECKE_ELEMENT_TYPE.icon.paths as path}
+                                          <path d={path} />
+                                        {/each}
+                                      </svg>
+                                    </span>
+                                  </button>
+                                  <button
+                                    class="ghost ci-btn-outline tool-btn"
+                                    type="button"
+                                    title="Textfeld einfügen"
+                                    aria-label="Textfeld einfügen"
+                                    on:mousedown|preventDefault
+                                    on:click={() => insertTextdokumentIntoBlock(idx)}
+                                  >
+                                    <span class="worksheet-type-icon tool-icon tool-icon--textdokument" aria-hidden="true">
+                                      <svg viewBox={TEXTDOKUMENT_ELEMENT_TYPE.icon.viewBox} focusable="false">
+                                        {#each TEXTDOKUMENT_ELEMENT_TYPE.icon.paths as path}
                                           <path d={path} />
                                         {/each}
                                       </svg>
@@ -9819,8 +10540,8 @@
                                 {@const freitextInstructionHtml = getEditableFreitextInstructionHtml(block)}
                                 {@const freitextCriteria = getFreitextCriteria(block)}
                                 {@const freitextPremises = getFreitextPremises(block)}
-                                {@const freitextReferences = getFreitextReferences(block)}
                                 {@const freitextMainPrompt = getFreitextMainPrompt(block)}
+                                {@const freitextLengthLimits = getFreitextLengthLimits(block)}
                                 {@const freitextAnswerElements = getSelectableAnswerElements(idx)}
                                 {@const freitextSourceOptionsId = `freitext-source-options-${visualBlockIds[idx] || idx}`}
                                 <div
@@ -9836,6 +10557,7 @@
                                     aria-readonly={!blockIsActive}
                                     aria-multiline="true"
                                     spellcheck="false"
+                                    draggable="false"
                                     aria-label="Freitext-Beschreibung visuell bearbeiten"
                                     use:syncEditableHtml={{
                                       html: freitextInstructionHtml,
@@ -9848,6 +10570,8 @@
                                     on:blur={flushVisualInputCommits}
                                     on:beforeinput={(event) => handleVisualBeforeInput(event, idx)}
                                     on:keydown={(event) => handleVisualKeydown(event, idx)}
+                                    on:copy={(event) => handleVisualCopy(event, idx)}
+                                    on:paste={(event) => handleVisualPaste(event, idx)}
                                     on:input={(event) => handleFreitextInstructionVisualInput(idx, event)}
                                     on:mouseup={() => handleVisualSelectionChange(idx)}
                                     on:keyup={() => handleVisualSelectionChange(idx)}
@@ -9896,7 +10620,7 @@
                                                   rows="1"
                                                   value={premise.label}
                                                   placeholder="z. B. Link zum Inserat"
-                                                  use:fitTextareaToContent={premise.label}
+                                                  use:fitTextareaToContent={`${blockIsActive}:${premise.label}`}
                                                   readonly={!blockIsActive}
                                                   tabindex={blockIsActive ? '0' : '-1'}
                                                   on:input={(event) =>
@@ -9952,7 +10676,7 @@
                                                   rows="1"
                                                   value={premise.description}
                                                   placeholder="Interne Prüfhinweise zur Prämisse"
-                                                  use:fitTextareaToContent={premise.description}
+                                                  use:fitTextareaToContent={`${blockIsActive}:${premise.description}`}
                                                   readonly={!blockIsActive}
                                                   tabindex={blockIsActive ? '0' : '-1'}
                                                   on:input={(event) =>
@@ -9984,135 +10708,6 @@
                                     {/if}
                                   </div>
                                   <div
-                                    class="freitext-checklist-editor freitext-checklist-editor--references"
-                                    class:freitext-checklist-editor--empty={freitextReferences.length === 0}
-                                  >
-                                      <div class="freitext-checklist-editor__header">
-                                        <strong>Verknüpfungen</strong>
-                                        <span class="freitext-checklist-editor__count">{freitextReferences.length}</span>
-                                        {#if blockIsActive}
-                                          <button
-                                            class="icon-btn ci-btn-outline freitext-checklist-editor__add"
-                                            type="button"
-                                            title="Verknüpfung hinzufügen"
-                                            aria-label="Verknüpfung hinzufügen"
-                                            on:click={() => addFreitextReference(idx)}
-                                          >
-                                            +
-                                          </button>
-                                        {/if}
-                                      </div>
-                                      {#if freitextReferences.length}
-                                        {#if blockIsActive}
-                                          <div class="freitext-checklist-editor__field-headings freitext-checklist-editor__field-headings--references">
-                                            <span>Titel</span>
-                                            <span>Antwort-Key</span>
-                                            <span>Hinweis</span>
-                                            <span>Schwelle</span>
-                                            <span aria-hidden="true"></span>
-                                          </div>
-                                        {/if}
-                                        <ol class="freitext-checklist-editor__list">
-                                          {#each freitextReferences as reference, referenceIndex}
-                                            <li class="freitext-checklist-editor__item">
-                                              <div class="freitext-checklist-editor__fields freitext-checklist-editor__fields--references">
-                                                <label>
-                                                  <span class="freitext-checklist-editor__sr-label">Titel</span>
-                                                  <textarea
-                                                    class="freitext-checklist-editor__label-field"
-                                                    rows="1"
-                                                    value={reference.label}
-                                                    placeholder="z. B. Vorarbeit"
-                                                    use:fitTextareaToContent={reference.label}
-                                                    readonly={!blockIsActive}
-                                                    tabindex={blockIsActive ? '0' : '-1'}
-                                                    on:input={(event) =>
-                                                      blockIsActive && updateFreitextReference(
-                                                        idx,
-                                                        referenceIndex,
-                                                        { label: event.currentTarget.value },
-                                                        event
-                                                      )}
-                                                  ></textarea>
-                                                </label>
-                                                <label>
-                                                  <span class="freitext-checklist-editor__sr-label">Antwort-Key</span>
-                                                  <textarea
-                                                    rows="1"
-                                                    value={reference.sourceKey}
-                                                    placeholder="answer-key"
-                                                    use:fitTextareaToContent={reference.sourceKey}
-                                                    readonly={!blockIsActive}
-                                                    tabindex={blockIsActive ? '0' : '-1'}
-                                                    on:input={(event) =>
-                                                      blockIsActive && updateFreitextReference(
-                                                        idx,
-                                                        referenceIndex,
-                                                        { sourceKey: event.currentTarget.value },
-                                                        event
-                                                      )}
-                                                  ></textarea>
-                                                </label>
-                                                <label>
-                                                  <span class="freitext-checklist-editor__sr-label">Hinweis</span>
-                                                  <textarea
-                                                    rows="1"
-                                                    value={reference.prompt}
-                                                    placeholder="Was wird aus der Vorarbeit verwendet?"
-                                                    use:fitTextareaToContent={reference.prompt}
-                                                    readonly={!blockIsActive}
-                                                    tabindex={blockIsActive ? '0' : '-1'}
-                                                    on:input={(event) =>
-                                                      blockIsActive && updateFreitextReference(
-                                                        idx,
-                                                        referenceIndex,
-                                                        { prompt: event.currentTarget.value },
-                                                        event
-                                                      )}
-                                                  ></textarea>
-                                                </label>
-                                                <label class="freitext-checklist-editor__threshold">
-                                                  <span class="freitext-checklist-editor__sr-label">Schwelle</span>
-                                                  <select
-                                                    value={String(reference.minClassification)}
-                                                    disabled={!blockIsActive}
-                                                    tabindex={blockIsActive ? '0' : '-1'}
-                                                    aria-label="Mindeststatus der Verknüpfung"
-                                                    on:change={(event) =>
-                                                      updateFreitextReference(
-                                                        idx,
-                                                        referenceIndex,
-                                                        {
-                                                          minClassification: Number(event.currentTarget.value)
-                                                        },
-                                                        event
-                                                      )}
-                                                  >
-                                                    <option value="900">richtig</option>
-                                                    <option value="101">teilweise</option>
-                                                    <option value="0">eingetragen</option>
-                                                  </select>
-                                                </label>
-                                              </div>
-                                              {#if blockIsActive}
-                                                <button
-                                                  class="icon-btn ci-btn-outline tool-btn--danger freitext-checklist-editor__delete"
-                                                  type="button"
-                                                  title="Verknüpfung löschen"
-                                                  aria-label="Verknüpfung löschen"
-                                                  on:click={() => deleteFreitextReference(idx, referenceIndex)}
-                                                >
-                                                  ×
-                                                </button>
-                                              {/if}
-                                            </li>
-                                          {/each}
-                                        </ol>
-                                      {:else if blockIsActive}
-                                        <p class="hint">Noch keine Verknüpfungen erfasst.</p>
-                                      {/if}
-                                  </div>
-                                  <div
                                     class="freitext-checklist-editor"
                                     class:freitext-checklist-editor--empty={freitextCriteria.length === 0}
                                   >
@@ -10136,6 +10731,7 @@
                                         <div class="freitext-checklist-editor__field-headings freitext-checklist-editor__field-headings--criteria">
                                           <span>Titel</span>
                                           <span>Beschreibung sichtbar</span>
+                                          <span>Beispiel</span>
                                           <span>Beschreibung intern</span>
                                           <span aria-hidden="true"></span>
                                         </div>
@@ -10151,7 +10747,7 @@
                                                   rows="1"
                                                   value={criterion.label}
                                                   placeholder="z. B. Preis"
-                                                  use:fitTextareaToContent={criterion.label}
+                                                  use:fitTextareaToContent={`${blockIsActive}:${criterion.label}`}
                                                   readonly={!blockIsActive}
                                                   tabindex={blockIsActive ? '0' : '-1'}
                                                   on:input={(event) =>
@@ -10171,7 +10767,7 @@
                                                   rows="1"
                                                   value={criterion.description}
                                                   placeholder="Was muss zwingend vorkommen?"
-                                                  use:fitTextareaToContent={criterion.description}
+                                                  use:fitTextareaToContent={`${blockIsActive}:${criterion.description}`}
                                                   readonly={!blockIsActive}
                                                   tabindex={blockIsActive ? '0' : '-1'}
                                                   on:input={(event) =>
@@ -10184,12 +10780,30 @@
                                                 ></textarea>
                                               </label>
                                               <label>
+                                                <span class="freitext-checklist-editor__sr-label">Beispiel</span>
+                                                <textarea
+                                                  rows="1"
+                                                  value={criterion.example || ''}
+                                                  placeholder="z. B. konkrete Angabe"
+                                                  use:fitTextareaToContent={`${blockIsActive}:${criterion.example || ''}`}
+                                                  readonly={!blockIsActive}
+                                                  tabindex={blockIsActive ? '0' : '-1'}
+                                                  on:input={(event) =>
+                                                    blockIsActive && updateFreitextCriterion(
+                                                      idx,
+                                                      criterionIndex,
+                                                      { example: event.currentTarget.value },
+                                                      event
+                                                    )}
+                                                ></textarea>
+                                              </label>
+                                              <label>
                                                 <span class="freitext-checklist-editor__sr-label">Beschreibung intern</span>
                                                 <textarea
                                                   rows="1"
                                                   value={criterion.internalDescription || ''}
                                                   placeholder="Interne Prüfhinweise"
-                                                  use:fitTextareaToContent={criterion.internalDescription || ''}
+                                                  use:fitTextareaToContent={`${blockIsActive}:${criterion.internalDescription || ''}`}
                                                   readonly={!blockIsActive}
                                                   tabindex={blockIsActive ? '0' : '-1'}
                                                   on:input={(event) =>
@@ -10221,6 +10835,49 @@
                                     {/if}
                                   </div>
                                   {#if blockIsActive}
+                                    <div class="freitext-length-editor">
+                                      <label>
+                                        <span>Min. Zeichen</span>
+                                        <input
+                                          type="text"
+                                          inputmode="numeric"
+                                          pattern="[0-9]*"
+                                          value={freitextLengthLimits.min}
+                                          placeholder="frei"
+                                          aria-label="Mindestlänge in Zeichen"
+                                          on:input={(event) =>
+                                            setVisualBlockFreitextLengthLimit(
+                                              idx,
+                                              'min',
+                                              event.currentTarget.value,
+                                              event
+                                            )}
+                                        />
+                                      </label>
+                                      <label>
+                                        <span>Max. Zeichen</span>
+                                        <input
+                                          type="text"
+                                          inputmode="numeric"
+                                          pattern="[0-9]*"
+                                          value={freitextLengthLimits.max}
+                                          placeholder="frei"
+                                          aria-label="Maximallänge in Zeichen"
+                                          on:input={(event) =>
+                                            setVisualBlockFreitextLengthLimit(
+                                              idx,
+                                              'max',
+                                              event.currentTarget.value,
+                                              event
+                                            )}
+                                        />
+                                      </label>
+                                      {#if formatFreitextLengthLimits(freitextLengthLimits)}
+                                        <span class="freitext-length-editor__meta">
+                                          {formatFreitextLengthLimits(freitextLengthLimits)}
+                                        </span>
+                                      {/if}
+                                    </div>
                                     <div class="freitext-block-editor__answer-preview">
                                       <textarea
                                         class="freitext__textarea"
@@ -10261,6 +10918,7 @@
                                   tabindex={blockIsActive && visualBlockViews[idx] === 'visual' ? '0' : '-1'}
                                   aria-readonly={!blockIsActive || visualBlockViews[idx] === 'html'}
                                   spellcheck="false"
+                                  draggable="false"
                                   use:syncEditableHtml={{
                                     html: block,
                                     freezeWhileFocused:
@@ -10274,6 +10932,8 @@
                                   on:blur={flushVisualInputCommits}
                                   on:beforeinput={(event) => handleVisualBeforeInput(event, idx)}
                                   on:keydown={(event) => handleVisualKeydown(event, idx)}
+                                  on:copy={(event) => handleVisualCopy(event, idx)}
+                                  on:paste={(event) => handleVisualPaste(event, idx)}
                                   on:input={(event) =>
                                     visualBlockViews[idx] === 'visual' && handleVisualInput(idx, event)}
                                   on:mouseup={() => handleVisualSelectionChange(idx)}
@@ -10394,13 +11054,64 @@
                 </div>
               </div>
             </div>
-          {:else if editorView === 'preview'}
-            <div class="preview">
-              <div class="preview-header">Preview</div>
-              <div class="preview-body" bind:this={previewEl}>
-                {@html sanitizeSheetContent(editorContent)}
+	          {:else if editorView === 'preview'}
+	            <div class="preview">
+	              <div class="preview-header preview-header--with-controls">
+                <span>Preview</span>
+                <div class="preview-context-controls" aria-label="Preview-Kontext">
+                  <label>
+                    <span>Schule</span>
+                    <select
+                      bind:value={previewSchoolId}
+                      on:change={handlePreviewSchoolChange}
+                      disabled={loadingSchools}
+                    >
+                      <option value="">Keine Schule</option>
+                      {#each schools as school}
+                        <option value={String(school.id)}>
+                          {school.name || `Schule #${school.id}`}
+                        </option>
+                      {/each}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Klasse</span>
+                    <select
+                      bind:value={previewClassId}
+                      on:change={handlePreviewClassChange}
+                      disabled={loadingClasses}
+                    >
+                      <option value="">Keine Klasse</option>
+                      {#each previewClassOptions as classItem}
+                        <option value={String(classItem.id)}>{formatClassLabel(classItem)}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Lernende:r</span>
+                    <select
+                      bind:value={previewLearnerCode}
+                      disabled={!previewContextClassId || previewLearnersLoading}
+                    >
+                      <option value="">Keine Auswahl</option>
+                      {#each previewLearners as learnerItem}
+                        {#if learnerItem?.code}
+                          <option value={learnerItem.code}>
+                            {formatAnswersLearnerLabel(learnerItem)}
+                          </option>
+                        {/if}
+                      {/each}
+                    </select>
+                  </label>
+                </div>
               </div>
-            </div>
+              {#if previewLearnersError}
+                <p class="error-text preview-context-error">{previewLearnersError}</p>
+              {/if}
+	              <div class="preview-body" bind:this={previewEl}>
+	                {@html sanitizeSheetContent(editorContent)}
+	              </div>
+	            </div>
           {:else if editorView === 'answers'}
             <div class="preview answers">
               <div class="preview-header">Antworten</div>
@@ -11960,41 +12671,54 @@
       aria-modal="true"
       aria-labelledby="luecke-editor-title"
     >
-      <h3 id="luecke-editor-title">Lösung bearbeiten</h3>
+      <h3 id="luecke-editor-title">
+        {lueckeEditorKind === 'textdokument' ? 'Textfeld bearbeiten' : 'Lücke bearbeiten'}
+      </h3>
       <form class="create-form" on:submit|preventDefault={saveLueckeEditor}>
         <label>
-          <span>Lösung(en)</span>
+          <span>Bezeichnung</span>
           <input
             type="text"
-            bind:this={lueckeSolutionInputEl}
-            bind:value={lueckeEditorSolution}
+            bind:this={lueckeNameInputEl}
+            bind:value={lueckeEditorName}
+            placeholder={lueckeEditorKind === 'textdokument' ? 'z. B. Quellenanalyse' : 'z. B. begriff1'}
+            required
           />
-          <span class="field-hint">Mehrere Lösungen mit Semikolon trennen. Die Lösung kann auch leer sein.</span>
+          <span class="field-hint">Diese Bezeichnung ist der Key für Antworten und Prämissen.</span>
         </label>
+        {#if lueckeEditorKind !== 'textdokument'}
+          <label>
+            <span>Lösung(en)</span>
+            <input type="text" bind:value={lueckeEditorSolution} />
+            <span class="field-hint">Mehrere Lösungen mit Semikolon trennen. Die Lösung kann auch leer sein.</span>
+          </label>
+        {/if}
+        {#if lueckeEditorKind !== 'textdokument'}
+          <label>
+            <span>Breite</span>
+            <div class="luecke-width-control">
+              <select
+                value={getLueckeWidthSelectValue(lueckeEditorWidth)}
+                on:change={setLueckeEditorWidthFromPreset}
+              >
+                {#if !isLueckeWidthOption(lueckeEditorWidth)}
+                  <option value="custom">Eigene Breite</option>
+                {/if}
+                {#each LUECKE_WIDTH_OPTIONS as option}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+              <input
+                type="text"
+                bind:value={lueckeEditorWidth}
+                placeholder="25ch oder 100%"
+                aria-label="Breite manuell"
+              />
+            </div>
+          </label>
+        {/if}
         <label>
-          <span>Breite</span>
-          <div class="luecke-width-control">
-            <select
-              value={getLueckeWidthSelectValue(lueckeEditorWidth)}
-              on:change={setLueckeEditorWidthFromPreset}
-            >
-              {#if !isLueckeWidthOption(lueckeEditorWidth)}
-                <option value="custom">Eigene Breite</option>
-              {/if}
-              {#each LUECKE_WIDTH_OPTIONS as option}
-                <option value={option.value}>{option.label}</option>
-              {/each}
-            </select>
-            <input
-              type="text"
-              bind:value={lueckeEditorWidth}
-              placeholder="25ch oder 100%"
-              aria-label="Breite manuell"
-            />
-          </div>
-        </label>
-        <label>
-          <span>KI-Prompt</span>
+          <span>Zusätzlicher KI-Prompt</span>
           <textarea
             rows="5"
             bind:value={lueckeEditorPrompt}
@@ -12224,6 +12948,7 @@
 
 <style>
   @import '../lib/check-btn.css';
+  @import '../lib/textdokument.css';
 
   :global(body) {
     margin: 0;
@@ -13450,10 +14175,17 @@
   }
 
   .editor-header {
+    position: sticky;
+    top: 0;
+    z-index: 20;
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
     gap: 14px;
+    padding: 10px 0;
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(226, 232, 240, 0.8);
   }
 
   .editor-body {
@@ -13785,7 +14517,7 @@
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #64748b;
+    color: inherit;
   }
 
   .agent-history {
@@ -14050,16 +14782,62 @@
     flex-direction: column;
   }
 
-  .preview-header {
-    padding: 9px 12px;
-    background: #f5f7fa;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-    color: #6f7682;
+	  .preview-header {
+	    padding: 9px 12px;
+	    background: #f5f7fa;
+	    font-size: 10px;
+	    text-transform: uppercase;
+	    letter-spacing: 0.16em;
+	    color: #6f7682;
+	  }
+
+  .preview-header--with-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
 
-  .preview-body {
+  .preview-context-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 11px;
+  }
+
+  .preview-context-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: #5b6472;
+  }
+
+  .preview-context-controls select {
+    width: clamp(120px, 14vw, 180px);
+    min-height: 28px;
+    border-radius: 8px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #1f2937;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+
+  .preview-context-controls select:disabled {
+    background: #eef2f7;
+    color: #8a94a3;
+  }
+
+  .preview-context-error {
+    margin: 8px 12px 0;
+  }
+
+	  .preview-body {
     padding: 14px;
     overflow: auto;
   }
@@ -14734,7 +15512,7 @@
   .block-editor__visual :global(.freitext__criterion),
   .preview-body :global(.freitext__criterion) {
     display: grid;
-    grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr);
+    grid-template-columns: minmax(60px, 0.17fr) minmax(0, 0.48fr) minmax(0, 0.35fr);
     gap: 5px;
     align-items: start;
     padding: 2px 5px;
@@ -14757,7 +15535,9 @@
   }
 
   .block-editor__visual :global(.freitext__criterion-description),
-  .preview-body :global(.freitext__criterion-description) {
+  .block-editor__visual :global(.freitext__criterion-example),
+  .preview-body :global(.freitext__criterion-description),
+  .preview-body :global(.freitext__criterion-example) {
     min-width: 0;
     color: #5e554a;
     font-size: 12px;
@@ -14765,26 +15545,25 @@
     overflow-wrap: anywhere;
   }
 
+  .block-editor__visual :global(.freitext__criterion-example),
+  .preview-body :global(.freitext__criterion-example) {
+    color: #475569;
+  }
+
   .block-editor__visual :global(.freitext__premises-wrap),
-  .block-editor__visual :global(.freitext__references-wrap),
-  .preview-body :global(.freitext__premises-wrap),
-  .preview-body :global(.freitext__references-wrap) {
+  .preview-body :global(.freitext__premises-wrap) {
     display: grid;
     gap: 2px;
   }
 
   .block-editor__visual :global(.freitext__premises),
-  .block-editor__visual :global(.freitext__references),
-  .preview-body :global(.freitext__premises),
-  .preview-body :global(.freitext__references) {
+  .preview-body :global(.freitext__premises) {
     display: grid;
     gap: 0;
   }
 
   .block-editor__visual :global(.freitext__premise),
-  .block-editor__visual :global(.freitext__reference),
-  .preview-body :global(.freitext__premise),
-  .preview-body :global(.freitext__reference) {
+  .preview-body :global(.freitext__premise) {
     display: grid;
     grid-template-columns: minmax(160px, 0.42fr) minmax(180px, 0.58fr);
     gap: 5px;
@@ -14796,50 +15575,16 @@
   }
 
   .block-editor__visual :global(.freitext__premise + .freitext__premise),
-  .block-editor__visual :global(.freitext__reference + .freitext__reference),
-  .preview-body :global(.freitext__premise + .freitext__premise),
-  .preview-body :global(.freitext__reference + .freitext__reference) {
+  .preview-body :global(.freitext__premise + .freitext__premise) {
     border-top: 0;
   }
 
   .block-editor__visual :global(.freitext__premise-label),
-  .block-editor__visual :global(.freitext__reference-label),
-  .preview-body :global(.freitext__premise-label),
-  .preview-body :global(.freitext__reference-label) {
+  .preview-body :global(.freitext__premise-label) {
     min-width: 0;
     font-weight: 700;
     color: #111827;
     overflow-wrap: anywhere;
-  }
-
-  .block-editor__visual :global(.freitext__reference-body),
-  .preview-body :global(.freitext__reference-body) {
-    display: grid;
-    gap: 3px;
-    min-width: 0;
-    color: #5e554a;
-    font-size: 12px;
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-  }
-
-  .block-editor__visual :global(.freitext__reference-status),
-  .preview-body :global(.freitext__reference-status) {
-    font-weight: 700;
-    color: #8a5a17;
-  }
-
-  .block-editor__visual :global(.freitext__reference--ready .freitext__reference-status),
-  .preview-body :global(.freitext__reference--ready .freitext__reference-status) {
-    color: #166534;
-  }
-
-  .block-editor__visual :global(.freitext__lock-message),
-  .preview-body :global(.freitext__lock-message) {
-    margin: -2px 0 0;
-    color: #8a5a17;
-    font-size: 12px;
-    font-weight: 700;
   }
 
   .block-editor__visual :global(.freitext__premise-hint),
@@ -15005,6 +15750,173 @@
     margin-left: 0;
   }
 
+  .block-editor__visual :global(.freitext .feedback),
+  .preview-body :global(.freitext .feedback) {
+    display: none;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    box-shadow: 0 9px 20px rgba(15, 23, 42, 0.1);
+    color: #4d463d;
+    font-size: 12px;
+    line-height: 1.35;
+    white-space: pre-wrap;
+  }
+
+  .block-editor__visual :global(.freitext .feedback--visible),
+  .preview-body :global(.freitext .feedback--visible) {
+    display: block;
+  }
+
+  .block-editor__visual :global(.freitext .feedback--richtig),
+  .preview-body :global(.freitext .feedback--richtig) {
+    border-color: #1c8f4a;
+    background: #e4f5e7;
+    color: #1c8f4a;
+  }
+
+  .block-editor__visual :global(.freitext .feedback--teilweise),
+  .preview-body :global(.freitext .feedback--teilweise) {
+    border-color: #d98a1a;
+    background: #fff4de;
+    color: #d98a1a;
+  }
+
+  .block-editor__visual :global(.freitext .feedback--falsch),
+  .preview-body :global(.freitext .feedback--falsch) {
+    border-color: #c33b3b;
+    background: #fde7e7;
+    color: #c33b3b;
+  }
+
+  .block-editor__visual :global(.freitext .feedback.feedback--structured),
+  .preview-body :global(.freitext .feedback.feedback--structured) {
+    max-width: 31rem;
+    padding: 9px;
+    white-space: normal;
+  }
+
+  .block-editor__visual :global(.freitext-feedback),
+  .preview-body :global(.freitext-feedback) {
+    display: grid;
+    gap: 8px;
+    color: #334155;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__prompt),
+  .block-editor__visual :global(.freitext-feedback__summary),
+  .block-editor__visual :global(.freitext-feedback__group),
+  .preview-body :global(.freitext-feedback__prompt),
+  .preview-body :global(.freitext-feedback__summary),
+  .preview-body :global(.freitext-feedback__group) {
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: rgba(255, 255, 255, 0.92);
+  }
+
+  .block-editor__visual :global(.freitext-feedback__prompt),
+  .preview-body :global(.freitext-feedback__prompt) {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__summary),
+  .preview-body :global(.freitext-feedback__summary) {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__heading),
+  .block-editor__visual :global(.freitext-feedback__group-title),
+  .preview-body :global(.freitext-feedback__heading),
+  .preview-body :global(.freitext-feedback__group-title) {
+    margin: 0 0 4px;
+    color: #475569;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__prompt .freitext-feedback__heading),
+  .preview-body :global(.freitext-feedback__prompt .freitext-feedback__heading) {
+    color: #1d4ed8;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__body),
+  .preview-body :global(.freitext-feedback__body) {
+    color: #1f2937;
+    overflow-wrap: anywhere;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__groups),
+  .preview-body :global(.freitext-feedback__groups) {
+    display: grid;
+    gap: 6px;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__group--fulfilled),
+  .preview-body :global(.freitext-feedback__group--fulfilled) {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__group--partial),
+  .preview-body :global(.freitext-feedback__group--partial) {
+    border-color: #fde68a;
+    background: #fffbeb;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__group--wrong),
+  .preview-body :global(.freitext-feedback__group--wrong) {
+    border-color: #fecaca;
+    background: #fff1f2;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__group--missing),
+  .preview-body :global(.freitext-feedback__group--missing) {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+  }
+
+  .block-editor__visual
+    :global(.freitext-feedback__group--fulfilled .freitext-feedback__group-title),
+  .preview-body :global(.freitext-feedback__group--fulfilled .freitext-feedback__group-title) {
+    color: #15803d;
+  }
+
+  .block-editor__visual
+    :global(.freitext-feedback__group--partial .freitext-feedback__group-title),
+  .preview-body :global(.freitext-feedback__group--partial .freitext-feedback__group-title) {
+    color: #b45309;
+  }
+
+  .block-editor__visual
+    :global(.freitext-feedback__group--wrong .freitext-feedback__group-title),
+  .preview-body :global(.freitext-feedback__group--wrong .freitext-feedback__group-title) {
+    color: #b91c1c;
+  }
+
+  .block-editor__visual
+    :global(.freitext-feedback__group--missing .freitext-feedback__group-title),
+  .preview-body :global(.freitext-feedback__group--missing .freitext-feedback__group-title) {
+    color: #475569;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__list),
+  .preview-body :global(.freitext-feedback__list) {
+    margin: 0;
+    padding-left: 16px;
+    color: #1f2937;
+  }
+
+  .block-editor__visual :global(.freitext-feedback__list li + li),
+  .preview-body :global(.freitext-feedback__list li + li) {
+    margin-top: 3px;
+  }
+
   .block-editor__visual :global(.freitext__action-hint),
   .preview-body :global(.freitext__action-hint) {
     display: none;
@@ -15061,14 +15973,63 @@
     justify-content: space-between;
   }
 
-  .freitext-block-editor--active .freitext-checklist-editor__count,
-  .freitext-block-editor--active .freitext-checklist-editor--references {
+  .freitext-block-editor--active .freitext-checklist-editor__count {
     display: none;
+  }
+
+  .freitext-length-editor {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(120px, 180px)) minmax(0, 1fr);
+    gap: 8px;
+    align-items: end;
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid #d9dee7;
+    background: #fff;
+  }
+
+  .freitext-length-editor label {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .freitext-length-editor label span,
+  .freitext-length-editor__meta {
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #64748b;
+  }
+
+  .freitext-length-editor input {
+    width: 100%;
+    min-width: 0;
+    min-height: 28px;
+    border: 1px solid #d9dee7;
+    border-radius: 3px;
+    padding: 3px 6px;
+    background: #fff;
+    color: #0f172a;
+    font: inherit;
+    line-height: 1.2;
+  }
+
+  .freitext-length-editor__meta {
+    align-self: center;
+    justify-self: start;
   }
 
   .freitext-checklist-editor__add {
     width: 22px;
     height: 22px;
+    box-sizing: border-box;
+    flex: 0 0 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
     border-radius: 4px;
     font-size: 15px;
     line-height: 1;
@@ -15117,7 +16078,11 @@
   }
 
   .freitext-checklist-editor__fields--criteria {
-    grid-template-columns: minmax(96px, 0.26fr) minmax(0, 0.37fr) minmax(0, 0.37fr);
+    grid-template-columns: minmax(48px, 0.13fr) minmax(0, 0.29fr) minmax(0, 0.29fr) minmax(0, 0.29fr);
+  }
+
+  .freitext-checklist-editor__field-headings--criteria {
+    grid-template-columns: minmax(48px, 0.13fr) minmax(0, 0.29fr) minmax(0, 0.29fr) minmax(0, 0.29fr) 24px;
   }
 
   .freitext-checklist-editor__field-headings--premises {
@@ -15126,14 +16091,6 @@
 
   .freitext-checklist-editor__fields--premises {
     grid-template-columns: minmax(96px, 0.26fr) minmax(120px, 0.32fr) minmax(0, 0.42fr);
-  }
-
-  .freitext-checklist-editor__field-headings--references {
-    grid-template-columns: minmax(96px, 0.22fr) minmax(90px, 0.22fr) minmax(0, 0.36fr) minmax(104px, 0.2fr) 24px;
-  }
-
-  .freitext-checklist-editor__fields--references {
-    grid-template-columns: minmax(96px, 0.22fr) minmax(90px, 0.22fr) minmax(0, 0.36fr) minmax(104px, 0.2fr);
   }
 
   .freitext-checklist-editor label {
@@ -15183,19 +16140,8 @@
 
   .freitext-checklist-editor textarea {
     min-height: 28px;
-    resize: vertical;
-  }
-
-  .freitext-checklist-editor select {
-    width: 100%;
-    min-height: 28px;
-    border: 1px solid #d9dee7;
-    border-radius: 3px;
-    padding: 3px 6px;
-    background: #fff;
-    color: #0f172a;
-    font: inherit;
-    line-height: 1.2;
+    overflow: hidden;
+    resize: none;
   }
 
   .freitext-checklist-editor input[type='text'] {
@@ -15241,6 +16187,7 @@
     .preview-body :global(.freitext__criterion),
     .block-editor__visual :global(.freitext__premise),
     .preview-body :global(.freitext__premise),
+    .freitext-length-editor,
     .freitext-checklist-editor__fields,
     .freitext-checklist-editor__fields--premises {
       grid-template-columns: 1fr;
@@ -15389,6 +16336,10 @@
     letter-spacing: 0px;
   }
 
+  .tool-icon--textdokument {
+    font-weight: 600;
+  }
+
   .tool-select {
     padding: 3px 9px;
     border-radius: 999px;
@@ -15491,7 +16442,6 @@
   }
 
   .block-editor--inactive.block-editor--freitext .freitext-block-editor__answer-preview,
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor--references,
   .block-editor--inactive.block-editor--freitext .freitext-checklist-editor--empty {
     display: none;
   }
@@ -15528,22 +16478,13 @@
 
   .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields,
   .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--criteria,
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--premises,
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--references {
+  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--premises {
     grid-template-columns: minmax(100px, 0.34fr) minmax(0, 1fr);
     gap: 4px;
   }
 
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--criteria label:nth-child(3),
+  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--criteria label:nth-child(n+3),
   .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--premises label:nth-child(3) {
-    display: none;
-  }
-
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--references {
-    grid-template-columns: minmax(100px, 0.3fr) minmax(88px, 0.25fr) minmax(0, 0.45fr);
-  }
-
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__fields--references .freitext-checklist-editor__threshold {
     display: none;
   }
 
@@ -15552,8 +16493,7 @@
   }
 
   .block-editor--inactive.block-editor--freitext .freitext-checklist-editor textarea,
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor input[type='text'],
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor select {
+  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor input[type='text'] {
     min-height: 0;
     max-height: 2.4rem;
     padding: 0;
@@ -15564,10 +16504,6 @@
     overflow: hidden;
     pointer-events: none;
     resize: none;
-  }
-
-  .block-editor--inactive.block-editor--freitext .freitext-checklist-editor select {
-    appearance: none;
   }
 
   .block-editor--inactive.block-editor--freitext .freitext-checklist-editor__source-meta {
@@ -15616,7 +16552,12 @@
     padding: 1px 7px;
   }
 
-  :global(.block-editor__visual luecke-gap) {
+  .block-editor--inactive :global(.block-editor__visual textdokument-feld) {
+    padding: 2px 8px;
+  }
+
+  :global(.block-editor__visual luecke-gap),
+  :global(.block-editor__visual textdokument-feld) {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -15627,27 +16568,92 @@
     color: #0f172a;
     cursor: pointer;
     font-weight: 600;
+    -webkit-user-select: none;
     user-select: none;
     white-space: nowrap;
   }
 
-  :global(.block-editor__visual luecke-gap:hover) {
+  :global(.block-editor__visual luecke-gap) {
+    font-size: 0;
+  }
+
+  :global(.block-editor__visual luecke-gap:hover),
+  :global(.block-editor__visual textdokument-feld:hover) {
     border-color: rgba(236, 90, 143, 0.8);
     background: rgba(236, 90, 143, 0.08);
   }
 
-  :global(.block-editor__visual luecke-gap)::before {
-    content: none;
+  :global(.block-editor__visual luecke-gap[data-editor-selected='true']),
+  :global(.block-editor__visual textdokument-feld[data-editor-selected='true']) {
+    border-style: solid;
+    border-color: #2563eb;
+    background: #dbeafe;
+    color: #1e3a8a;
+    outline: 3px solid #2563eb;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 2px #93c5fd,
+      0 2px 5px rgba(37, 99, 235, 0.2);
   }
 
-  :global(.block-editor__visual luecke-gap:not([name])::before) {
-    content: none;
+  :global(.block-editor__visual textdokument-feld[data-editor-selected='true']::after) {
+    color: #1e3a8a;
   }
 
-  :global(.block-editor__visual luecke-gap:empty)::after {
-    content: 'Lösung';
+  :global(.block-editor__visual luecke-gap::selection),
+  :global(.block-editor__visual luecke-gap *::selection),
+  :global(.block-editor__visual textdokument-feld::selection),
+  :global(.block-editor__visual textdokument-feld *::selection) {
+    color: inherit;
+    background: transparent;
+  }
+
+  :global(.block-editor__visual luecke-gap)::after {
+    content: attr(name);
+    max-width: 18ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: #64748b;
-    font-weight: 500;
+    font-size: 0.92rem;
+    font-weight: 700;
+    line-height: 1.35;
+  }
+
+  :global(.block-editor__visual luecke-gap:not([name]))::after,
+  :global(.block-editor__visual luecke-gap[name=''])::after {
+    content: 'Lücke';
+  }
+
+  :global(.block-editor__visual textdokument-feld)::before {
+    content: '';
+    display: inline-block;
+    width: 15px;
+    height: 18px;
+    box-sizing: border-box;
+    border: 1.8px solid currentColor;
+    border-radius: 3px;
+    background:
+      linear-gradient(currentColor, currentColor) 3px 6px / 7px 1.6px no-repeat,
+      linear-gradient(currentColor, currentColor) 3px 10px / 7px 1.6px no-repeat;
+  }
+
+  :global(.block-editor__visual textdokument-feld)::after {
+    content: attr(label);
+    max-width: 16ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #475569;
+    font-weight: 700;
+  }
+
+  :global(.block-editor__visual textdokument-feld:not([label])::after),
+  :global(.block-editor__visual textdokument-feld[label='']::after) {
+    content: 'Textfeld';
+  }
+
+  :global(.block-editor__visual textdokument-feld[label='Textdokument']::after),
+  :global(.block-editor__visual textdokument-feld[label='textdokument']::after) {
+    content: 'Textfeld';
   }
 
   :global(.block-editor__visual luecke-gap[width='15ch']),

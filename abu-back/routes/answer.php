@@ -16,6 +16,11 @@ if ($method === 'POST') {
     }
     $saveOnly = !empty($data['save_only']) || !empty($data['saveOnly']);
     $chatgpt = $saveOnly ? [] : bewerteAntwortMitKI($data);
+    $chatgptLog = [];
+    if (!$saveOnly && isset($chatgpt['_log']) && is_array($chatgpt['_log'])) {
+        $chatgptLog = $chatgpt['_log'];
+        unset($chatgpt['_log']);
+    }
     $submittedUser = trim((string)($data['user'] ?? ''));
     $isPreviewMode = is_preview_answer_request($data, $submittedUser);
     $isAnonymousRuntimeUser = strpos($submittedUser, 'anon_') === 0;
@@ -44,8 +49,8 @@ if ($method === 'POST') {
         unset($data['classroom']);
     }
 
-    // Speichere die KI-Klassifizierung direkt mit der Antwort. Save-only wird für
-    // Freitext-Referenz-Snapshots genutzt und darf keine bestehende Bewertung verlieren.
+    // Speichere die KI-Klassifizierung direkt mit der Antwort. Save-only darf
+    // keine bestehende Bewertung verlieren.
     if (answer_table_has_column('classification')) {
         if (!$saveOnly && isset($chatgpt['classification'])) {
             $data['classification'] = $chatgpt['classification']; // numeric 0/500/1000
@@ -73,6 +78,7 @@ if ($method === 'POST') {
 
     if (!$saveOnly) {
         enrich_answer_value_with_source_context($data, $chatgpt);
+        enrich_textdokument_answer_value_with_feedback($data, $chatgpt);
     }
 
     // Timestamps setzen
@@ -99,12 +105,27 @@ if ($method === 'POST') {
 
     // Logging der Anfrage und KI-Antwort
     include_once 'model/log.php';
+    $requestPlaintext = trim((string)($chatgptLog['request_plaintext'] ?? ''));
+    if ($requestPlaintext === '') {
+        $requestPlaintext = answer_payload_plaintext($data, 'Backend-Payload');
+    }
+    $requestWithPromptKeysPlaintext = trim((string)($chatgptLog['request_with_prompt_keys_plaintext'] ?? ''));
+    if ($requestWithPromptKeysPlaintext === '') {
+        $requestWithPromptKeysPlaintext = $requestPlaintext;
+    }
+    $responsePlaintext = trim((string)($chatgptLog['response_plaintext'] ?? ''));
+    if ($responsePlaintext === '') {
+        $responsePlaintext = answer_result_plaintext($return['data']['chatgpt'] ?? []);
+    }
     $logEntry = [
-        'request' => json_encode($data, JSON_UNESCAPED_UNICODE),
-        'chatgpt' => json_encode($return['data']['chatgpt'] ?? [], JSON_UNESCAPED_UNICODE),
+        'request' => $requestPlaintext,
+        'chatgpt' => $responsePlaintext,
         'created_at' => $now,
         'updated_at' => $now,
     ];
+    if (answer_has_table_column('log', 'request_with_prompt_keys')) {
+        $logEntry['request_with_prompt_keys'] = $requestWithPromptKeysPlaintext;
+    }
     sql_create('log', $logEntry);
 
     return;
@@ -211,13 +232,12 @@ function bewerteAntwortMitKI($payload)
         return ['error' => 'Kein OpenAI API-Key im Backend gesetzt.'];
     }
 
+    $payload = enrich_answer_payload_with_context_prompts($payload);
+
     $sourceContext = build_gap_source_context($payload);
     if (!empty($sourceContext)) {
         $payload['_source_context'] = $sourceContext;
         $payload['_source_context_text'] = source_context_text($sourceContext);
-    }
-    if (strtolower(trim((string)($payload['exercise_type'] ?? ''))) === 'freitext') {
-        $payload = enrich_freitext_payload_with_context_prompts($payload);
     }
 
     $messages = build_answer_feedback_messages($payload);
@@ -233,6 +253,9 @@ function bewerteAntwortMitKI($payload)
     $decoded = null;
     $result = '';
     $finalError = 'Fehler bei der OpenAI-API.';
+    $lastRequestPlaintext = '';
+    $lastRequestWithPromptKeysPlaintext = '';
+    $lastResponsePlaintext = '';
 
     foreach ($modelCandidates as $index => $modelName) {
         $requestBody = [
@@ -246,14 +269,20 @@ function bewerteAntwortMitKI($payload)
             continue;
         }
 
-        answer_ai_console_log('OpenAI Anfrage', [
+        $requestPlaintext = answer_openai_request_plaintext($requestBody, [
             'attempt' => $index + 1,
             'sheet' => (string)($payload['sheet'] ?? ''),
             'key' => (string)($payload['key'] ?? ''),
             'exercise_type' => (string)($payload['exercise_type'] ?? 'luecke'),
-            'request' => $requestBody,
-            'prompt_sources' => $promptSources,
         ]);
+        $requestWithPromptKeysPlaintext = answer_openai_request_with_prompt_keys_plaintext(
+            $requestPlaintext,
+            $promptSources
+        );
+        $lastRequestPlaintext = $requestPlaintext;
+        $lastRequestWithPromptKeysPlaintext = $requestWithPromptKeysPlaintext;
+        answer_ai_console_log_text('OpenAI Anfrage Plaintext', $requestPlaintext);
+        answer_ai_console_log_text('OpenAI Anfrage + Prompt-Keys Plaintext', $requestWithPromptKeysPlaintext);
 
         $ch = curl_init('https://api.openai.com/v1/chat/completions');
         curl_setopt_array($ch, [
@@ -273,7 +302,16 @@ function bewerteAntwortMitKI($payload)
         $tryCurlError = curl_error($ch);
         curl_close($ch);
 
-        answer_ai_console_log('OpenAI Antwort', [
+        $lastResponsePlaintext = answer_openai_response_plaintext(
+            $tryResult,
+            $tryStatus,
+            (string)$modelName,
+            $tryCurlErrno,
+            $tryCurlError
+        );
+        answer_ai_console_log_text('OpenAI Antwort Plaintext', $lastResponsePlaintext);
+
+        answer_ai_console_log('OpenAI Antwort Meta', [
             'attempt' => $index + 1,
             'sheet' => (string)($payload['sheet'] ?? ''),
             'key' => (string)($payload['key'] ?? ''),
@@ -282,7 +320,6 @@ function bewerteAntwortMitKI($payload)
             'http_status' => $tryStatus,
             'curl_errno' => $tryCurlErrno,
             'curl_error' => $tryCurlError,
-            'response' => answer_ai_decode_json_for_log($tryResult),
         ]);
 
         $hasMoreCandidates = $index < count($modelCandidates) - 1;
@@ -298,7 +335,12 @@ function bewerteAntwortMitKI($payload)
             if ($shouldRetry) {
                 continue;
             }
-            return ['error' => $finalError];
+            return answer_ai_result_with_log(
+                ['error' => $finalError],
+                $lastRequestPlaintext,
+                $lastRequestWithPromptKeysPlaintext,
+                $lastResponsePlaintext
+            );
         }
 
         if ($tryStatus < 200 || $tryStatus >= 300) {
@@ -310,7 +352,12 @@ function bewerteAntwortMitKI($payload)
             if ($shouldRetry) {
                 continue;
             }
-            return ['error' => $finalError];
+            return answer_ai_result_with_log(
+                ['error' => $finalError],
+                $lastRequestPlaintext,
+                $lastRequestWithPromptKeysPlaintext,
+                $lastResponsePlaintext
+            );
         }
 
         $decodedCandidate = json_decode($tryResult, true);
@@ -319,7 +366,12 @@ function bewerteAntwortMitKI($payload)
             if ($hasMoreCandidates) {
                 continue;
             }
-            return ['error' => $finalError];
+            return answer_ai_result_with_log(
+                ['error' => $finalError],
+                $lastRequestPlaintext,
+                $lastRequestWithPromptKeysPlaintext,
+                $lastResponsePlaintext
+            );
         }
 
         if (!isset($decodedCandidate['choices'][0]['message']['content'])) {
@@ -335,7 +387,12 @@ function bewerteAntwortMitKI($payload)
             if ($hasMoreCandidates) {
                 continue;
             }
-            return ['error' => $finalError];
+            return answer_ai_result_with_log(
+                ['error' => $finalError],
+                $lastRequestPlaintext,
+                $lastRequestWithPromptKeysPlaintext,
+                $lastResponsePlaintext
+            );
         }
 
         $decoded = $decodedCandidate;
@@ -345,7 +402,12 @@ function bewerteAntwortMitKI($payload)
     }
 
     if (!is_array($decoded)) {
-        return ['error' => $finalError];
+        return answer_ai_result_with_log(
+            ['error' => $finalError],
+            $lastRequestPlaintext,
+            $lastRequestWithPromptKeysPlaintext,
+            $lastResponsePlaintext
+        );
     }
 
     $inhalt = $decoded['choices'][0]['message']['content'] ?? '';
@@ -394,13 +456,14 @@ function bewerteAntwortMitKI($payload)
         $result['source_context'] = $sourceContext;
         $result = apply_property_portal_feedback($result, $sourceContext);
     }
-    answer_ai_console_log('KI Bewertung', [
-        'sheet' => (string)($payload['sheet'] ?? ''),
-        'key' => (string)($payload['key'] ?? ''),
-        'exercise_type' => (string)($payload['exercise_type'] ?? 'luecke'),
-        'result' => $result,
-    ]);
-    return $result;
+    $resultPlaintext = answer_result_plaintext($result, $lastResponsePlaintext);
+    answer_ai_console_log_text('KI Bewertung Plaintext', $resultPlaintext);
+    return answer_ai_result_with_log(
+        $result,
+        $lastRequestPlaintext,
+        $lastRequestWithPromptKeysPlaintext,
+        $resultPlaintext
+    );
 }
 
 function answer_ai_console_log($label, $payload)
@@ -426,6 +489,284 @@ function answer_ai_decode_json_for_log($raw)
     }
 
     return $raw;
+}
+
+function answer_ai_console_log_text($label, $text)
+{
+    $clean = trim(str_replace(["\r\n", "\r"], "\n", (string)$text));
+    if ($clean === '') {
+        $clean = '[leer]';
+    }
+    error_log('[ABU KI] ' . $label . ":\n" . $clean);
+}
+
+function answer_ai_result_with_log($result, $requestPlaintext, $requestWithPromptKeysPlaintext, $responsePlaintext)
+{
+    if (!is_array($result)) {
+        $result = ['raw' => (string)$result];
+    }
+    $result['_log'] = [
+        'request_plaintext' => trim((string)$requestPlaintext),
+        'request_with_prompt_keys_plaintext' => trim((string)$requestWithPromptKeysPlaintext),
+        'response_plaintext' => trim((string)$responsePlaintext),
+    ];
+    if ($result['_log']['response_plaintext'] === '') {
+        $result['_log']['response_plaintext'] = answer_result_plaintext($result);
+    }
+    return $result;
+}
+
+function answer_openai_request_plaintext($requestBody, $meta = [])
+{
+    $lines = ['KI-Anfrage an OpenAI'];
+    $metaLines = [];
+    $knownMeta = [
+        'attempt' => 'Versuch',
+        'sheet' => 'Sheet',
+        'key' => 'Answer-Key',
+        'exercise_type' => 'Aufgabentyp',
+    ];
+    foreach ($knownMeta as $field => $label) {
+        $value = trim((string)($meta[$field] ?? ''));
+        if ($value !== '') {
+            $metaLines[] = $label . ': ' . $value;
+        }
+    }
+    if (isset($requestBody['model'])) {
+        $metaLines[] = 'Modell: ' . (string)$requestBody['model'];
+    }
+    if (array_key_exists('temperature', $requestBody)) {
+        $metaLines[] = 'Temperature: ' . answer_log_scalar($requestBody['temperature']);
+    }
+    if (!empty($metaLines)) {
+        $lines[] = '';
+        $lines = array_merge($lines, $metaLines);
+    }
+
+    $messages = is_array($requestBody['messages'] ?? null) ? $requestBody['messages'] : [];
+    foreach ($messages as $index => $message) {
+        $role = is_array($message) ? (string)($message['role'] ?? '') : '';
+        $content = is_array($message) ? ($message['content'] ?? '') : $message;
+        $lines[] = '';
+        $lines[] = '--- Nachricht ' . ($index + 1) . ($role !== '' ? ' / ' . $role : '') . ' ---';
+        $lines[] = answer_log_text_value($content);
+    }
+
+    if (empty($messages)) {
+        $lines[] = '';
+        $lines[] = '[Keine messages im Request gefunden.]';
+    }
+
+    return trim(implode("\n", $lines));
+}
+
+function answer_openai_request_with_prompt_keys_plaintext($requestPlaintext, $promptSources)
+{
+    $partsText = answer_prompt_sources_keys_plaintext($promptSources);
+    return trim((string)$requestPlaintext) . "\n\n=== Prompt-Quellen und Keys ===\n" . $partsText;
+}
+
+function answer_prompt_sources_keys_plaintext($promptSources)
+{
+    if (!is_array($promptSources)) {
+        return 'Keine Prompt-Quellen verfügbar.';
+    }
+
+    $lines = [];
+    $messageSources = is_array($promptSources['message_sources'] ?? null)
+        ? $promptSources['message_sources']
+        : [];
+    if (!empty($messageSources)) {
+        $lines[] = 'Gesendete Nachrichten:';
+        foreach ($messageSources as $messageSource) {
+            if (!is_array($messageSource)) continue;
+            $index = answer_log_scalar($messageSource['message_index'] ?? '');
+            $role = trim((string)($messageSource['role'] ?? ''));
+            $source = trim((string)($messageSource['source'] ?? ''));
+            $lines[] = '- message[' . $index . ']' . ($role !== '' ? ' role=' . $role : '') .
+                ($source !== '' ? ' | ' . $source : '');
+        }
+        $lines[] = '';
+    }
+
+    $parts = is_array($promptSources['parts'] ?? null) ? $promptSources['parts'] : [];
+    if (empty($parts)) {
+        $lines[] = 'Keine einzelnen Prompt-Parts verfügbar.';
+        return trim(implode("\n", $lines));
+    }
+
+    $lines[] = 'Prompt-Parts:';
+    foreach ($parts as $index => $part) {
+        if (!is_array($part)) continue;
+        $id = trim((string)($part['id'] ?? ('part_' . ($index + 1))));
+        $label = trim((string)($part['label'] ?? 'Ohne Label'));
+        $source = trim((string)($part['source'] ?? ''));
+        $element = trim((string)($part['element'] ?? ''));
+        $sourceType = trim((string)($part['source_type'] ?? ''));
+        $note = trim((string)($part['note'] ?? ''));
+        $keys = answer_prompt_payload_field_text($part['payload_field'] ?? null);
+        $state = !empty($part['empty']) ? 'leer/Fallback' : 'gefüllt';
+
+        $lines[] = ($index + 1) . '. ' . $id . ' - ' . $label;
+        $lines[] = '   Keys: ' . $keys;
+        $lines[] = '   Status: ' . $state . ($sourceType !== '' ? ' | Typ: ' . $sourceType : '');
+        if ($source !== '') {
+            $lines[] = '   Quelle: ' . $source;
+        }
+        if ($element !== '') {
+            $lines[] = '   Element/DB-Feld: ' . $element;
+        }
+        if ($note !== '') {
+            $lines[] = '   Hinweis: ' . $note;
+        }
+    }
+
+    return trim(implode("\n", $lines));
+}
+
+function answer_prompt_payload_field_text($field)
+{
+    if (is_array($field)) {
+        $items = [];
+        foreach ($field as $entry) {
+            $value = trim((string)$entry);
+            if ($value !== '') $items[] = $value;
+        }
+        return !empty($items) ? implode(', ', $items) : '(kein Payload-Key)';
+    }
+    $value = trim((string)$field);
+    return $value !== '' ? $value : '(kein Payload-Key)';
+}
+
+function answer_openai_response_plaintext($raw, $httpStatus = null, $model = '', $curlErrno = 0, $curlError = '')
+{
+    $lines = ['KI-Antwort von OpenAI'];
+    if ($model !== '') {
+        $lines[] = 'Modell: ' . $model;
+    }
+    if ($httpStatus !== null) {
+        $lines[] = 'HTTP-Status: ' . answer_log_scalar($httpStatus);
+    }
+    if (intval($curlErrno) !== 0 || trim((string)$curlError) !== '') {
+        $lines[] = 'cURL: #' . intval($curlErrno) . ' ' . trim((string)$curlError);
+    }
+
+    if ($raw === false) {
+        $lines[] = '';
+        $lines[] = '[Keine Antwort erhalten.]';
+        return trim(implode("\n", $lines));
+    }
+
+    $rawText = (string)$raw;
+    $decoded = json_decode($rawText, true);
+    $assistantText = '';
+    if (is_array($decoded)) {
+        $assistantText = trim((string)($decoded['choices'][0]['message']['content'] ?? ''));
+        $errorMessage = trim((string)($decoded['error']['message'] ?? ''));
+        if ($assistantText !== '') {
+            $lines[] = '';
+            $lines[] = '--- Antworttext ---';
+            $lines[] = $assistantText;
+            return trim(implode("\n", $lines));
+        }
+        if ($errorMessage !== '') {
+            $lines[] = '';
+            $lines[] = '--- Fehler ---';
+            $lines[] = $errorMessage;
+            return trim(implode("\n", $lines));
+        }
+    }
+
+    $lines[] = '';
+    $lines[] = '--- Rohantwort ---';
+    $lines[] = $rawText !== '' ? $rawText : '[leer]';
+    return trim(implode("\n", $lines));
+}
+
+function answer_result_plaintext($result, $rawResponsePlaintext = '')
+{
+    if (!is_array($result)) {
+        return answer_log_text_value($result);
+    }
+
+    $lines = ['KI-Antwort ausgewertet'];
+    if (isset($result['model'])) {
+        $lines[] = 'Modell: ' . answer_log_scalar($result['model']);
+    }
+    if (array_key_exists('classification_label', $result) || array_key_exists('classification', $result)) {
+        $label = trim((string)($result['classification_label'] ?? ''));
+        $score = array_key_exists('classification', $result) ? answer_log_scalar($result['classification']) : '';
+        $lines[] = 'Klassifizierung: ' . ($label !== '' ? $label : '[leer]') .
+            ($score !== '' ? ' (' . $score . ')' : '');
+    }
+    if (!empty($result['error'])) {
+        $lines[] = '';
+        $lines[] = '--- Fehler ---';
+        $lines[] = (string)$result['error'];
+    }
+    $answerText = trim((string)($result['raw'] ?? ($result['explanation'] ?? '')));
+    if ($answerText !== '') {
+        $lines[] = '';
+        $lines[] = '--- Antworttext ---';
+        $lines[] = $answerText;
+    }
+    $explanation = trim((string)($result['explanation'] ?? ''));
+    if ($explanation !== '' && $explanation !== $answerText) {
+        $lines[] = '';
+        $lines[] = '--- Erklärung / UI-Text ---';
+        $lines[] = $explanation;
+    }
+    if (!empty($result['source_context']) && is_array($result['source_context'])) {
+        $lines[] = '';
+        $lines[] = '--- Source Context ---';
+        $lines[] = answer_log_text_value($result['source_context']);
+    }
+    if (trim((string)$rawResponsePlaintext) !== '') {
+        $lines[] = '';
+        $lines[] = '--- OpenAI-Rohantwort-Log ---';
+        $lines[] = trim((string)$rawResponsePlaintext);
+    }
+
+    return trim(implode("\n", $lines));
+}
+
+function answer_payload_plaintext($payload, $title = 'Payload')
+{
+    $lines = [(string)$title];
+    if (!is_array($payload)) {
+        $lines[] = answer_log_text_value($payload);
+        return trim(implode("\n", $lines));
+    }
+
+    foreach ($payload as $key => $value) {
+        $lines[] = (string)$key . ': ' . answer_log_text_value($value);
+    }
+    return trim(implode("\n", $lines));
+}
+
+function answer_log_text_value($value)
+{
+    if (is_array($value) || is_object($value)) {
+        $encoded = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+        return is_string($encoded) && $encoded !== '' ? $encoded : '[nicht serialisierbar]';
+    }
+    if ($value === null) {
+        return '';
+    }
+    if (is_bool($value)) {
+        return $value ? 'true' : 'false';
+    }
+    return (string)$value;
+}
+
+function answer_log_scalar($value)
+{
+    if (is_array($value) || is_object($value)) {
+        return answer_log_text_value($value);
+    }
+    if ($value === null) return '';
+    if (is_bool($value)) return $value ? 'true' : 'false';
+    return (string)$value;
 }
 
 function enrich_answer_value_with_source_context(&$data, $chatgpt)
@@ -457,6 +798,47 @@ function enrich_answer_value_with_source_context(&$data, $chatgpt)
         'answer' => $raw,
         'source_context' => $chatgpt['source_context'],
     ], JSON_UNESCAPED_UNICODE);
+    if (is_string($encoded) && $encoded !== '') {
+        $data['value'] = $encoded;
+    }
+}
+
+function enrich_textdokument_answer_value_with_feedback(&$data, $chatgpt)
+{
+    $exerciseType = strtolower(trim((string)($data['exercise_type'] ?? '')));
+    if ($exerciseType !== 'textdokument') {
+        return;
+    }
+
+    $raw = trim((string)($data['value'] ?? ''));
+    $decoded = [];
+    if ($raw !== '') {
+        $parsed = json_decode($raw, true);
+        if (is_array($parsed)) {
+            $decoded = $parsed;
+        }
+    }
+
+    $answer = trim((string)($data['answer_text'] ?? ''));
+    if ($answer === '') {
+        $answer = trim((string)($decoded['answer'] ?? ($decoded['text'] ?? $raw)));
+    }
+
+    $decoded['type'] = 'textdokument';
+    $decoded['version'] = max(2, intval($decoded['version'] ?? 0));
+    $decoded['answer'] = $answer;
+    if (isset($chatgpt['explanation'])) {
+        $decoded['feedback'] = trim((string)$chatgpt['explanation']);
+    }
+    if (array_key_exists('classification', $chatgpt)) {
+        $decoded['classification'] = $chatgpt['classification'];
+    }
+    if (array_key_exists('classification_label', $chatgpt)) {
+        $decoded['classification_label'] = $chatgpt['classification_label'];
+    }
+    $decoded['checked_at'] = date('c');
+
+    $encoded = json_encode($decoded, JSON_UNESCAPED_UNICODE);
     if (is_string($encoded) && $encoded !== '') {
         $data['value'] = $encoded;
     }
@@ -1307,19 +1689,22 @@ function limit_context_text($text, $limit)
 function build_answer_feedback_messages($payload)
 {
     $exerciseType = strtolower(trim((string)($payload['exercise_type'] ?? '')));
+    if ($exerciseType === 'textdokument') {
+        return build_textdokument_feedback_messages($payload);
+    }
     if ($exerciseType === 'freitext') {
         return build_freitext_feedback_messages($payload);
     }
     return build_gap_feedback_messages($payload);
 }
 
-function enrich_freitext_payload_with_context_prompts($payload)
+function enrich_answer_payload_with_context_prompts($payload)
 {
     if (!is_array($payload)) {
         return $payload;
     }
 
-    $contextPrompts = freitext_context_prompts_from_database($payload);
+    $contextPrompts = answer_context_prompts_from_database($payload);
     foreach ($contextPrompts as $field => $value) {
         $clean = trim((string)$value);
         if ($clean === '') continue;
@@ -1327,11 +1712,16 @@ function enrich_freitext_payload_with_context_prompts($payload)
             $payload[$field] = $clean;
         }
     }
-    $payload['_freitext_context_prompts'] = $contextPrompts;
+    $payload['_answer_context_prompts'] = $contextPrompts;
     return $payload;
 }
 
-function freitext_context_prompts_from_database($payload)
+function enrich_freitext_payload_with_context_prompts($payload)
+{
+    return enrich_answer_payload_with_context_prompts($payload);
+}
+
+function answer_context_prompts_from_database($payload)
 {
     $context = [
         'sheet_prompt' => '',
@@ -1343,7 +1733,23 @@ function freitext_context_prompts_from_database($payload)
 
     $sheetKey = trim((string)($payload['sheet'] ?? ''));
     $answerUser = trim((string)($payload['user'] ?? ''));
-    $classroomId = intval($payload['classroom'] ?? 0);
+    $previewLearnerCode = trim((string)(
+        $payload['preview_learner'] ??
+        $payload['previewLearner'] ??
+        ''
+    ));
+    $contextLearnerCode = $previewLearnerCode !== '' ? $previewLearnerCode : $answerUser;
+    $classroomId = intval(
+        $payload['preview_classroom'] ??
+        $payload['previewClassroom'] ??
+        $payload['classroom'] ??
+        0
+    );
+    $schoolId = intval(
+        $payload['preview_school'] ??
+        $payload['previewSchool'] ??
+        0
+    );
     $sheetOwnerId = 0;
 
     if ($sheetKey !== '' && answer_has_table_column('sheet', 'prompt')) {
@@ -1362,8 +1768,13 @@ function freitext_context_prompts_from_database($payload)
         }
     }
 
-    if ($answerUser !== '' && strpos($answerUser, 'anon_') !== 0 && answer_has_table_column('learner', 'prompt')) {
-        $where = '`code` = "' . sql_escape($answerUser) . '"';
+    if (
+        $contextLearnerCode !== '' &&
+        strpos($contextLearnerCode, 'anon_') !== 0 &&
+        strpos($contextLearnerCode, 'preview:') !== 0 &&
+        answer_has_table_column('learner', 'prompt')
+    ) {
+        $where = '`code` = "' . sql_escape($contextLearnerCode) . '"';
         if ($classroomId > 0 && answer_has_table_column('learner', 'classroom')) {
             $where .= ' AND `classroom` = ' . $classroomId;
         }
@@ -1433,7 +1844,32 @@ function freitext_context_prompts_from_database($payload)
         }
     }
 
+    if (
+        $context['school_prompt'] === '' &&
+        $schoolId > 0 &&
+        answer_db_table_exists('school') &&
+        answer_has_table_column('school', 'prompt')
+    ) {
+        $where = '`id` = ' . $schoolId;
+        if ($sheetOwnerId > 0 && answer_has_table_column('school', 'user')) {
+            $where .= ' AND `user` = ' . $sheetOwnerId;
+        }
+        $rows = sql_get(
+            'SELECT `prompt` FROM `school` WHERE ' .
+            $where .
+            ' LIMIT 1;'
+        );
+        if (!empty($rows)) {
+            $context['school_prompt'] = trim((string)($rows[0]['prompt'] ?? ''));
+        }
+    }
+
     return $context;
+}
+
+function freitext_context_prompts_from_database($payload)
+{
+    return answer_context_prompts_from_database($payload);
 }
 
 function freitext_additional_prompt_text($payload)
@@ -1566,6 +2002,8 @@ function build_gap_prompt_source_parts($payload)
     $lueckentext = trim((string)($payload['lueckentext'] ?? ''));
     $musterloesung = trim((string)($payload['musterloesung'] ?? ''));
     $gapPrompt = trim((string)($payload['prompt'] ?? ($payload['gap_prompt'] ?? '')));
+    $additionalPromptText = freitext_additional_prompt_text($payload);
+    $individualSettingsText = freitext_individual_settings_text($payload);
     $sourceContextText = trim((string)($payload['_source_context_text'] ?? ''));
     $targetName = trim((string)($payload['key'] ?? ''));
 
@@ -1630,6 +2068,30 @@ function build_gap_prompt_source_parts($payload)
             $gapPrompt !== '' ? 'payload' : 'backend_fallback'
         ),
         answer_prompt_part(
+            'gap_additional_prompts',
+            'Weitere Prüf-Prompts',
+            1,
+            $additionalPromptText !== ''
+                ? 'Backend: aus sheet.prompt und classroom_sheet.prompt anhand sheet/classroom ergänzt'
+                : 'Backend-Fallback, weil keine weiteren Prüf-Prompts vorhanden sind',
+            'sheet.prompt; classroom_sheet.prompt',
+            ['sheet_prompt', 'assignment_prompt'],
+            $additionalPromptText !== '' ? $additionalPromptText : 'Keine weiteren Prüf-Prompts angegeben.',
+            $additionalPromptText !== '' ? 'backend_enrichment' : 'backend_fallback'
+        ),
+        answer_prompt_part(
+            'gap_individual_settings',
+            'Individuelle Einstellungen',
+            1,
+            $individualSettingsText !== ''
+                ? 'Backend: aus learner/classroom/school anhand sheet/user/classroom/preview-Kontext ergänzt'
+                : 'Backend-Fallback, weil keine individuellen Einstellungen gefunden wurden',
+            'learner.prompt, classroom.prompt, school.prompt',
+            ['learner_prompt', 'classroom_prompt', 'school_prompt'],
+            $individualSettingsText !== '' ? $individualSettingsText : 'Keine individuellen Einstellungen angegeben.',
+            $individualSettingsText !== '' ? 'backend_enrichment' : 'backend_fallback'
+        ),
+        answer_prompt_part(
             'gap_link_context',
             'Gelesener Kontext aus Link/Inserat',
             1,
@@ -1648,7 +2110,7 @@ function build_gap_prompt_source_parts($payload)
             'Backend-Festtext: build_gap_feedback_messages() user',
             null,
             null,
-            'Beurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung und den zusätzlichen Prüfauftrag als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.',
+            'Beurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung, den zusätzlichen Prüfauftrag, weitere Prüf-Prompts und individuelle Einstellungen als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.',
             'backend_template'
         ),
     ];
@@ -1721,6 +2183,18 @@ function build_freitext_prompt_source_parts($payload)
             $title
         ),
         answer_prompt_part(
+            'freitext_additional_question',
+            'Optionaler Prüfhinweis / Zusatzfrage',
+            1,
+            $additionalQuestion !== ''
+                ? 'Frontend: .freitext__question-field'
+                : 'Backend-Fallback, weil keine Zusatzfrage gesendet wurde',
+            'input.freitext__question-field innerhalb von freitext-block',
+            array_key_exists('additional_question', $payload) ? 'additional_question' : 'follow_up_question',
+            $additionalQuestion !== '' ? $additionalQuestion : 'Kein optionaler Prüfhinweis angegeben.',
+            $additionalQuestion !== '' ? 'payload' : 'backend_fallback'
+        ),
+        answer_prompt_part(
             'freitext_task_prompt',
             'Arbeitsauftrag',
             1,
@@ -1781,23 +2255,11 @@ function build_freitext_prompt_source_parts($payload)
             $criteriaText !== '' ? 'payload' : 'backend_fallback'
         ),
         answer_prompt_part(
-            'freitext_additional_question',
-            'Zusatzfrage der lernenden Person',
-            1,
-            $additionalQuestion !== ''
-                ? 'Frontend: .freitext__question-field'
-                : 'Backend-Fallback, weil keine Zusatzfrage gesendet wurde',
-            'input.freitext__question-field innerhalb von freitext-block',
-            array_key_exists('additional_question', $payload) ? 'additional_question' : 'follow_up_question',
-            $additionalQuestion !== '' ? $additionalQuestion : 'Keine Zusatzfrage gestellt.',
-            $additionalQuestion !== '' ? 'payload' : 'backend_fallback'
-        ),
-        answer_prompt_part(
             'freitext_premises',
             'Ausgangslage und ausgefüllte Werte',
             1,
             $premisesText !== '' ? $premisesSource : 'Backend-Fallback, weil keine Prämissen/Werte vorhanden sind',
-            'freitext-prämisse/freitext-praemisse/freitext-premise und freitext-reference; Werte aus .freitext__premise-input sowie verknüpften Antworten',
+            'freitext-prämisse/freitext-praemisse/freitext-premise; Werte aus .freitext__premise-input',
             $premisesField,
             $premisesText !== '' ? $premisesText : 'Keine Ausgangslage oder Werte angegeben.',
             $premisesText !== '' ? 'payload_or_backend_fallback' : 'backend_fallback'
@@ -1841,7 +2303,7 @@ function build_freitext_prompt_source_parts($payload)
             'Backend-Festtext: build_freitext_feedback_messages() user',
             null,
             null,
-            'Gib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand.',
+            'Gib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand: falls ein optionaler Prüfhinweis vorhanden ist zuerst die Antwort darauf, danach eine klar getrennte Bewertung mit Listenpunkten unter Erfüllt, Teilweise, Fehlerhaft und Fehlt.',
             'backend_template'
         ),
     ];
@@ -1853,6 +2315,8 @@ function build_gap_feedback_messages($payload)
     $lueckentext = trim((string)($payload['lueckentext'] ?? ''));
     $musterloesung = trim((string)($payload['musterloesung'] ?? ''));
     $gapPrompt = trim((string)($payload['prompt'] ?? ($payload['gap_prompt'] ?? '')));
+    $additionalPromptText = freitext_additional_prompt_text($payload);
+    $individualSettingsText = freitext_individual_settings_text($payload);
     $sourceContextText = trim((string)($payload['_source_context_text'] ?? ''));
     $targetName = trim((string)($payload['key'] ?? ''));
 
@@ -1860,7 +2324,7 @@ function build_gap_feedback_messages($payload)
         [
             'role' => 'system',
             'content' =>
-                'Du bist eine Lehrperson für Politik und Geschichte. Du bewertest kurze Antworten von Lernenden zu einem Lückentext sachlich korrekt, freundlich und knapp auf Deutsch. Du kennst eine Lehrerlösung, verwendest sie als zentrale fachliche Referenz, verrätst sie aber nie wörtlich. Antworten, die inhaltlich sehr nahe an der Lehrerlösung sind, sollen klar als richtig bewertet werden. Entscheidend ist gleichzeitig, ob die Antwort im Kontext des Lückentextes inhaltlich korrekt ist – auch andere richtige Lösungen, Umschreibungen oder Synonyme können als richtig gelten. Bewerte bewusst tolerant: Ignoriere kleine sprachliche Unterschiede wie Artikel, Präpositionen, Flexionen oder Satzzeichen. Du gibst nur eine grobe Einschätzung (richtig/teilweise richtig/falsch) und kurze Hinweise oder Denkanstösse. Wenn du RICHTIG schreibst, soll die Rückmeldung kurz positiv sein und idealerweise einen ganz kurzen inhaltlichen Hinweis zur Lösung geben. Wenn ein Wohnungsinserat als Quelle mitgegeben wird, extrahiere die wichtigsten Fakten für spätere Freitextaufgaben. Wenn der Linkkontext "Direkter Inseratslink erkannt: ja" enthält, darf fehlendes automatisches Laden, CAPTCHA oder Anti-Bot-Schutz allein den direkten Link nicht entwerten. Antworte IMMER in genau diesem Format: Erste Zeile NUR eines dieser Wörter in Grossbuchstaben: RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile eine sehr kurze Rückmeldung (maximal 2 Sätze). Falls Inseratsdaten vorhanden sind, dritte Zeile exakt DATEN_JSON: gefolgt von einem kompakten JSON-Objekt mit passenden Schlüsseln wie title, address, rooms, living_area_m2, rent_chf, floor, year_built, features.',
+                'Du bist eine Lehrperson für Politik und Geschichte. Du bewertest kurze Antworten von Lernenden zu einem Lückentext sachlich korrekt, freundlich und knapp auf Deutsch. Du kennst eine Lehrerlösung, verwendest sie als zentrale fachliche Referenz, verrätst sie aber nie wörtlich. Antworten, die inhaltlich sehr nahe an der Lehrerlösung sind, sollen klar als richtig bewertet werden. Entscheidend ist gleichzeitig, ob die Antwort im Kontext des Lückentextes inhaltlich korrekt ist – auch andere richtige Lösungen, Umschreibungen oder Synonyme können als richtig gelten. Berücksichtige zusätzliche Prüf-Prompts und individuelle Einstellungen zur lernenden Person, Klasse oder Schule als interne Bewertungsanweisung. Bewerte inhaltlich bewusst tolerant: Kleine sprachliche Unterschiede wie Artikel, Präpositionen, Flexionen oder Satzzeichen machen eine inhaltlich passende Antwort nicht falsch; falls ein Kontext-Prompt Sprachhinweise verlangt, nenne Sprachfehler kurz, ohne den Gedanken der lernenden Person zu verwässern. Du gibst nur eine grobe Einschätzung (richtig/teilweise richtig/falsch) und kurze Hinweise oder Denkanstösse. Wenn du RICHTIG schreibst, soll die Rückmeldung kurz positiv sein und idealerweise einen ganz kurzen inhaltlichen Hinweis zur Lösung geben. Wenn ein Wohnungsinserat als Quelle mitgegeben wird, extrahiere die wichtigsten Fakten für spätere Freitextaufgaben. Wenn der Linkkontext "Direkter Inseratslink erkannt: ja" enthält, darf fehlendes automatisches Laden, CAPTCHA oder Anti-Bot-Schutz allein den direkten Link nicht entwerten. Antworte IMMER in genau diesem Format: Erste Zeile NUR eines dieser Wörter in Grossbuchstaben: RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile eine sehr kurze Rückmeldung (maximal 2 Sätze). Falls Inseratsdaten vorhanden sind, dritte Zeile exakt DATEN_JSON: gefolgt von einem kompakten JSON-Objekt mit passenden Schlüsseln wie title, address, rooms, living_area_m2, rent_chf, floor, year_built, features.',
         ],
         [
             'role' => 'user',
@@ -1875,9 +2339,60 @@ function build_gap_feedback_messages($payload)
                 $musterloesung .
                 "\".\n\nZusätzlicher Prüfauftrag der Lehrperson:\n" .
                 ($gapPrompt !== '' ? $gapPrompt : 'Kein zusätzlicher Prüfauftrag angegeben.') .
+                "\n\nWeitere Prüf-Prompts:\n" .
+                ($additionalPromptText !== '' ? $additionalPromptText : 'Keine weiteren Prüf-Prompts angegeben.') .
+                "\n\nIndividuelle Einstellungen:\n" .
+                ($individualSettingsText !== '' ? $individualSettingsText : 'Keine individuellen Einstellungen angegeben.') .
                 "\n\nGelesener Kontext aus Link/Inserat:\n" .
                 ($sourceContextText !== '' ? $sourceContextText : 'Kein Linkkontext verfügbar.') .
-                "\n\nBeurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung und den zusätzlichen Prüfauftrag als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Wenn der Linkkontext einen direkten Inseratslink erkennt, bewerte ihn nicht wegen fehlender automatischer Lesbarkeit ab. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.",
+                "\n\nBeurteile knapp, ob die Antwort im Kontext des gesamten Lückentextes inhaltlich korrekt ist. Nutze die Lehrerlösung, den zusätzlichen Prüfauftrag, weitere Prüf-Prompts und individuelle Einstellungen als Orientierung und akzeptiere auch andere richtige Formulierungen oder zusätzliche passende Informationen. Wenn der Linkkontext einen direkten Inseratslink erkennt, bewerte ihn nicht wegen fehlender automatischer Lesbarkeit ab. Gib eine kurze Rückmeldung mit maximal einem Hinweis oder Tipp. Nenne nicht die exakte Lösung und formuliere keine vollständige Musterantwort.",
+        ],
+    ];
+}
+
+function build_textdokument_feedback_messages($payload)
+{
+    $rawValue = $payload['value'] ?? '';
+    $antwort = trim((string)($payload['answer_text'] ?? ''));
+    if ($antwort === '') {
+        $parsed = json_decode((string)$rawValue, true);
+        if (is_array($parsed)) {
+            $antwort = trim((string)($parsed['answer'] ?? ($parsed['text'] ?? ($parsed['value'] ?? ''))));
+        }
+    }
+    if ($antwort === '') {
+        $antwort = trim((string)$rawValue);
+    }
+
+    $title = trim((string)($payload['title'] ?? ($payload['key'] ?? 'Textfeld')));
+    $taskPrompt = trim((string)($payload['task_prompt'] ?? ($payload['instruction_text'] ?? '')));
+    $teacherPrompt = trim((string)($payload['teacher_prompt'] ?? ($payload['prompt'] ?? '')));
+    $additionalPromptText = freitext_additional_prompt_text($payload);
+    $individualSettingsText = freitext_individual_settings_text($payload);
+    $sourceContextText = trim((string)($payload['_source_context_text'] ?? ''));
+
+    return [
+        [
+            'role' => 'system',
+            'content' =>
+                'Du bist eine ABU-Lehrperson und prüfst ein eingefügtes Textfeld, das später als Ausgangslage oder Quelle in einem Arbeitsblatt verwendet wird. Beurteile nicht Stil oder Rechtschreibung streng, sondern ob der eingefügte Text als Arbeitsgrundlage brauchbar ist: ausreichend Inhalt, lesbar, zusammenhängend, keine offensichtlichen Platzhalter, keine reine Navigations-/Cookie-/Fehlerseite. Wenn es ein Wohnungsinserat oder ein Inseratslink ist, prüfe besonders, ob zentrale Fakten erkennbar sind oder ob der Link als direkter Inseratslink plausibel ist. RICHTIG bedeutet: als Quelle gut verwendbar. TEILWEISE bedeutet: verwendbar, aber unvollständig, sehr kurz oder mit Lücken. FALSCH bedeutet: leer, unlesbar oder als Quelle nicht brauchbar. Wenn Inseratsdaten vorhanden sind, extrahiere die wichtigsten Fakten für spätere Freitextaufgaben. Antworte IMMER exakt so: Erste Zeile NUR RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile maximal 3 kurze Sätze mit konkretem Stand und höchstens 2 nächsten Verbesserungen. Falls Inseratsdaten vorhanden sind, dritte Zeile exakt DATEN_JSON: gefolgt von einem kompakten JSON-Objekt mit passenden Schlüsseln wie title, address, rooms, living_area_m2, rent_chf, floor, year_built, features.',
+        ],
+        [
+            'role' => 'user',
+            'content' =>
+                "Dokumenttitel: " .
+                $title .
+                "\n\nPrüfauftrag der Lehrperson:\n" .
+                ($teacherPrompt !== '' ? $teacherPrompt : ($taskPrompt !== '' ? $taskPrompt : 'Kein zusätzlicher Prüfauftrag angegeben.')) .
+                "\n\nWeitere Prüf-Prompts:\n" .
+                ($additionalPromptText !== '' ? $additionalPromptText : 'Keine weiteren Prüf-Prompts angegeben.') .
+                "\n\nIndividuelle Einstellungen:\n" .
+                ($individualSettingsText !== '' ? $individualSettingsText : 'Keine individuellen Einstellungen angegeben.') .
+                "\n\nGelesener Kontext aus Link/Inserat:\n" .
+                ($sourceContextText !== '' ? $sourceContextText : 'Kein Linkkontext verfügbar.') .
+                "\n\nEingefügtes Textfeld:\n\"" .
+                ($antwort !== '' ? $antwort : '[kein Text eingefügt]') .
+                "\"\n\nPrüfe, ob dieses Textfeld als Quelle oder Ausgangslage für die weitere Aufgabe brauchbar ist.",
         ],
     ];
 }
@@ -1924,13 +2439,15 @@ function build_freitext_feedback_messages($payload)
         [
             'role' => 'system',
             'content' =>
-                'Du bist eine ABU-Lehrperson und gibst lernwirksames Mikro-Feedback zu einem deutschsprachigen Freitext. Beurteile den aktuellen Zwischenstand, nicht eine Endnote. Berücksichtige die Prämissen, die Ausgangslage und die ausgefüllten Werte als verbindlichen Sachkontext. Nutze die KI-Hinweise zu den Prämissen, um Zahlen, Daten, Links und Sachangaben besonders genau auf Plausibilität und Passung zu prüfen. Berücksichtige den zusätzlichen Prüfauftrag der Lehrperson zum Haupttext, weitere Prüf-Prompts und individuelle Einstellungen zur lernenden Person, Klasse oder Schule als interne Bewertungsanweisung. Wenn eine Referenz als Fallback, unzureichend auslesbar oder nicht zufriedenstellend markiert ist, bewerte freier: bekannte extrahierte Fakten bleiben verbindlich, aber fehlende oder nicht automatisch lesbare Fakten dürfen nicht streng eingefordert werden; akzeptiere plausible Angaben der lernenden Person, solange sie den gespeicherten Fakten nicht widersprechen. Wenn noch kein Text vorhanden ist, bewerte nur die ausgefüllten Prämissen als Vorbereitung und gib Feedback, ob sie stimmig, plausibel und nutzbar sind. Wenn der Text einer verbindlichen Ausgangslage oder einem ausgefüllten Wert widerspricht, darf er nicht RICHTIG sein; bei einem zentralen Widerspruch ist er FALSCH. Prüfe danach, welche zwingenden Teile vorhanden sind und welche fehlen oder zu schwach sind. Wenn eine Zusatzfrage der lernenden Person vorhanden ist, berücksichtige oder beantworte sie knapp in der zweiten Zeile, ohne das Format zu verlassen. Gib knappes, konkretes Überarbeitungsfeedback. Keine komplette Neuformulierung, keine Musterlösung, keine langen Erklärungen. Antworte IMMER exakt so: Erste Zeile NUR RICHTIG, TEILWEISE oder FALSCH. Zweite Zeile maximal 3 kurze Sätze. Nenne zuerst kurz, was stimmig ist, und dann hoechstens 2 naechste Verbesserungen.',
+                'Du bist eine ABU-Lehrperson und gibst lernwirksames Mikro-Feedback zu einem deutschsprachigen Freitext. Beurteile den aktuellen Zwischenstand, nicht eine Endnote. Berücksichtige die Prämissen, die Ausgangslage und die ausgefüllten Werte als verbindlichen Sachkontext. Nutze die KI-Hinweise zu den Prämissen, um Zahlen, Daten, Links und Sachangaben besonders genau auf Plausibilität und Passung zu prüfen. Berücksichtige den zusätzlichen Prüfauftrag der Lehrperson zum Haupttext, weitere Prüf-Prompts und individuelle Einstellungen zur lernenden Person, Klasse oder Schule als interne Bewertungsanweisung. Wenn noch kein Text vorhanden ist, bewerte nur die ausgefüllten Prämissen als Vorbereitung und gib Feedback, ob sie stimmig, plausibel und nutzbar sind. Wenn der Text einer verbindlichen Ausgangslage oder einem ausgefüllten Wert widerspricht, darf er nicht RICHTIG sein; bei einem zentralen Widerspruch ist er FALSCH. Prüfe danach, welche zwingenden Teile vorhanden sind und welche fehlen oder zu schwach sind. Antworte immer mit folgender Struktur: Erste Zeile NUR RICHTIG, TEILWEISE oder FALSCH. Wenn ein optionaler Prüfhinweis / eine Zusatzfrage vorhanden ist, beginnt die zweite Zeile exakt mit "Antwort auf Prüfhinweis:" und beantwortet den Hinweis knapp; danach folgt eine Leerzeile. "Kein optionaler Prüfhinweis angegeben." bedeutet, dass kein Prüfhinweis vorhanden ist und keine Zeile "Antwort auf Prüfhinweis:" ausgegeben wird. Danach folgt eine neue Zeile, die exakt mit "Bewertung:" beginnt. Unter "Bewertung:" folgen kurze Listenpunkte in diesen Kategorien: "Erfüllt:", "Teilweise:", "Fehlerhaft:", "Fehlt:". Verwende nur Kategorien, die wirklich Punkte enthalten. Jeder Listenpunkt beginnt mit "- ". Maximal 6 Listenpunkte insgesamt, jeder Punkt kurz und konkret. Keine komplette Neuformulierung, keine Musterlösung, keine langen Erklärungen.',
         ],
         [
             'role' => 'user',
             'content' =>
                 "Aufgabentitel: " .
                 $title .
+                "\n\nOptionaler Prüfhinweis / Zusatzfrage:\n" .
+                ($additionalQuestion !== '' ? $additionalQuestion : 'Kein optionaler Prüfhinweis angegeben.') .
                 "\n\nArbeitsauftrag:\n" .
                 ($taskPrompt !== '' ? $taskPrompt : 'Kein separater Arbeitsauftrag angegeben.') .
                 "\n\nZusätzlicher Prüfauftrag der Lehrperson zum Haupttext:\n" .
@@ -1941,8 +2458,6 @@ function build_freitext_feedback_messages($payload)
                 ($individualSettingsText !== '' ? $individualSettingsText : 'Keine individuellen Einstellungen angegeben.') .
                 "\n\nZwingende Teile:\n" .
                 ($criteriaText !== '' ? $criteriaText : 'Keine zwingenden Teile angegeben.') .
-                "\n\nZusatzfrage der lernenden Person:\n" .
-                ($additionalQuestion !== '' ? $additionalQuestion : 'Keine Zusatzfrage gestellt.') .
                 "\n\nAusgangslage und ausgefüllte Werte:\n" .
                 ($premisesText !== '' ? $premisesText : 'Keine Ausgangslage oder Werte angegeben.') .
                 "\n\nRahmen:\n" .
@@ -1951,7 +2466,7 @@ function build_freitext_feedback_messages($payload)
                 ($antwort !== '' ? 'Freitext mit Prämissen prüfen.' : 'Vorbereitung prüfen: Es ist noch kein Text vorhanden; bewerte nur die Prämissenwerte.') .
                 "\n\nAktueller Text:\n\"" .
                 ($antwort !== '' ? $antwort : '[noch kein Text geschrieben]') .
-                "\"\n\nGib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand.",
+                "\"\n\nGib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand: falls ein optionaler Prüfhinweis vorhanden ist zuerst die Antwort darauf, danach eine klar getrennte Bewertung mit Listenpunkten unter Erfüllt, Teilweise, Fehlerhaft und Fehlt.",
         ],
     ];
 }

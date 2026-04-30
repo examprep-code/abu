@@ -2,6 +2,7 @@ export type WorksheetElementId =
   | 'html'
   | 'titel'
   | 'luecke'
+  | 'textdokument'
   | 'freitext'
   | 'umfrage';
 
@@ -20,7 +21,7 @@ export type WorksheetElementType = {
 };
 
 export type WorksheetBlockTemplate = {
-  id: Exclude<WorksheetElementId, 'luecke'>;
+  id: Exclude<WorksheetElementId, 'luecke' | 'textdokument'>;
   label: string;
   meta: string;
   icon: WorksheetElementType['icon'];
@@ -66,6 +67,19 @@ export const WORKSHEET_ELEMENT_TYPES: WorksheetElementType[] = [
     defaultView: 'visual',
     blockLevel: false,
     pattern: /<\s*luecke-gap\b/i
+  },
+  {
+    id: 'textdokument',
+    label: 'Textfeld',
+    shortLabel: 'Textfeld',
+    meta: 'Inline-Textablage',
+    icon: {
+      viewBox: '0 0 24 24',
+      paths: ['M6 3h8l4 4v14H6z', 'M14 3v5h5', 'M9 12h6', 'M9 16h6']
+    },
+    defaultView: 'visual',
+    blockLevel: false,
+    pattern: /<\s*textdokument-feld\b/i
   },
   {
     id: 'freitext',
@@ -130,7 +144,7 @@ export const BLOCK_TEMPLATE_DEFINITIONS: WorksheetBlockTemplate[] = [
   HTML_ELEMENT_TYPE,
   ...WORKSHEET_ELEMENT_TYPES.filter((type) => type.id !== 'titel')
 ].filter(
-  (type) => type.id !== 'luecke'
+  (type) => type.blockLevel
 ).map((type) => ({
   id: type.id as WorksheetBlockTemplate['id'],
   label: type.label,
@@ -151,6 +165,9 @@ export const detectWorksheetBlockType = (html = ''): WorksheetElementType => {
   );
   if (blockType) return blockType;
   if (getWorksheetElementType('luecke').pattern?.test(value)) {
+    return getWorksheetElementType('html');
+  }
+  if (getWorksheetElementType('textdokument').pattern?.test(value)) {
     return getWorksheetElementType('html');
   }
   return getWorksheetElementType('html');

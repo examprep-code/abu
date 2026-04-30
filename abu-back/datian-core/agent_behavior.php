@@ -454,6 +454,7 @@ if (!function_exists('agent_get_system_message')) {
             'Nutze message, wenn die Anfrage nur Analyse oder Fehlersuche erfordert und keine Änderung. ' .
             'Wenn für eine Analyse Informationen fehlen, liefere zuerst eine vorläufige Einschätzung aus dem vorhandenen Kontext und stelle danach maximal 3 gezielte Rückfragen. ' .
             'Bei Anfragen zur ABU-Eignung oder Aufgabenqualität nenne konkrete Kriterien statt nur nach dem Volltext zu fragen. ' .
+            'Wenn du Aufgaben oder Arbeitsaufträge für Lernende formulierst, verwende die Höflichkeitsform mit Sie/Ihnen/Ihre. ' .
             'Gib bei insert_html nur das Snippet zur Einfügung zurück, kein komplettes Dokument. ' .
             'Bei scope=block darf replace_html nur den aktualisierten Block liefern, nicht das gesamte Dokument. ' .
             'Bei scope=document darf replace_html den aktualisierten Gesamtinhalt liefern. ' .

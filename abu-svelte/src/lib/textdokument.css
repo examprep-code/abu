@@ -1,0 +1,311 @@
+:global(textdokument-feld) {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: auto auto auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 0.18rem 0.28rem;
+  vertical-align: middle;
+  margin: 0.12rem 0.18rem;
+}
+
+:global(.textdokument-trigger) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.45rem;
+  height: 2.45rem;
+  padding: 0;
+  border-radius: 10px;
+  border-width: 1.5px;
+  color: var(--ci-button-primary, #0f172a);
+  background: #fff;
+  cursor: pointer;
+  line-height: 1;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.11);
+}
+
+:global(.textdokument-trigger:hover:enabled),
+:global(.textdokument-trigger:focus-visible) {
+  background: var(--ci-button-primary, #0f172a);
+  color: var(--ci-button-text, #fff);
+}
+
+:global(.textdokument-trigger--filled) {
+  border-color: #1c8f4a;
+  color: #166534;
+  background: #e4f5e7;
+}
+
+:global(.textdokument-trigger--checking) {
+  color: #0f4d64;
+  background: #e0f2fe;
+}
+
+:global(.textdokument-trigger__icon),
+:global(.textdokument-trigger__icon svg) {
+  display: block;
+  width: 1.42rem;
+  height: 1.42rem;
+}
+
+:global(.textdokument-count) {
+  display: inline-flex;
+  align-items: center;
+  max-width: 9rem;
+  min-height: 1.35rem;
+  padding: 0 0.45rem;
+  border-radius: 6px;
+  border: 1px solid #d9dee7;
+  background: #fff;
+  color: #334155;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+:global(.textdokument-status) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  padding: 0 0.45rem;
+  border-radius: 6px;
+  border: 1px solid #d9dee7;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+:global(.textdokument-status[data-status='checking']) {
+  border-color: #7dd3fc;
+  background: #e0f2fe;
+  color: #075985;
+}
+
+:global(.textdokument-status[data-status='checked']) {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+:global(.textdokument-status[data-status='partial']) {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+:global(.textdokument-status[data-status='wrong']),
+:global(.textdokument-status[data-status='error']) {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+:global(.textdokument-save-indicator) {
+  position: absolute;
+  top: -0.16rem;
+  left: 1.82rem;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.82rem;
+  height: 0.82rem;
+  border-radius: 999px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+  line-height: 1;
+  opacity: 0;
+  transform: scale(0.82);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.08);
+}
+
+:global(.textdokument-save-indicator--visible) {
+  opacity: 1;
+  transform: scale(1);
+}
+
+:global(.textdokument-status__icon),
+:global(.textdokument-status__icon svg) {
+  display: block;
+  width: 0.55rem;
+  height: 0.55rem;
+}
+
+:global(.textdokument-feedback) {
+  grid-column: 2 / 4;
+  max-width: min(34rem, 70vw);
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid #d9dee7;
+  background: #fff;
+  color: #334155;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+
+:global(.textdokument-feedback[data-status='checked']) {
+  border-color: #bbf7d0;
+  background: #f8fff9;
+}
+
+:global(.textdokument-feedback[data-status='partial']) {
+  border-color: #fde68a;
+  background: #fffdf5;
+}
+
+:global(.textdokument-feedback[data-status='wrong']),
+:global(.textdokument-feedback[data-status='error']) {
+  border-color: #fecaca;
+  background: #fff8f8;
+}
+
+:global(.textdokument-feedback[hidden]) {
+  display: none;
+}
+
+:global(.textdokument-sr) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+:global(.textdokument-modal-backdrop) {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+:global(.textdokument-modal-card) {
+  width: min(720px, 100%);
+  max-height: min(86vh, 760px);
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #d9dee7;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
+}
+
+:global(.textdokument-modal-card h3) {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+:global(.textdokument-form) {
+  display: grid;
+  gap: 0.75rem;
+}
+
+:global(.textdokument-form textarea) {
+  width: 100%;
+  min-height: 18rem;
+  max-height: 56vh;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid #d9dee7;
+  border-radius: 6px;
+  padding: 0.7rem;
+  color: #0f172a;
+  font: inherit;
+  line-height: 1.45;
+}
+
+:global(.textdokument-form textarea:focus) {
+  outline: none;
+  border-color: #2f8f83;
+  box-shadow: 0 0 0 2px rgba(47, 143, 131, 0.14);
+}
+
+:global(.textdokument-meta) {
+  margin-top: -0.35rem;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+:global(.textdokument-modal-feedback) {
+  padding: 0.6rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid #d9dee7;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+:global(.textdokument-modal-feedback[hidden]) {
+  display: none;
+}
+
+:global(.textdokument-error) {
+  min-height: 1rem;
+  margin: 0;
+  color: #b42318;
+  font-size: 0.8rem;
+}
+
+:global(.textdokument-error:empty) {
+  display: none;
+}
+
+:global(.textdokument-actions) {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+@media (max-width: 560px) {
+  :global(textdokument-feld) {
+    grid-template-columns: auto auto;
+  }
+
+  :global(.textdokument-status) {
+    grid-column: 2;
+  }
+
+  :global(.textdokument-feedback) {
+    grid-column: 1 / -1;
+    max-width: calc(100vw - 2rem);
+  }
+
+  :global(.textdokument-modal-card) {
+    max-height: 92vh;
+  }
+
+  :global(.textdokument-form textarea) {
+    min-height: 15rem;
+  }
+
+  :global(.textdokument-actions) {
+    flex-direction: column-reverse;
+  }
+}
