@@ -128,13 +128,13 @@
 
   const buildSheetHref = (sheetKey) => {
     const key = String(sheetKey ?? '').trim();
-    if (!key) return '/lernende';
+    if (!key) return '/lernende/';
     const params = new URLSearchParams();
     const code = String(learner?.code ?? '').trim();
     if (code) params.set('code', code);
     const classroom = String(learner?.classroom ?? '').trim();
     if (classroom) params.set('classroom', classroom);
-    return `/sheet/${key}?${params.toString()}`;
+    return `/sheet/${key}/?${params.toString()}`;
   };
 
   const normalizeStatus = (status) => String(status ?? '').trim().toLowerCase();

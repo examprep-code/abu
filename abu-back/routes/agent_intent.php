@@ -30,6 +30,10 @@ $modelPolicyModule = dirname(__DIR__) . '/snippets/agent/model_policy.php';
 if (is_readable($modelPolicyModule)) {
     include_once $modelPolicyModule;
 }
+$tokenCounterModule = dirname(__DIR__) . '/snippets/agent/token_counter.php';
+if (is_readable($tokenCounterModule)) {
+    include_once $tokenCounterModule;
+}
 
 $context = is_array($data['context'] ?? null) ? $data['context'] : [];
 $historyPayload = is_array($data['history'] ?? null) ? $data['history'] : [];
@@ -127,6 +131,7 @@ $modelCandidates = function_exists('agent_model_chain_for')
 
 $parsed = null;
 $selectedModel = '';
+$usageStats = null;
 $finalStatus = 500;
 $finalWarning = 'Agent-Intent konnte nicht bestimmt werden.';
 
@@ -242,6 +247,9 @@ foreach ($modelCandidates as $index => $modelName) {
 
     $parsed = $candidate;
     $selectedModel = (string)$modelName;
+    $usageStats = function_exists('ai_token_counter_record_openai_response')
+        ? ai_token_counter_record_openai_response(intval($user['id'] ?? 0), $decoded, $selectedModel)
+        : null;
     break;
 }
 
@@ -317,5 +325,8 @@ $return['data'] = [
     'reference' => $reference,
     'model' => $selectedModel,
 ];
+if (is_array($usageStats)) {
+    $return['data']['ai_usage'] = $usageStats;
+}
 
 ?>

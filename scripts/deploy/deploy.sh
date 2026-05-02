@@ -75,6 +75,10 @@ if [[ "$DEPLOY_FRONTEND" == "true" && "$RUN_BUILD" == "true" ]]; then
     npm run build
   )
 
+fi
+
+if [[ "$DEPLOY_FRONTEND" == "true" ]]; then
+  [[ -d "$FRONTEND_BUILD_LOCAL" ]] || die "Frontend build output not found: $FRONTEND_BUILD_LOCAL"
   if [[ -n "${DEPLOY_API_BASE_URL:-}" ]]; then
     info "Overriding frontend runtime config apiBaseUrl -> $DEPLOY_API_BASE_URL"
     cat > "$FRONTEND_BUILD_LOCAL/config.json" <<JSON
@@ -83,10 +87,7 @@ if [[ "$DEPLOY_FRONTEND" == "true" && "$RUN_BUILD" == "true" ]]; then
 }
 JSON
   fi
-fi
 
-if [[ "$DEPLOY_FRONTEND" == "true" ]]; then
-  [[ -d "$FRONTEND_BUILD_LOCAL" ]] || die "Frontend build output not found: $FRONTEND_BUILD_LOCAL"
   info "Ensuring remote frontend directory exists: $REMOTE_FRONTEND_DIR"
   ssh_exec "mkdir -p '$REMOTE_FRONTEND_DIR'"
 

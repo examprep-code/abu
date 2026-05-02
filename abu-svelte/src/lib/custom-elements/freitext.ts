@@ -45,6 +45,10 @@ export type FreitextRuntimeOptions = {
 };
 
 type ClassificationLabel = 'RICHTIG' | 'TEILWEISE' | 'FALSCH' | null;
+type ClassificationInfo = {
+  score: number | null;
+  label: ClassificationLabel;
+};
 type PremiseFulfillmentState = {
   value: string;
   ready: boolean;
@@ -83,10 +87,7 @@ function previewPayload(options: FreitextRuntimeOptions): Record<string, string>
 function classificationInfo(
   value: unknown,
   labelHint?: string | null
-): {
-  score: number | null;
-  label: ClassificationLabel;
-} {
+): ClassificationInfo {
   let score: number | null = null;
   let label: ClassificationLabel = null;
 
@@ -116,6 +117,13 @@ function classificationInfo(
   }
 
   return { score, label };
+}
+
+function scoreForClassificationLabel(label: ClassificationLabel): number | null {
+  if (label === 'RICHTIG') return 1000;
+  if (label === 'TEILWEISE') return 500;
+  if (label === 'FALSCH') return 0;
+  return null;
 }
 
 async function sendAnswerToBackend(
@@ -209,14 +217,29 @@ function emptyFeedbackGroups(): Record<FeedbackGroupKey, string[]> {
 }
 
 function normalizeFeedbackHeading(value: string): string {
-  return String(value || '')
+  let text = String(value || '')
     .trim()
     .replace(/^#+\s*/, '')
+    .trim();
+  text = text.replace(/^([*_]{1,3})(.+)\1$/u, '$2').trim();
+  text = text.replace(/[:：]+$/, '').trim();
+  text = text.replace(/^([*_]{1,3})(.+)\1$/u, '$2').trim();
+  return text
     .replace(/[:：]+$/, '')
     .trim()
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
+}
+
+function normalizeFeedbackItem(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/ß/g, 'ss')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function stripFeedbackBullet(value: string): string {
@@ -244,6 +267,126 @@ function splitFeedbackGroupLine(
     group,
     text: stripFeedbackBullet(match[2] || '')
   };
+}
+
+function isLanguageErrorFeedbackItem(value: string): boolean {
+  const normalized = normalizeFeedbackItem(value);
+  const hasLanguageSignal =
+    /rechtschreib|grammatik|komma|kommasetzung|sprachfehler|sprachlich|formulierung|stil/u.test(
+      normalized
+    );
+  if (!hasLanguageSignal) return false;
+  if (
+    /kein(?:e|en|er|es|em)?\s+(?:rechtschreib|grammatik|komma|kommasetzung|sprachfehler)|(?:rechtschreibung|grammatik|kommasetzung)\s+(?:korrekt|stimmt)/u.test(
+      normalized
+    )
+  ) {
+    return false;
+  }
+  return /fehler|fehlerhaft|falsch|ungenau|unklar|umstandlich|verbesser|korrigier|gross|klein/u.test(
+    normalized
+  );
+}
+
+function isMissingFeedbackItem(value: string): boolean {
+  const normalized = normalizeFeedbackItem(value);
+  if (!normalized) return false;
+
+  if (
+    /kein(?:e|en|er|es|em)?\s+(?:falsch|fehler|fehlerhaft|ungenau|unkorrekt|nicht korrekt|rechtschreib|grammatik|komma|kommasetzung|sprachfehler)/u.test(
+      normalized
+    ) ||
+    /\b(?:fehlt|fehlen)\s+nicht\b/u.test(normalized) ||
+    /kein(?:e|en|er|es|em)?\s+fehlend/u.test(normalized)
+  ) {
+    return false;
+  }
+
+  return (
+    /kein(?:e|en|er|es|em)?\s+(?:angaben|informationen|hinweise|nennungen|details)\b.*\b(?:vorhanden|genannt|angegeben|erwahnt|enthalten)\b/u.test(
+      normalized
+    ) ||
+    /\b(?:angaben|informationen|hinweise|details|preisangaben|preise?|miete|nebenkosten|etage|baujahr|ausstattung|ambiente|lageinformationen?)\b.*\bfehl(?:t|en|end)\b/u.test(
+      normalized
+    ) ||
+    /\b(?:fehlt|fehlen|fehlend|nicht vorhanden|(?:wird|werden)\s+nicht\s+(?:genannt|angegeben|erwahnt)|nicht\s+(?:genannt|angegeben|erwahnt|enthalten))\b/u.test(
+      normalized
+    )
+  );
+}
+
+function isContentErrorFeedbackItem(value: string): boolean {
+  const normalized = normalizeFeedbackItem(value);
+  const contrastParts = normalized.split(
+    /\b(?:aber|jedoch|allerdings|hingegen|trotzdem|sondern)\b/u
+  );
+  const issueText =
+    contrastParts.length > 1 ? contrastParts.slice(1).join(' ') : normalized;
+
+  if (
+    contrastParts.length === 1 &&
+    /kein(?:e|en|er|es|em)?\s+(?:falsch|fehler|fehlerhaft|ungenau|unkorrekt|nicht korrekt)/u.test(
+      normalized
+    )
+  ) {
+    return false;
+  }
+
+  if (
+    /nicht\s+korrekt|inkorrekt|fehlerhaft|falsch|ungenau|unprazis|unpraezis|irrefuhrend|widerspr|abweich|zu\s+(?:hoch|niedrig|gross|klein|allgemein)|korrigier|falsche\s+angabe/u.test(
+      issueText
+    )
+  ) {
+    return true;
+  }
+
+  const hasContrast = contrastParts.length > 1;
+  if (!hasContrast) {
+    return /\b(?:statt|anstelle)\b.*\b(?:korrekt|richtig|quelle|inserat|ausgangslage|vorgabe|muss|musste)\b/u.test(
+      normalized
+    );
+  }
+
+  return (
+    /\b(?:quelle|inserat|ausgangslage|vorgabe|referenz|lehrerlosung)\b.*\b(?:aber|jedoch|allerdings|hingegen|sondern)\b/u.test(
+      normalized
+    ) ||
+    /\b(?:korrekt|richtig)\s+(?:ist|sind|ware|waere)\s+(?:aber|jedoch|allerdings|hingegen|sondern)\b/u.test(
+      normalized
+    ) ||
+    /\b(?:aber|jedoch|allerdings|hingegen|sondern)\b.*\b(?:korrekt|richtig|quelle|inserat|ausgangslage|vorgabe|statt|nennt|genannt|angegeben|beschrieben|tatsachlich|richtigerweise)\b/u.test(
+      normalized
+    )
+  );
+}
+
+function feedbackGroupForItem(
+  group: FeedbackGroupDefinition,
+  itemText: string
+): FeedbackGroupDefinition {
+  if (group.key !== 'missing' && isMissingFeedbackItem(itemText)) {
+    const missingGroup = FEEDBACK_GROUP_DEFINITIONS.find(
+      (definition) => definition.key === 'missing'
+    );
+    return missingGroup || group;
+  }
+  if (
+    group.key !== 'wrong' &&
+    (isLanguageErrorFeedbackItem(itemText) || isContentErrorFeedbackItem(itemText))
+  ) {
+    const wrongGroup = FEEDBACK_GROUP_DEFINITIONS.find((definition) => definition.key === 'wrong');
+    return wrongGroup || group;
+  }
+  return group;
+}
+
+function pushFeedbackGroupItem(
+  groups: Record<FeedbackGroupKey, string[]>,
+  group: FeedbackGroupDefinition,
+  itemText: string
+): void {
+  const targetGroup = feedbackGroupForItem(group, itemText);
+  groups[targetGroup.key].push(itemText);
 }
 
 function parseFreitextFeedback(text: string): ParsedFreitextFeedback {
@@ -294,7 +437,9 @@ function parseFreitextFeedback(text: string): ParsedFreitextFeedback {
           const inlineGroup = splitFeedbackGroupLine(remainder);
           if (inlineGroup) {
             currentGroup = inlineGroup.group;
-            if (inlineGroup.text) parsed.groups[inlineGroup.group.key].push(inlineGroup.text);
+            if (inlineGroup.text) {
+              pushFeedbackGroupItem(parsed.groups, inlineGroup.group, inlineGroup.text);
+            }
           } else {
             parsed.summary.push(remainder);
           }
@@ -308,7 +453,9 @@ function parseFreitextFeedback(text: string): ParsedFreitextFeedback {
         readingPromptAnswer = false;
         readingEvaluation = true;
         currentGroup = inlineGroup.group;
-        if (inlineGroup.text) parsed.groups[inlineGroup.group.key].push(inlineGroup.text);
+        if (inlineGroup.text) {
+          pushFeedbackGroupItem(parsed.groups, inlineGroup.group, inlineGroup.text);
+        }
         return;
       }
 
@@ -328,7 +475,7 @@ function parseFreitextFeedback(text: string): ParsedFreitextFeedback {
         return;
       }
       if (currentGroup) {
-        parsed.groups[currentGroup.key].push(clean);
+        pushFeedbackGroupItem(parsed.groups, currentGroup, clean);
         return;
       }
       if (readingEvaluation || parsed.structured) {
@@ -345,6 +492,43 @@ function parseFreitextFeedback(text: string): ParsedFreitextFeedback {
         FEEDBACK_GROUP_DEFINITIONS.some((definition) => parsed.groups[definition.key].length)
     );
   return parsed;
+}
+
+function reconcileFreitextClassificationWithFeedback(
+  info: ClassificationInfo,
+  feedbackText: string
+): ClassificationInfo {
+  const parsed = parseFreitextFeedback(feedbackText);
+  if (!parsed.structured) return info;
+
+  const fulfilled = parsed.groups.fulfilled.length;
+  const partial = parsed.groups.partial.length;
+  const severe = parsed.groups.wrong.length + parsed.groups.missing.length;
+  const issues = partial + severe;
+  let nextLabel = info.label;
+
+  if (info.label === 'RICHTIG' && issues > 0) {
+    nextLabel = severe > 0 && fulfilled === 0 && partial === 0 ? 'FALSCH' : 'TEILWEISE';
+  } else if (
+    (info.label === 'TEILWEISE' || info.label === null) &&
+    severe > 0 &&
+    fulfilled === 0 &&
+    partial === 0
+  ) {
+    nextLabel = 'FALSCH';
+  } else if (info.label === null) {
+    if (issues > 0) {
+      nextLabel = 'TEILWEISE';
+    } else if (fulfilled > 0) {
+      nextLabel = 'RICHTIG';
+    }
+  }
+
+  if (nextLabel === info.label) return info;
+  return {
+    score: scoreForClassificationLabel(nextLabel),
+    label: nextLabel
+  };
 }
 
 function createFeedbackTextBlock(className: string, title: string, text: string): HTMLElement {
@@ -426,7 +610,25 @@ function renderFreitextFeedback(feedback: HTMLElement, text: string): boolean {
   return true;
 }
 
+function cancelFeedbackHide(feedback: HTMLElement | null): void {
+  if (!feedback) return;
+  const existing = feedbackTimers.get(feedback);
+  if (!existing) return;
+  window.clearTimeout(existing);
+  feedbackTimers.delete(feedback);
+}
+
+function keepFeedbackVisible(feedback: HTMLElement | null): boolean {
+  if (!feedback) return false;
+  const hasFeedback = String(feedback.dataset.lastText || feedback.textContent || '').trim() !== '';
+  if (!hasFeedback) return false;
+  cancelFeedbackHide(feedback);
+  feedback.classList.add('feedback--visible');
+  return true;
+}
+
 function showFeedback(feedback: HTMLElement, text: string, autoHide = false): void {
+  cancelFeedbackHide(feedback);
   renderFreitextFeedback(feedback, text);
   feedback.dataset.lastText = text;
   feedback.classList.add('feedback--visible');
@@ -446,8 +648,7 @@ function scheduleFeedbackHide(feedback: HTMLElement, delay = FEEDBACK_HIDE_DELAY
 
 function clearFeedback(feedback: HTMLElement | null): void {
   if (!feedback) return;
-  const existing = feedbackTimers.get(feedback);
-  if (existing) window.clearTimeout(existing);
+  cancelFeedbackHide(feedback);
   feedback.textContent = '';
   feedback.classList.remove(
     'feedback--visible',
@@ -467,6 +668,7 @@ function bindOutsideClickHide(): void {
     if (!(target instanceof Element)) return;
     if (target.closest('.feedback') || target.closest('.check-btn')) return;
     document.querySelectorAll('.feedback.feedback--visible').forEach((feedback) => {
+      if (feedback.closest('freitext-block')) return;
       feedback.classList.remove('feedback--visible');
     });
   });
@@ -521,7 +723,7 @@ function clearCheckedStateIfEdited(textarea: HTMLTextAreaElement): void {
   const button = wrapper?.querySelector('.check-btn') as HTMLButtonElement | null;
   const feedback = wrapper?.querySelector('.feedback') as HTMLElement | null;
   setClasses(textarea, button, feedback, null);
-  clearFeedback(feedback);
+  keepFeedbackVisible(feedback);
   delete textarea.dataset.checkedValue;
 }
 
@@ -909,10 +1111,22 @@ export function ensureFreitextElements(): void {
         }
         bindTextFieldShortcut(questionField, button);
 
-        if (!this.querySelector('.feedback')) {
-          const feedback = document.createElement('div');
+        let feedbackSlot = this.querySelector('.freitext__feedback') as HTMLElement | null;
+        if (!feedbackSlot) {
+          feedbackSlot = document.createElement('div');
+          feedbackSlot.className = 'freitext__feedback';
+          actionRow.insertAdjacentElement('afterend', feedbackSlot);
+        } else if (feedbackSlot.previousElementSibling !== actionRow) {
+          actionRow.insertAdjacentElement('afterend', feedbackSlot);
+        }
+
+        let feedback = this.querySelector('.feedback') as HTMLElement | null;
+        if (!feedback) {
+          feedback = document.createElement('div');
           feedback.className = 'feedback';
-          target.appendChild(feedback);
+        }
+        if (feedback.parentElement !== feedbackSlot) {
+          feedbackSlot.appendChild(feedback);
         }
       };
 
@@ -1129,9 +1343,13 @@ export function ensureFreitextElements(): void {
 
       wrapper.appendChild(actionRow);
 
+      const feedbackSlot = document.createElement('div');
+      feedbackSlot.className = 'freitext__feedback';
+
       const feedback = document.createElement('div');
       feedback.className = 'feedback';
-      wrapper.appendChild(feedback);
+      feedbackSlot.appendChild(feedback);
+      wrapper.appendChild(feedbackSlot);
 
       this.appendChild(wrapper);
     }
@@ -1579,8 +1797,10 @@ async function checkFreitext(
     return;
   }
 
-  feedback.classList.remove('feedback--richtig', 'feedback--teilweise', 'feedback--falsch');
-  showFeedback(feedback, 'Rückmeldung wird erstellt...');
+  if (!keepFeedbackVisible(feedback)) {
+    feedback.classList.remove('feedback--richtig', 'feedback--teilweise', 'feedback--falsch');
+    showFeedback(feedback, 'Rückmeldung wird erstellt...');
+  }
   button.classList.add('check-btn--loading');
   button.disabled = true;
 
@@ -1638,12 +1858,16 @@ async function checkFreitext(
     (chatgpt && (chatgpt.raw || chatgpt.explanation)) ||
     (chatgptError ? chatgptError : 'Keine Rückmeldung erhalten.');
 
-  const info = classificationInfo(chatgpt?.classification, chatgpt?.classification_label);
+  const feedbackText = [premiseNotice, chatgpt?.explanation || rawText].filter(Boolean).join('\n\n');
+  const info = reconcileFreitextClassificationWithFeedback(
+    classificationInfo(chatgpt?.classification, chatgpt?.classification_label),
+    feedbackText
+  );
   setClasses(textarea, button, feedback, info.label);
   rememberCheckedValue(textarea, info.label);
   textarea.dataset.hasStoredAnswer = '1';
   delete textarea.dataset.userEdited;
-  showFeedback(feedback, [premiseNotice, chatgpt?.explanation || rawText].filter(Boolean).join('\n\n'));
+  showFeedback(feedback, feedbackText);
 
   button.classList.remove('check-btn--loading');
   button.disabled = false;

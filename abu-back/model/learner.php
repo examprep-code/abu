@@ -5,6 +5,7 @@ $m['learner']=[
     'classroom' => ['fkey', 'table'=>'classroom', 'key'=>'id'],
     'name' => ['word'],
     'email' => ['email'],
+    'phone' => ['word'],
     'code' => ['token'],
     'notes' => ['text'],
     'prompt' => ['text'],

@@ -98,6 +98,7 @@ export const AGENT_DATA_MODEL: AgentDataEntity[] = [
       { name: 'classroom', type: 'fkey classroom.id', description: 'Klassen-ID' },
       { name: 'name', type: 'word', description: 'Anzeigename' },
       { name: 'email', type: 'email', description: 'Optionale Email' },
+      { name: 'phone', type: 'word', description: 'Optionale Telefonnummer' },
       { name: 'code', type: 'token', description: '12-stelliger Lernenden-Code' },
       { name: 'notes', type: 'text', description: 'Notizen' },
       { name: 'prompt', type: 'longtext', description: 'Prompt-Kontext für Lernende' }

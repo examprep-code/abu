@@ -8,6 +8,10 @@ $modelPolicyModule = dirname(__DIR__) . '/snippets/agent/model_policy.php';
 if (is_readable($modelPolicyModule)) {
     include_once $modelPolicyModule;
 }
+$tokenCounterModule = dirname(__DIR__) . '/snippets/agent/token_counter.php';
+if (is_readable($tokenCounterModule)) {
+    include_once $tokenCounterModule;
+}
 include_once dirname(__DIR__) . '/datian-core/agent_openai_json.php';
 
 $agentLogConfig = function_exists('agent_logger_config')
@@ -314,6 +318,12 @@ $return['data'] = [
     'view' => ($parsed['view'] ?? '') === 'visual' ? 'visual' : 'html',
     'model' => $selectedModel,
 ];
+$usageStats = function_exists('ai_token_counter_record_openai_response')
+    ? ai_token_counter_record_openai_response(intval($user['id'] ?? 0), $decoded, $selectedModel)
+    : null;
+if (is_array($usageStats)) {
+    $return['data']['ai_usage'] = $usageStats;
+}
 
 $agentFinalizeLog('success', [
     'http_status' => 200,
@@ -321,6 +331,7 @@ $agentFinalizeLog('success', [
     'openai_model' => $selectedModel,
     'openai_attempts' => $modelAttempts,
     'openai_response' => $decoded,
+    'ai_usage' => $usageStats,
     'assistant_raw' => $raw,
     'assistant_parsed' => $return['data'],
 ]);

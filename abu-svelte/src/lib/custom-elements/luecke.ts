@@ -291,6 +291,7 @@ function bindOutsideClickHide(): void {
     if (!(target instanceof Element)) return;
     if (target.closest('.feedback') || target.closest('.check-btn')) return;
     document.querySelectorAll('.feedback.feedback--visible').forEach((feedback) => {
+      if (feedback.closest('freitext-block')) return;
       feedback.classList.remove('feedback--visible');
     });
   });

@@ -8,6 +8,10 @@ $modelPolicyModule = dirname(__DIR__) . '/snippets/agent/model_policy.php';
 if (is_readable($modelPolicyModule)) {
     include_once $modelPolicyModule;
 }
+$tokenCounterModule = dirname(__DIR__) . '/snippets/agent/token_counter.php';
+if (is_readable($tokenCounterModule)) {
+    include_once $tokenCounterModule;
+}
 
 // POST: speichern und KI-Bewertung zurückgeben
 if ($method === 'POST') {
@@ -20,6 +24,11 @@ if ($method === 'POST') {
     if (!$saveOnly && isset($chatgpt['_log']) && is_array($chatgpt['_log'])) {
         $chatgptLog = $chatgpt['_log'];
         unset($chatgpt['_log']);
+    }
+    $chatgptAiUsage = null;
+    if (!$saveOnly && isset($chatgpt['_ai_usage']) && is_array($chatgpt['_ai_usage'])) {
+        $chatgptAiUsage = $chatgpt['_ai_usage'];
+        unset($chatgpt['_ai_usage']);
     }
     $submittedUser = trim((string)($data['user'] ?? ''));
     $isPreviewMode = is_preview_answer_request($data, $submittedUser);
@@ -98,6 +107,9 @@ if ($method === 'POST') {
 
     // Stelle sicher, dass die KI-Rückmeldung im Response bleibt
     $return['data']['chatgpt'] = $chatgpt;
+    if (is_array($chatgptAiUsage)) {
+        $return['data']['ai_usage'] = $chatgptAiUsage;
+    }
 
     if (!empty($chatgpt['error'])) {
         $return['warning'] = $chatgpt['error'];
@@ -179,6 +191,29 @@ if ($method === 'PUT' || $method === 'PATCH') {
     return;
 }
 
+// DELETE: Preview-Antworten für den gewählten Preview-Kontext zurücksetzen
+if ($method === 'DELETE' && !empty($data['preview_reset'])) {
+    $userId = intval($user['id'] ?? 0);
+    if ($userId <= 0) {
+        $return['status'] = 401;
+        $return['warning'] = 'nicht eingeloggt';
+        return;
+    }
+
+    $result = delete_preview_answers_for_scope($data, $userId);
+    if (!empty($result['error'])) {
+        $return['status'] = intval($result['status'] ?? 400);
+        $return['warning'] = $result['error'];
+        return;
+    }
+
+    $return['data'] = array_merge($return['data'], [
+        'deleted' => intval($result['deleted'] ?? 0),
+        'scope' => $result['scope'] ?? '',
+    ]);
+    return;
+}
+
 // Optional Filter via URL-Parametern:
 // /answer//{sheet}
 // /answer//{sheet}/{user}
@@ -233,6 +268,7 @@ function bewerteAntwortMitKI($payload)
     }
 
     $payload = enrich_answer_payload_with_context_prompts($payload);
+    $exerciseType = strtolower(trim((string)($payload['exercise_type'] ?? 'luecke')));
 
     $sourceContext = build_gap_source_context($payload);
     if (!empty($sourceContext)) {
@@ -455,6 +491,16 @@ function bewerteAntwortMitKI($payload)
         $sourceContext = annotate_source_context_quality($sourceContext);
         $result['source_context'] = $sourceContext;
         $result = apply_property_portal_feedback($result, $sourceContext);
+    }
+    if ($exerciseType === 'freitext') {
+        $result = reconcile_freitext_feedback_classification($result);
+    }
+    if (function_exists('ai_token_counter_record_openai_response') && function_exists('ai_token_counter_resolve_answer_user_id')) {
+        $usageUserId = ai_token_counter_resolve_answer_user_id($payload);
+        $usageStats = ai_token_counter_record_openai_response($usageUserId, $decoded, $selectedModel);
+        if (is_array($usageStats)) {
+            $result['_ai_usage'] = $usageStats;
+        }
     }
     $resultPlaintext = answer_result_plaintext($result, $lastResponsePlaintext);
     answer_ai_console_log_text('KI Bewertung Plaintext', $resultPlaintext);
@@ -1908,6 +1954,335 @@ function freitext_individual_settings_text($payload)
     return implode("\n\n", $lines);
 }
 
+function freitext_feedback_category_rules()
+{
+    return implode("\n", [
+        'Kategorisierungsregeln:',
+        '- RICHTIG ist nur erlaubt, wenn keine Punkte unter Teilweise, Fehlerhaft oder Fehlt stehen. Sobald dort ein Punkt steht, ist die Gesamtklassifizierung höchstens TEILWEISE; wenn ausschliesslich Fehlerhaft/Fehlt-Punkte vorliegen, ist sie FALSCH.',
+        '- Erfüllt: nur sachlich korrekte, wirklich vorhandene Pflichtteile oder Kriterien. Jeder Erfüllt-Punkt muss ohne Einschränkung stimmen. Keine Kritik, keine Korrektur mit "aber/jedoch", keine "korrekt ist ..."-Hinweise, keine "könnte"-Hinweise und keine Sprachfehler hier einordnen.',
+        '- Teilweise: ein geforderter Inhalt ist vorhanden, aber zu schwach belegt oder nur teilweise ausgearbeitet, ohne der Quelle direkt zu widersprechen.',
+        '- Fehlerhaft: alles, was im aktuellen Text steht und nicht korrekt ist. Dazu gehören falsche Zahlen, falsche Wohnfläche, falscher Preis, falscher Ort/Lage, Widersprüche zur Quelle, Formulierungen wie "im Text steht X, im Inserat steht jedoch Y" oder "korrekt ist jedoch Y" sowie alle expliziten Fehler im Text. Wenn individuelle Einstellungen Sprachfeedback verlangen, gehören Rechtschreibung, Kommasetzung, Grammatik und sehr umständliche Formulierungen ausschliesslich hierher.',
+        '- Fehlt: nur Informationen oder Pflichtteile, die im aktuellen Text tatsächlich nicht vorkommen. Formulierungen wie "Keine Angaben zu ... vorhanden", "Preis fehlt" oder "Etage wird nicht genannt" gehören hierher. Was vorhanden, aber unklar oder fehlerhaft ist, gehört nicht zu Fehlt.',
+        '- Orts- und Lageangaben gelten als belegt, wenn sie im Titel, in der Adresse, in Hauptangaben oder in der Beschreibung der Quelle vorkommen. Markiere solche Angaben nicht als fehlend oder falsch. Subjektive Zusätze wie "abgelegen" nur als teilweise/ungestützt markieren, wenn die Quelle sie nicht trägt.',
+        '- Wenn mehrere deutliche Sprachfehler vorhanden sind und Sprachfeedback verlangt wird, ist die Gesamtklassifizierung höchstens TEILWEISE, auch wenn die Sachinformationen weitgehend stimmen.',
+        '- Wenn Platz knapp ist, priorisiere Fehlerhaft und Fehlt vor zusätzlichen Erfüllt-Punkten.',
+    ]);
+}
+
+function freitext_classification_score_for_label($label)
+{
+    if ($label === 'RICHTIG') return 1000;
+    if ($label === 'TEILWEISE') return 500;
+    if ($label === 'FALSCH') return 0;
+    return null;
+}
+
+function freitext_strip_feedback_bullet($value)
+{
+    $text = trim((string)$value);
+    $stripped = preg_replace('/^\s*(?:[-*•]|\d+[.)])\s+/u', '', $text);
+    return trim(is_string($stripped) ? $stripped : $text);
+}
+
+function freitext_feedback_normalize_item($value)
+{
+    $text = strtr((string)$value, [
+        'Ä' => 'A',
+        'Ö' => 'O',
+        'Ü' => 'U',
+        'ä' => 'a',
+        'ö' => 'o',
+        'ü' => 'u',
+        'ß' => 'ss',
+        'É' => 'E',
+        'È' => 'E',
+        'é' => 'e',
+        'è' => 'e',
+    ]);
+    $text = strtolower($text);
+    $text = preg_replace('/\s+/u', ' ', $text);
+    return trim(is_string($text) ? $text : '');
+}
+
+function freitext_feedback_item_is_language_error($value)
+{
+    $normalized = freitext_feedback_normalize_item($value);
+    $hasLanguageSignal = preg_match('/rechtschreib|grammatik|komma|kommasetzung|sprachfehler|sprachlich|formulierung|stil/', $normalized) === 1;
+    if (!$hasLanguageSignal) {
+        return false;
+    }
+    if (
+        preg_match('/kein(?:e|en|er|es|em)?\s+(?:rechtschreib|grammatik|komma|kommasetzung|sprachfehler)|(?:rechtschreibung|grammatik|kommasetzung)\s+(?:korrekt|stimmt)/', $normalized) === 1
+    ) {
+        return false;
+    }
+    return preg_match('/fehler|fehlerhaft|falsch|ungenau|unklar|umstandlich|verbesser|korrigier|gross|klein/', $normalized) === 1;
+}
+
+function freitext_feedback_item_is_missing($value)
+{
+    $normalized = freitext_feedback_normalize_item($value);
+    if ($normalized === '') {
+        return false;
+    }
+
+    if (
+        preg_match('/kein(?:e|en|er|es|em)?\s+(?:falsch|fehler|fehlerhaft|ungenau|unkorrekt|nicht korrekt|rechtschreib|grammatik|komma|kommasetzung|sprachfehler)/', $normalized) === 1 ||
+        preg_match('/\b(?:fehlt|fehlen)\s+nicht\b/', $normalized) === 1 ||
+        preg_match('/kein(?:e|en|er|es|em)?\s+fehlend/', $normalized) === 1
+    ) {
+        return false;
+    }
+
+    return (
+        preg_match('/kein(?:e|en|er|es|em)?\s+(?:angaben|informationen|hinweise|nennungen|details)\b.*\b(?:vorhanden|genannt|angegeben|erwahnt|enthalten)\b/', $normalized) === 1 ||
+        preg_match('/\b(?:angaben|informationen|hinweise|details|preisangaben|preise?|miete|nebenkosten|etage|baujahr|ausstattung|ambiente|lageinformationen?)\b.*\bfehl(?:t|en|end)\b/', $normalized) === 1 ||
+        preg_match('/\b(?:fehlt|fehlen|fehlend|nicht vorhanden|(?:wird|werden)\s+nicht\s+(?:genannt|angegeben|erwahnt)|nicht\s+(?:genannt|angegeben|erwahnt|enthalten))\b/', $normalized) === 1
+    );
+}
+
+function freitext_feedback_item_is_content_error($value)
+{
+    $normalized = freitext_feedback_normalize_item($value);
+    $parts = preg_split('/\b(?:aber|jedoch|allerdings|hingegen|trotzdem|sondern)\b/', $normalized);
+    $hasContrast = is_array($parts) && count($parts) > 1;
+    $issueText = $normalized;
+    if ($hasContrast) {
+        $tail = array_slice($parts, 1);
+        $issueText = trim(implode(' ', $tail));
+        if ($issueText === '') {
+            $issueText = $normalized;
+        }
+    }
+
+    if (
+        !$hasContrast &&
+        preg_match('/kein(?:e|en|er|es|em)?\s+(?:falsch|fehler|fehlerhaft|ungenau|unkorrekt|nicht korrekt)/', $normalized) === 1
+    ) {
+        return false;
+    }
+
+    if (
+        preg_match('/nicht\s+korrekt|inkorrekt|fehlerhaft|falsch|ungenau|unprazis|unpraezis|irrefuhrend|widerspr|abweich|zu\s+(?:hoch|niedrig|gross|klein|allgemein)|korrigier|falsche\s+angabe/', $issueText) === 1
+    ) {
+        return true;
+    }
+
+    if (!$hasContrast) {
+        return preg_match('/\b(?:statt|anstelle)\b.*\b(?:korrekt|richtig|quelle|inserat|ausgangslage|vorgabe|muss|musste)\b/', $normalized) === 1;
+    }
+
+    return (
+        preg_match('/\b(?:quelle|inserat|ausgangslage|vorgabe|referenz|lehrerlosung)\b.*\b(?:aber|jedoch|allerdings|hingegen|sondern)\b/', $normalized) === 1 ||
+        preg_match('/\b(?:korrekt|richtig)\s+(?:ist|sind|ware|waere)\s+(?:aber|jedoch|allerdings|hingegen|sondern)\b/', $normalized) === 1 ||
+        preg_match('/\b(?:aber|jedoch|allerdings|hingegen|sondern)\b.*\b(?:korrekt|richtig|quelle|inserat|ausgangslage|vorgabe|statt|nennt|genannt|angegeben|beschrieben|tatsachlich|richtigerweise)\b/', $normalized) === 1
+    );
+}
+
+function freitext_feedback_item_target_group($group, $text)
+{
+    if ($text === '') {
+        return $group;
+    }
+    if ($group !== 'missing' && freitext_feedback_item_is_missing($text)) {
+        return 'missing';
+    }
+    if (
+        $group !== 'wrong' &&
+        (freitext_feedback_item_is_language_error($text) || freitext_feedback_item_is_content_error($text))
+    ) {
+        return 'wrong';
+    }
+    return $group;
+}
+
+function freitext_normalize_feedback_heading($value)
+{
+    $text = trim((string)$value);
+    $text = preg_replace('/^#+\s*/u', '', $text);
+    $text = trim(is_string($text) ? $text : (string)$value);
+
+    for ($i = 0; $i < 2; $i++) {
+        if (preg_match('/^([*_]{1,3})(.+)\1$/u', $text, $matches)) {
+            $text = trim($matches[2]);
+        }
+        $trimmed = preg_replace('/[:：]+$/u', '', $text);
+        $text = trim(is_string($trimmed) ? $trimmed : $text);
+    }
+
+    $text = strtr($text, [
+        'Ä' => 'A',
+        'Ö' => 'O',
+        'Ü' => 'U',
+        'ä' => 'a',
+        'ö' => 'o',
+        'ü' => 'u',
+        'É' => 'E',
+        'È' => 'E',
+        'é' => 'e',
+        'è' => 'e',
+    ]);
+    $text = strtolower($text);
+    $text = preg_replace('/\s+/u', ' ', $text);
+    return trim(is_string($text) ? $text : '');
+}
+
+function freitext_feedback_group_for_heading($value)
+{
+    $heading = freitext_normalize_feedback_heading($value);
+    $groups = [
+        'fulfilled' => ['erfullt', 'erfuellt', 'fulfilled', 'ok'],
+        'partial' => ['teilweise', 'teils', 'partial'],
+        'wrong' => ['fehlerhaft', 'falsch', 'wrong', 'incorrect'],
+        'missing' => ['fehlt', 'fehlend', 'missing', 'offen'],
+    ];
+    foreach ($groups as $group => $aliases) {
+        if (in_array($heading, $aliases, true)) {
+            return $group;
+        }
+    }
+    return '';
+}
+
+function freitext_feedback_inline_group($line)
+{
+    $clean = freitext_strip_feedback_bullet($line);
+    if (!preg_match('/^([^:：]{1,40})[:：]\s*(.*)$/u', $clean, $matches)) {
+        return null;
+    }
+    $group = freitext_feedback_group_for_heading($matches[1]);
+    if ($group === '') {
+        return null;
+    }
+    return [
+        'group' => $group,
+        'text' => freitext_strip_feedback_bullet($matches[2] ?? ''),
+    ];
+}
+
+function freitext_feedback_group_counts($text)
+{
+    $counts = [
+        'fulfilled' => 0,
+        'partial' => 0,
+        'wrong' => 0,
+        'missing' => 0,
+        'structured' => false,
+    ];
+    $currentGroup = '';
+    $lines = preg_split('/\r\n|\r|\n/', (string)$text);
+    if (!is_array($lines)) {
+        return $counts;
+    }
+
+    foreach ($lines as $rawLine) {
+        $line = trim((string)$rawLine);
+        if ($line === '') {
+            continue;
+        }
+
+        $normalized = freitext_normalize_feedback_heading($line);
+        if (in_array($normalized, ['richtig', 'teilweise', 'falsch'], true)) {
+            continue;
+        }
+
+        if (preg_match('/^Bewertung\s*:\s*(.*)$/iu', $line, $matches)) {
+            $counts['structured'] = true;
+            $currentGroup = '';
+            $remainder = freitext_strip_feedback_bullet($matches[1] ?? '');
+            $inline = $remainder !== '' ? freitext_feedback_inline_group($remainder) : null;
+            if (is_array($inline)) {
+                $currentGroup = $inline['group'];
+                if ($inline['text'] !== '') {
+                    $targetGroup = freitext_feedback_item_target_group($currentGroup, $inline['text']);
+                    $counts[$targetGroup]++;
+                }
+            }
+            continue;
+        }
+
+        $inline = freitext_feedback_inline_group($line);
+        if (is_array($inline)) {
+            $counts['structured'] = true;
+            $currentGroup = $inline['group'];
+            if ($inline['text'] !== '') {
+                $targetGroup = freitext_feedback_item_target_group($currentGroup, $inline['text']);
+                $counts[$targetGroup]++;
+            }
+            continue;
+        }
+
+        $headingGroup = freitext_feedback_group_for_heading($line);
+        if ($headingGroup !== '') {
+            $counts['structured'] = true;
+            $currentGroup = $headingGroup;
+            continue;
+        }
+
+        $clean = freitext_strip_feedback_bullet($line);
+        if ($clean !== '' && $currentGroup !== '') {
+            $targetGroup = freitext_feedback_item_target_group($currentGroup, $clean);
+            $counts[$targetGroup]++;
+        }
+    }
+
+    return $counts;
+}
+
+function reconcile_freitext_feedback_classification($result)
+{
+    if (!is_array($result)) {
+        return $result;
+    }
+
+    $feedbackText = trim((string)($result['explanation'] ?? ($result['raw'] ?? '')));
+    if ($feedbackText === '') {
+        return $result;
+    }
+
+    $counts = freitext_feedback_group_counts($feedbackText);
+    if (empty($counts['structured'])) {
+        return $result;
+    }
+
+    $currentLabel = strtoupper(trim((string)($result['classification_label'] ?? '')));
+    if (!in_array($currentLabel, ['RICHTIG', 'TEILWEISE', 'FALSCH'], true)) {
+        $currentLabel = null;
+    }
+
+    $fulfilled = intval($counts['fulfilled'] ?? 0);
+    $partial = intval($counts['partial'] ?? 0);
+    $wrong = intval($counts['wrong'] ?? 0);
+    $missing = intval($counts['missing'] ?? 0);
+    $severe = $wrong + $missing;
+    $issues = $partial + $severe;
+    $nextLabel = $currentLabel;
+
+    if ($currentLabel === 'RICHTIG' && $issues > 0) {
+        $nextLabel = ($severe > 0 && $fulfilled === 0 && $partial === 0) ? 'FALSCH' : 'TEILWEISE';
+    } elseif (
+        ($currentLabel === 'TEILWEISE' || $currentLabel === null) &&
+        $severe > 0 &&
+        $fulfilled === 0 &&
+        $partial === 0
+    ) {
+        $nextLabel = 'FALSCH';
+    } elseif ($currentLabel === null) {
+        if ($issues > 0) {
+            $nextLabel = 'TEILWEISE';
+        } elseif ($fulfilled > 0) {
+            $nextLabel = 'RICHTIG';
+        }
+    }
+
+    if ($nextLabel !== $currentLabel && $nextLabel !== null) {
+        $result['classification_label'] = $nextLabel;
+        $result['classification'] = freitext_classification_score_for_label($nextLabel);
+    }
+
+    return $result;
+}
+
 function build_answer_prompt_sources($payload, $messages)
 {
     $exerciseType = strtolower(trim((string)($payload['exercise_type'] ?? '')));
@@ -2303,7 +2678,7 @@ function build_freitext_prompt_source_parts($payload)
             'Backend-Festtext: build_freitext_feedback_messages() user',
             null,
             null,
-            'Gib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand: falls ein optionaler Prüfhinweis vorhanden ist zuerst die Antwort darauf, danach eine klar getrennte Bewertung mit Listenpunkten unter Erfüllt, Teilweise, Fehlerhaft und Fehlt.',
+            freitext_feedback_category_rules() . "\nGib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand: falls ein optionaler Prüfhinweis vorhanden ist zuerst die Antwort darauf, danach eine klar getrennte Bewertung mit Listenpunkten unter Erfüllt, Teilweise, Fehlerhaft und Fehlt.",
             'backend_template'
         ),
     ];
@@ -2434,12 +2809,13 @@ function build_freitext_feedback_messages($payload)
     $lengthInfo = [];
     if ($minLength !== '') $lengthInfo[] = 'Mindestlänge: ' . $minLength . ' Zeichen';
     if ($maxLength !== '') $lengthInfo[] = 'Maximallänge: ' . $maxLength . ' Zeichen';
+    $categoryRules = freitext_feedback_category_rules();
 
     return [
         [
             'role' => 'system',
             'content' =>
-                'Du bist eine ABU-Lehrperson und gibst lernwirksames Mikro-Feedback zu einem deutschsprachigen Freitext. Beurteile den aktuellen Zwischenstand, nicht eine Endnote. Berücksichtige die Prämissen, die Ausgangslage und die ausgefüllten Werte als verbindlichen Sachkontext. Nutze die KI-Hinweise zu den Prämissen, um Zahlen, Daten, Links und Sachangaben besonders genau auf Plausibilität und Passung zu prüfen. Berücksichtige den zusätzlichen Prüfauftrag der Lehrperson zum Haupttext, weitere Prüf-Prompts und individuelle Einstellungen zur lernenden Person, Klasse oder Schule als interne Bewertungsanweisung. Wenn noch kein Text vorhanden ist, bewerte nur die ausgefüllten Prämissen als Vorbereitung und gib Feedback, ob sie stimmig, plausibel und nutzbar sind. Wenn der Text einer verbindlichen Ausgangslage oder einem ausgefüllten Wert widerspricht, darf er nicht RICHTIG sein; bei einem zentralen Widerspruch ist er FALSCH. Prüfe danach, welche zwingenden Teile vorhanden sind und welche fehlen oder zu schwach sind. Antworte immer mit folgender Struktur: Erste Zeile NUR RICHTIG, TEILWEISE oder FALSCH. Wenn ein optionaler Prüfhinweis / eine Zusatzfrage vorhanden ist, beginnt die zweite Zeile exakt mit "Antwort auf Prüfhinweis:" und beantwortet den Hinweis knapp; danach folgt eine Leerzeile. "Kein optionaler Prüfhinweis angegeben." bedeutet, dass kein Prüfhinweis vorhanden ist und keine Zeile "Antwort auf Prüfhinweis:" ausgegeben wird. Danach folgt eine neue Zeile, die exakt mit "Bewertung:" beginnt. Unter "Bewertung:" folgen kurze Listenpunkte in diesen Kategorien: "Erfüllt:", "Teilweise:", "Fehlerhaft:", "Fehlt:". Verwende nur Kategorien, die wirklich Punkte enthalten. Jeder Listenpunkt beginnt mit "- ". Maximal 6 Listenpunkte insgesamt, jeder Punkt kurz und konkret. Keine komplette Neuformulierung, keine Musterlösung, keine langen Erklärungen.',
+                'Du bist eine ABU-Lehrperson und gibst lernwirksames Mikro-Feedback zu einem deutschsprachigen Freitext. Beurteile den aktuellen Zwischenstand, nicht eine Endnote. Berücksichtige die Prämissen, die Ausgangslage und die ausgefüllten Werte als verbindlichen Sachkontext. Nutze die KI-Hinweise zu den Prämissen, um Zahlen, Daten, Links und Sachangaben besonders genau auf Plausibilität und Passung zu prüfen. Berücksichtige den zusätzlichen Prüfauftrag der Lehrperson zum Haupttext, weitere Prüf-Prompts und individuelle Einstellungen zur lernenden Person, Klasse oder Schule als interne Bewertungsanweisung. Wenn noch kein Text vorhanden ist, bewerte nur die ausgefüllten Prämissen als Vorbereitung und gib Feedback, ob sie stimmig, plausibel und nutzbar sind. Wenn der Text einer verbindlichen Ausgangslage oder einem ausgefüllten Wert widerspricht, darf er nicht RICHTIG sein; bei einem zentralen Widerspruch ist er FALSCH. Prüfe danach, welche zwingenden Teile vorhanden sind und welche fehlen oder zu schwach sind. ' . $categoryRules . ' Antworte immer mit folgender Struktur: Erste Zeile NUR RICHTIG, TEILWEISE oder FALSCH. Wenn ein optionaler Prüfhinweis / eine Zusatzfrage vorhanden ist, beginnt die zweite Zeile exakt mit "Antwort auf Prüfhinweis:" und beantwortet den Hinweis knapp; danach folgt eine Leerzeile. "Kein optionaler Prüfhinweis angegeben." bedeutet, dass kein Prüfhinweis vorhanden ist und keine Zeile "Antwort auf Prüfhinweis:" ausgegeben wird. Danach folgt eine neue Zeile, die exakt mit "Bewertung:" beginnt. Unter "Bewertung:" folgen kurze Listenpunkte in diesen Kategorien: "Erfüllt:", "Teilweise:", "Fehlerhaft:", "Fehlt:". Verwende nur Kategorien, die wirklich Punkte enthalten. Jeder Listenpunkt beginnt mit "- ". Maximal 8 Listenpunkte insgesamt, jeder Punkt kurz und konkret. Keine komplette Neuformulierung, keine Musterlösung, keine langen Erklärungen.',
         ],
         [
             'role' => 'user',
@@ -2466,7 +2842,9 @@ function build_freitext_feedback_messages($payload)
                 ($antwort !== '' ? 'Freitext mit Prämissen prüfen.' : 'Vorbereitung prüfen: Es ist noch kein Text vorhanden; bewerte nur die Prämissenwerte.') .
                 "\n\nAktueller Text:\n\"" .
                 ($antwort !== '' ? $antwort : '[noch kein Text geschrieben]') .
-                "\"\n\nGib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand: falls ein optionaler Prüfhinweis vorhanden ist zuerst die Antwort darauf, danach eine klar getrennte Bewertung mit Listenpunkten unter Erfüllt, Teilweise, Fehlerhaft und Fehlt.",
+                "\"\n\n" .
+                $categoryRules .
+                "\n\nGib überarbeitungsorientiertes Mikro-Feedback zum aktuellen Stand: falls ein optionaler Prüfhinweis vorhanden ist zuerst die Antwort darauf, danach eine klar getrennte Bewertung mit Listenpunkten unter Erfüllt, Teilweise, Fehlerhaft und Fehlt.",
         ],
     ];
 }
@@ -2635,6 +3013,148 @@ function upsert_preview_answer($payload)
     $id = sql_create('answer', $storage);
     delete_preview_answer_duplicates($storage, $id);
     return $id;
+}
+
+function delete_preview_answers_for_scope($payload, $userId)
+{
+    if (!is_array($payload)) {
+        $payload = [];
+    }
+
+    $sheet = trim((string)($payload['sheet'] ?? ''));
+    if ($sheet === '') {
+        return ['status' => 400, 'error' => 'sheet fehlt'];
+    }
+
+    $schoolId = preview_scope_int($payload['school'] ?? ($payload['preview_school'] ?? null));
+    $classroomId = preview_scope_int($payload['classroom'] ?? ($payload['preview_classroom'] ?? null));
+    $learnerCode = trim((string)($payload['learner'] ?? ($payload['preview_learner'] ?? '')));
+    $uid = intval($userId);
+
+    if ($learnerCode !== '') {
+        $learnerRows = sql_get(
+            'SELECT l.id, l.classroom, c.school FROM `learner` l ' .
+            'LEFT JOIN `classroom` c ON c.id = l.classroom ' .
+            'WHERE l.code = "' . sql_escape($learnerCode) . '" ' .
+            'AND l.user = ' . $uid . ' LIMIT 1;'
+        );
+        if (empty($learnerRows)) {
+            return ['status' => 404, 'error' => 'lernende nicht gefunden'];
+        }
+        $learnerClassroomId = preview_scope_int($learnerRows[0]['classroom'] ?? null);
+        $learnerSchoolId = preview_scope_int($learnerRows[0]['school'] ?? null);
+        if ($classroomId > 0 && $learnerClassroomId > 0 && $classroomId !== $learnerClassroomId) {
+            return ['status' => 404, 'error' => 'lernende nicht in dieser Klasse gefunden'];
+        }
+        if ($classroomId <= 0) {
+            $classroomId = $learnerClassroomId;
+        }
+        if ($schoolId > 0 && $learnerSchoolId > 0 && $schoolId !== $learnerSchoolId) {
+            return ['status' => 404, 'error' => 'lernende nicht in dieser Schule gefunden'];
+        }
+        if ($schoolId <= 0) {
+            $schoolId = $learnerSchoolId;
+        }
+    }
+
+    if ($classroomId > 0) {
+        $classRows = sql_get(
+            'SELECT id, school FROM `classroom` WHERE id = ' . $classroomId .
+            ' AND user = ' . $uid . ' LIMIT 1;'
+        );
+        if (empty($classRows)) {
+            return ['status' => 404, 'error' => 'klasse nicht gefunden'];
+        }
+        $classSchoolId = preview_scope_int($classRows[0]['school'] ?? null);
+        if ($schoolId > 0 && $classSchoolId > 0 && $schoolId !== $classSchoolId) {
+            return ['status' => 404, 'error' => 'klasse nicht in dieser Schule gefunden'];
+        }
+        if ($schoolId <= 0) {
+            $schoolId = $classSchoolId;
+        }
+    }
+
+    if ($schoolId > 0) {
+        $schoolRows = sql_get(
+            'SELECT id FROM `school` WHERE id = ' . $schoolId .
+            ' AND user = ' . $uid . ' LIMIT 1;'
+        );
+        if (empty($schoolRows)) {
+            return ['status' => 404, 'error' => 'schule nicht gefunden'];
+        }
+    }
+
+    $scope = '';
+    if ($learnerCode !== '') {
+        $scope = 'learner';
+    } elseif ($classroomId > 0) {
+        $scope = 'classroom';
+    } elseif ($schoolId > 0) {
+        $scope = 'school';
+    } else {
+        return ['status' => 400, 'error' => 'preview-kontext fehlt'];
+    }
+
+    $where = [
+        '`sheet` = "' . sql_escape($sheet) . '"',
+        '`user` LIKE "preview:%"',
+    ];
+
+    $scopeWhere = [];
+    if ($scope === 'learner') {
+        $learnerPattern = 'preview:%:%:%:l' . answer_like_escape($learnerCode);
+        if ($classroomId > 0) {
+            $learnerPattern = 'preview:%:%:c' . $classroomId . ':l' . answer_like_escape($learnerCode);
+        }
+        if ($schoolId > 0 && $classroomId > 0) {
+            $learnerPattern = 'preview:%:s' . $schoolId . ':c' . $classroomId . ':l' . answer_like_escape($learnerCode);
+        }
+        $scopeWhere[] = '`user` LIKE "' . sql_escape($learnerPattern) . '"';
+        if ($classroomId > 0 && answer_table_has_column('classroom')) {
+            $scopeWhere[] = '(`classroom` = ' . $classroomId .
+                ' AND `user` LIKE "%:l' . sql_escape(answer_like_escape($learnerCode)) . '")';
+        }
+    } elseif ($scope === 'classroom') {
+        $classPattern = 'preview:%:%:c' . $classroomId . ':%';
+        if ($schoolId > 0) {
+            $classPattern = 'preview:%:s' . $schoolId . ':c' . $classroomId . ':%';
+        }
+        $scopeWhere[] = '`user` LIKE "' . sql_escape($classPattern) . '"';
+        if (answer_table_has_column('classroom')) {
+            $scopeWhere[] = '(`classroom` = ' . $classroomId . ' AND `user` LIKE "preview:%")';
+        }
+    } else {
+        $schoolPattern = 'preview:%:s' . $schoolId . ':%';
+        $scopeWhere[] = '`user` LIKE "' . sql_escape($schoolPattern) . '"';
+    }
+
+    if (empty($scopeWhere)) {
+        return ['status' => 400, 'error' => 'preview-kontext ungültig'];
+    }
+    $where[] = '(' . implode(' OR ', $scopeWhere) . ')';
+
+    $whereSql = implode(' AND ', $where);
+    $countRows = sql_get('SELECT COUNT(*) AS count FROM `answer` WHERE ' . $whereSql . ';');
+    $deleted = intval($countRows[0]['count'] ?? 0);
+    if ($deleted > 0) {
+        sql_set('DELETE FROM `answer` WHERE ' . $whereSql . ';');
+    }
+
+    return [
+        'deleted' => $deleted,
+        'scope' => $scope,
+    ];
+}
+
+function preview_scope_int($value)
+{
+    $num = intval($value);
+    return $num > 0 ? $num : 0;
+}
+
+function answer_like_escape($value)
+{
+    return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], (string)$value);
 }
 
 function latest_answer_classification($sheet, $key, $answerUser, $classroom = null)

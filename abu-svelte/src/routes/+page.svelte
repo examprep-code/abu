@@ -199,6 +199,7 @@
   let selectedLearnerCode = '';
   let newLearnerName = '';
   let newLearnerEmail = '';
+  let newLearnerPhone = '';
   let newLearnerNotes = '';
   let newLearnerPrompt = '';
   let showLearnerModal = false;
@@ -233,6 +234,11 @@
   let previewLearnersError = '';
   let previewLearnersClassKey = null;
   let previewLearnersRequestId = 0;
+  let previewResetting = false;
+  let previewResetError = '';
+  let previewResetStatus = '';
+  let previewResetScope = null;
+  let previewRenderKey = 0;
 
   let visualBlocks = [];
   let visualBlockIds = [];
@@ -1170,8 +1176,44 @@
     };
   };
 
+  const rawAiUsageFromPayload = (payload) =>
+    payload?.data?.ai_usage ?? payload?.data?.user?.ai_usage;
+
   const extractAiUsageFromPayload = (payload) =>
-    normalizeAiUsage(payload?.data?.ai_usage ?? payload?.data?.user?.ai_usage ?? null);
+    normalizeAiUsage(rawAiUsageFromPayload(payload) ?? null);
+
+  const updateAiUsageFromPayload = (payload) => {
+    const usage = rawAiUsageFromPayload(payload);
+    if (usage === undefined || usage === null) return;
+    userAiUsage = normalizeAiUsage(usage);
+    if (!browser || !token) return;
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const saved = raw ? JSON.parse(raw) : {};
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          ...saved,
+          token,
+          email: userEmail || saved?.email || '',
+          id: userId ?? saved?.id ?? null,
+          role: userRole ?? saved?.role ?? 1,
+          ai_usage: userAiUsage
+        })
+      );
+    } catch {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          token,
+          email: userEmail,
+          id: userId,
+          role: userRole,
+          ai_usage: userAiUsage
+        })
+      );
+    }
+  };
 
   const formatUsageCount = (value) => usageNumberFormatter.format(Math.max(0, Number(value) || 0));
   const formatUsageUsd = (value) =>
@@ -1325,7 +1367,9 @@
 
   const readPayload = async (res) => {
     try {
-      return await res.json();
+      const payload = await res.json();
+      updateAiUsageFromPayload(payload);
+      return payload;
     } catch {
       return { warning: 'Antwort ist kein JSON', data: {} };
     }
@@ -1454,14 +1498,14 @@
 
   function buildLearnerPortalHref(learnerEntry) {
     const code = (learnerEntry?.code ?? '').toString().trim();
-    if (!code) return '/lernende';
+    if (!code) return '/lernende/';
     const params = new URLSearchParams();
     params.set('code', code);
     const classId = normalizeClassId(learnerEntry?.classroom ?? selectedClassId);
     if (classId) {
       params.set('classroom', String(classId));
     }
-    return `/lernende?${params.toString()}`;
+    return `/lernende/?${params.toString()}`;
   }
 
   function isLearnerAnswersViewActive() {
@@ -1682,7 +1726,7 @@
       learnerLoginToken = '';
       if (browser) {
         localStorage.setItem(LEARNER_STORAGE_KEY, JSON.stringify(learnerEntry));
-        window.location.href = `/lernende?token=${encodeURIComponent(learnerCode)}`;
+        window.location.href = `/lernende/?token=${encodeURIComponent(learnerCode)}`;
       }
     } catch (err) {
       learnerLoginError = err?.message ?? 'Login fehlgeschlagen';
@@ -1724,7 +1768,9 @@
     selectedLearnerCode = '';
     newLearnerName = '';
     newLearnerEmail = '';
+    newLearnerPhone = '';
     newLearnerNotes = '';
+    newLearnerPrompt = '';
     learnerModalMode = 'create';
     showLearnerModal = false;
     planAssignments = [];
@@ -1760,6 +1806,11 @@
     previewLearnerCode = '';
     previewLearners = [];
     previewLearnersClassKey = null;
+    previewResetting = false;
+    previewResetError = '';
+    previewResetStatus = '';
+    previewResetScope = null;
+    previewRenderKey = 0;
 	    agentPrompt = '';
     agentStatus = '';
     agentPending = false;
@@ -2301,6 +2352,11 @@
     previewLearnerCode = '';
     previewLearners = [];
     previewLearnersClassKey = null;
+    previewResetting = false;
+    previewResetError = '';
+    previewResetStatus = '';
+    previewResetScope = null;
+    previewRenderKey = 0;
 	    answers = [];
     answersError = '';
     answersMeta = '';
@@ -2791,8 +2847,10 @@
     const normalizedSchoolId = normalizeSchoolId(current?.school);
     classSchoolId = normalizedSchoolId ? String(normalizedSchoolId) : '';
     selectedLearnerId = null;
+    selectedLearnerCode = '';
     newLearnerName = '';
     newLearnerEmail = '';
+    newLearnerPhone = '';
     newLearnerNotes = '';
     newLearnerPrompt = '';
     learnerModalMode = 'create';
@@ -2967,7 +3025,9 @@
           selectedLearnerCode = '';
           newLearnerName = '';
           newLearnerEmail = '';
+          newLearnerPhone = '';
           newLearnerNotes = '';
+          newLearnerPrompt = '';
           learnerModalMode = 'create';
         }
       }
@@ -2983,6 +3043,7 @@
     const current = learners.find((entry) => entry.id === id);
     newLearnerName = current?.name ?? '';
     newLearnerEmail = current?.email ?? '';
+    newLearnerPhone = current?.phone ?? '';
     newLearnerNotes = current?.notes ?? '';
     newLearnerPrompt = current?.prompt ?? '';
     selectedLearnerCode = current?.code ?? '';
@@ -3001,6 +3062,7 @@
           classroom: selectedClassId,
           name: newLearnerName,
           email: newLearnerEmail,
+          phone: newLearnerPhone,
           notes: newLearnerNotes,
           prompt: newLearnerPrompt
         })
@@ -3011,6 +3073,8 @@
         return;
       }
       newLearnerName = '';
+      newLearnerEmail = '';
+      newLearnerPhone = '';
       newLearnerNotes = '';
       newLearnerPrompt = '';
       await fetchLearners(selectedClassId);
@@ -3031,6 +3095,8 @@
         body: JSON.stringify({
           id: selectedLearnerId,
           name: newLearnerName,
+          email: newLearnerEmail,
+          phone: newLearnerPhone,
           notes: newLearnerNotes,
           prompt: newLearnerPrompt
         })
@@ -3041,6 +3107,8 @@
         return;
       }
       newLearnerName = '';
+      newLearnerEmail = '';
+      newLearnerPhone = '';
       newLearnerNotes = '';
       newLearnerPrompt = '';
       selectedLearnerCode = '';
@@ -3074,6 +3142,8 @@
         selectedLearnerId = null;
         selectedLearnerCode = '';
         newLearnerName = '';
+        newLearnerEmail = '';
+        newLearnerPhone = '';
         newLearnerNotes = '';
         newLearnerPrompt = '';
         learnerModalMode = 'create';
@@ -3112,8 +3182,12 @@
     classSchoolId = '';
     learners = [];
     selectedLearnerId = null;
+    selectedLearnerCode = '';
     newLearnerName = '';
+    newLearnerEmail = '';
+    newLearnerPhone = '';
     newLearnerNotes = '';
+    newLearnerPrompt = '';
     learnerModalMode = 'create';
     classPrompt = '';
   };
@@ -3704,6 +3778,7 @@
       tag
         .replace(/\scontenteditable\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
         .replace(/\sdata-editor-selected\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+        .replace(/\sstyle\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     );
 
   const stripVisualTerminalCaretText = (value = '') =>
@@ -3861,13 +3936,12 @@
   const getFreitextMainPrompt = (html = '') => {
     const { container } = parseHtmlFragment(html);
     const freitext = getFreitextElementFromContainer(container);
-    return (
-      freitext?.getAttribute?.('prompt') ||
-      freitext?.getAttribute?.('teacher-prompt') ||
-      freitext?.getAttribute?.('data-prompt') ||
-      freitext?.getAttribute?.('data-teacher-prompt') ||
-      ''
-    ).trim();
+    const attributes = ['prompt', 'teacher-prompt', 'data-prompt', 'data-teacher-prompt'];
+    for (const attribute of attributes) {
+      const value = freitext?.getAttribute?.(attribute);
+      if (value !== null && value !== '') return value;
+    }
+    return '';
   };
 
   const getFreitextCriteria = (html = '') => {
@@ -4381,12 +4455,12 @@
     if (!container) return html || '';
     const freitext = getFreitextElementFromContainer(container);
     if (!freitext) return container.innerHTML;
-    const normalizedPrompt = String(prompt ?? '').trim();
+    const normalizedPrompt = String(prompt ?? '');
     freitext.removeAttribute('prompt');
     freitext.removeAttribute('teacher-prompt');
     freitext.removeAttribute('data-prompt');
     freitext.removeAttribute('data-teacher-prompt');
-    if (normalizedPrompt) {
+    if (normalizedPrompt !== '') {
       freitext.setAttribute('prompt', normalizedPrompt);
     }
     return container.innerHTML;
@@ -8510,6 +8584,7 @@
 	  }
 
   const handlePreviewSchoolChange = () => {
+    clearPreviewResetMessages();
     if (!previewSchoolId) return;
     const selectedClass = classes.find(
       (entry) => normalizeClassId(entry?.id) === normalizeClassId(previewClassId)
@@ -8522,7 +8597,12 @@
   };
 
   const handlePreviewClassChange = () => {
+    clearPreviewResetMessages();
     previewLearnerCode = '';
+  };
+
+  const handlePreviewLearnerChange = () => {
+    clearPreviewResetMessages();
   };
 
   const previewContext = () => {
@@ -8544,6 +8624,102 @@
     const classPart = context?.classroom ? `c${context.classroom}` : 'c0';
     const learnerPart = context?.learner ? `l${context.learner}` : 'l0';
     return `preview:${sheetPart}:${schoolPart}:${classPart}:${learnerPart}`;
+  };
+
+  const clearPreviewResetMessages = () => {
+    previewResetError = '';
+    previewResetStatus = '';
+  };
+
+  const buildPreviewResetScope = () => {
+    const context = previewContext();
+    if (context.learner) {
+      const learner = previewLearners.find(
+        (entry) => String(entry?.code ?? '') === String(context.learner)
+      );
+      return {
+        type: 'learner',
+        label: `Lernende:r ${learner ? formatAnswersLearnerLabel(learner) : context.learner}`
+      };
+    }
+    if (context.classroom) {
+      const classroom = classes.find(
+        (entry) => normalizeClassId(entry?.id) === context.classroom
+      );
+      return {
+        type: 'classroom',
+        label: classroom ? formatClassLabel(classroom) : `Klasse ${context.classroom}`
+      };
+    }
+    if (context.school) {
+      const label = getSchoolLabel(context.school);
+      return {
+        type: 'school',
+        label: label ? `Schule ${label}` : `Schule ${context.school}`
+      };
+    }
+    return null;
+  };
+
+  $: {
+    previewSchoolId;
+    previewClassId;
+    previewLearnerCode;
+    previewContextClassId;
+    previewLearners;
+    classes;
+    schools;
+    schoolMap;
+    previewResetScope = buildPreviewResetScope();
+  }
+
+  const resetPreviewAnswers = async () => {
+    const scope = buildPreviewResetScope();
+    if (!scope) {
+      previewResetError = 'Bitte zuerst eine Schule, Klasse oder Lernende:n auswählen.';
+      previewResetStatus = '';
+      return;
+    }
+    const label = scope.label || 'Auswahl';
+    if (browser && !window.confirm(`${label}: Preview-Antworten für dieses Sheet wirklich zurücksetzen?`)) {
+      return;
+    }
+
+    const context = previewContext();
+    const body = {
+      preview_reset: true,
+      sheet: selectedKey || 'draft'
+    };
+    if (context.school) body.school = String(context.school);
+    if (context.classroom) body.classroom = String(context.classroom);
+    if (context.learner) body.learner = context.learner;
+
+    previewResetting = true;
+    previewResetError = '';
+    previewResetStatus = '';
+    try {
+      const res = await apiFetch('answer', {
+        method: 'DELETE',
+        body: JSON.stringify(body)
+      });
+      const payload = await readPayload(res);
+      if (!res.ok) {
+        throw new Error(payload?.warning || 'Preview-Antworten konnten nicht zurückgesetzt werden');
+      }
+      const deleted = Number(payload?.data?.deleted ?? 0);
+      previewResetStatus =
+        deleted > 0
+          ? `${label}: ${deleted} Preview-Antwort${deleted === 1 ? '' : 'en'} zurückgesetzt.`
+          : `${label}: keine Preview-Antworten gefunden.`;
+      previewRenderKey += 1;
+      previewUser = '';
+      await tick();
+      await schedulePreviewRefresh();
+    } catch (err) {
+      previewResetError = err?.message ?? 'Preview-Antworten konnten nicht zurückgesetzt werden';
+    } finally {
+      previewResetting = false;
+    }
   };
 
 	  const schedulePreviewRefresh = async () => {
@@ -11091,6 +11267,7 @@
                     <span>Lernende:r</span>
                     <select
                       bind:value={previewLearnerCode}
+                      on:change={handlePreviewLearnerChange}
                       disabled={!previewContextClassId || previewLearnersLoading}
                     >
                       <option value="">Keine Auswahl</option>
@@ -11103,14 +11280,42 @@
                       {/each}
                     </select>
                   </label>
+                  <button
+                    class="icon-btn ci-btn-outline preview-reset-btn"
+                    type="button"
+                    on:click={resetPreviewAnswers}
+                    disabled={previewResetting || !previewResetScope || !token}
+                    title={previewResetScope
+                      ? `${previewResetScope.label}: Preview-Antworten zurücksetzen`
+                      : 'Bitte zuerst Schule, Klasse oder Lernende:n auswählen'}
+                    aria-label="Preview-Antworten zurücksetzen"
+                  >
+                    <svg class="reset-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M4 7h16M9 7V5h6v2M7 7l1 12h8l1-12"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
                 </div>
               </div>
               {#if previewLearnersError}
                 <p class="error-text preview-context-error">{previewLearnersError}</p>
               {/if}
+              {#if previewResetError}
+                <p class="error-text preview-context-error">{previewResetError}</p>
+              {:else if previewResetStatus}
+                <p class="hint preview-context-status">{previewResetStatus}</p>
+              {/if}
+              {#key previewRenderKey}
 	              <div class="preview-body" bind:this={previewEl}>
 	                {@html sanitizeSheetContent(editorContent)}
 	              </div>
+              {/key}
 	            </div>
           {:else if editorView === 'answers'}
             <div class="preview answers">
@@ -11721,6 +11926,8 @@
                 on:click={() => {
                   learnerModalMode = 'create';
                   newLearnerName = '';
+                  newLearnerEmail = '';
+                  newLearnerPhone = '';
                   newLearnerNotes = '';
                   newLearnerPrompt = '';
                   selectedLearnerCode = '';
@@ -11908,8 +12115,14 @@
                     <button class="ci-btn-soft" on:click={() => selectLearner(entry.id)}>
                       <div class="list-title">{entry.name || `Lernende #${entry.id}`}</div>
                       <div class="list-preview">
-                        {entry.code ? `Code: ${entry.code}` : ''}
-                        {entry.notes ? ` ${entry.notes}` : ''}
+                        {[
+                          entry.code ? `Code: ${entry.code}` : '',
+                          entry.email || '',
+                          entry.phone || '',
+                          entry.notes || ''
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </div>
                     </button>
                     <div class="list-row-actions">
@@ -12911,6 +13124,14 @@
         <label>
           <span>Name</span>
           <input type="text" bind:value={newLearnerName} placeholder="Name" />
+        </label>
+        <label>
+          <span>Email</span>
+          <input type="email" bind:value={newLearnerEmail} placeholder="name@stud.zag.zh.ch" />
+        </label>
+        <label>
+          <span>Telefon</span>
+          <input type="tel" bind:value={newLearnerPhone} placeholder="+41 ..." />
         </label>
         <label>
           <span>Notizen</span>
@@ -14052,7 +14273,23 @@
     justify-content: center;
   }
 
+  .preview-reset-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #b23a3a;
+    border-color: #f1c7c7;
+  }
+
   .refresh-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  .reset-icon {
     width: 15px;
     height: 15px;
   }
@@ -14835,6 +15072,11 @@
 
   .preview-context-error {
     margin: 8px 12px 0;
+  }
+
+  .preview-context-status {
+    margin: 8px 12px 0;
+    color: #2f8f83;
   }
 
 	  .preview-body {

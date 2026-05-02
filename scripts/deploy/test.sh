@@ -21,6 +21,10 @@ fi
 if [[ -n "${DEPLOY_FRONTEND_URL:-}" ]]; then
   info "HTTP frontend headers: $DEPLOY_FRONTEND_URL"
   curl -fsSIL --max-time 25 "$DEPLOY_FRONTEND_URL" | sed -n '1,12p'
+
+  FRONTEND_BASE_URL="${DEPLOY_FRONTEND_URL%/}"
+  info "HTTP learner route headers: $FRONTEND_BASE_URL/lernende?token=smoke-test"
+  curl -fsSIL --max-time 25 "$FRONTEND_BASE_URL/lernende?token=smoke-test" | sed -n '1,16p'
 else
   info "Skipping frontend smoke check (DEPLOY_FRONTEND_URL not set)"
 fi

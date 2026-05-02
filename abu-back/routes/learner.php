@@ -7,6 +7,7 @@ $learnerConfig = [
         'classroom' => [],
         'name' => [],
         'email' => [],
+        'phone' => [],
         'code' => [],
         'notes' => [],
         'prompt' => [],
@@ -74,11 +75,13 @@ if ($method === 'POST') {
         return;
     }
     $email = trim($data['email'] ?? '');
+    $phone = trim($data['phone'] ?? '');
     $payload = [
         'user' => ['id' => $user['id']],
         'classroom' => ['id' => intval($classId)],
         'name' => $name,
         'code' => $code,
+        'phone' => $phone,
         'notes' => trim($data['notes'] ?? ''),
         'prompt' => trim((string)($data['prompt'] ?? '')),
         'created_at' => $now,
@@ -95,6 +98,7 @@ if ($method === 'POST') {
             'classroom' => [],
             'name' => [],
             'email' => [],
+            'phone' => [],
             'code' => [],
             'notes' => [],
             'prompt' => [],
@@ -143,6 +147,7 @@ if ($method === 'PUT' || $method === 'PATCH') {
             $update['email'] = $email;
         }
     }
+    if (array_key_exists('phone', $data)) $update['phone'] = trim($data['phone']);
     if (array_key_exists('notes', $data)) $update['notes'] = trim($data['notes']);
     if (array_key_exists('prompt', $data)) $update['prompt'] = trim((string)($data['prompt'] ?? ''));
 

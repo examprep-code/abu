@@ -4,6 +4,10 @@ $modelPolicyModule = dirname(__DIR__, 2) . '/snippets/agent/model_policy.php';
 if (is_readable($modelPolicyModule)) {
     include_once $modelPolicyModule;
 }
+$tokenCounterModule = dirname(__DIR__, 2) . '/snippets/agent/token_counter.php';
+if (is_readable($tokenCounterModule)) {
+    include_once $tokenCounterModule;
+}
 include_once dirname(__DIR__, 2) . '/datian-core/agent_openai_json.php';
 include_once dirname(__DIR__, 2) . '/datian-core/material_import.php';
 
@@ -43,6 +47,7 @@ $modelCandidates = function_exists('agent_model_chain_for')
     : ['gpt-4.1-mini'];
 
 $now = date('Y-m-d H:i:s');
+$lastUsageStats = null;
 
 foreach ($files as $file) {
     $originalName = (string)($file['name'] ?? '');
@@ -162,6 +167,16 @@ foreach ($files as $file) {
         ];
         continue;
     }
+    $usageStats = function_exists('ai_token_counter_record_openai_response')
+        ? ai_token_counter_record_openai_response(
+            intval($user['id'] ?? 0),
+            is_array($openai['openai_response'] ?? null) ? $openai['openai_response'] : null,
+            (string)($openai['selected_model'] ?? '')
+        )
+        : null;
+    if (is_array($usageStats)) {
+        $lastUsageStats = $usageStats;
+    }
 
     $parsed = is_array($openai['assistant_parsed'] ?? null) ? $openai['assistant_parsed'] : [];
     $sheetName = trim((string)($parsed['name'] ?? ''));
@@ -237,6 +252,9 @@ if (empty($created)) {
     $return['status'] = 422;
     warning('Kein Sheet erzeugt.');
     $return['data'] = ['errors' => $errors];
+    if (is_array($lastUsageStats)) {
+        $return['data']['ai_usage'] = $lastUsageStats;
+    }
     return;
 }
 
@@ -244,5 +262,8 @@ $return['data'] = [
     'sheets' => $created,
     'errors' => $errors,
 ];
+if (is_array($lastUsageStats)) {
+    $return['data']['ai_usage'] = $lastUsageStats;
+}
 
 ?>

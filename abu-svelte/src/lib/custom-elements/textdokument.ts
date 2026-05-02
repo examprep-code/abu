@@ -702,6 +702,8 @@ export function ensureTextdokumentElements(): void {
         return;
       }
       this.removeAttribute('contenteditable');
+      this.removeAttribute('data-editor-selected');
+      this.removeAttribute('style');
 
       if (upgraded.has(this)) return;
       upgraded.add(this);

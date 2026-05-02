@@ -94,7 +94,7 @@ Wichtige Felder:
 
 - `user`: Besitzer auf Lehrpersonen-Seite
 - `classroom`: Zugehörige Klasse
-- `name`, `email`
+- `name`, `email`, `phone`
 - `code`: 12-stelliger Login-/Zugriffscode
 - `notes`, `prompt`
 

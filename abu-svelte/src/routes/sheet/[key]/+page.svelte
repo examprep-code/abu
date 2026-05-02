@@ -2,7 +2,7 @@
 </script>
 
 <script>
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/stores';
   import { loadConfig } from '$lib/config';
   import { createLueckeRuntime, ensureLueckeElements } from '$lib/custom-elements/luecke';
@@ -50,6 +50,7 @@
   let lastLoadedKey = '';
   let lastLoadedClassroom = null;
   let lastRuntimeSignature = '';
+  let sheetLoadRequest = 0;
 
   let learner = null;
   let loginCode = '';
@@ -255,6 +256,14 @@
     window.history.replaceState({}, document.title, nextUrl);
   };
 
+  const logoutLearner = () => {
+    clearLearnerCodeFromUrl();
+    persistLearner(null);
+    if (typeof window !== 'undefined') {
+      window.location.replace('/');
+    }
+  };
+
   const validateLearner = async (code) => {
     if (!apiBaseUrl || !code) return null;
     try {
@@ -271,6 +280,12 @@
       // ignore
     }
     return null;
+  };
+
+  const buildApiUrl = (path) => {
+    const endpoint = `${apiBaseUrl}${path}`;
+    const base = typeof window === 'undefined' ? 'http://localhost' : window.location.origin;
+    return new URL(endpoint, base).toString();
   };
 
   const loginLearner = async (codeInput) => {
@@ -292,21 +307,36 @@
     }
   };
 
+  function destroyRuntimes() {
+    lueckeRuntime?.destroy();
+    textdokumentRuntime?.destroy();
+    freitextRuntime?.destroy();
+    umfrageRuntime?.destroy();
+    lueckeRuntime = null;
+    textdokumentRuntime = null;
+    freitextRuntime = null;
+    umfrageRuntime = null;
+    lastRuntimeSignature = '';
+  }
+
   async function fetchSheet(key, classId = null) {
     if (!apiBaseUrl) return;
+    const requestId = ++sheetLoadRequest;
     loading = true;
     loadError = '';
     anonymousToken = '';
     anonymousSessionCode = '';
+    destroyRuntimes();
 
     try {
-      const url = new URL(`${apiBaseUrl}sheet/public`);
+      const url = new URL(buildApiUrl('sheet/public'));
       url.searchParams.set('key', key);
       if (classId) {
         url.searchParams.set('classroom', String(classId));
       }
       const res = await fetch(url.toString());
       const payload = await res.json().catch(() => ({}));
+      if (requestId !== sheetLoadRequest) return;
       if (!res.ok) {
         loadError = payload?.warning || 'Sheet nicht gefunden';
         sheet = null;
@@ -332,9 +362,8 @@
       applyLearnerCi(learner);
 
       loading = false;
-      await tick();
-      await setupRuntime();
     } catch (err) {
+      if (requestId !== sheetLoadRequest) return;
       loadError = err?.message ?? 'Sheet konnte nicht geladen werden';
       classroomSchoolCss = '';
       lueckeProgress = { percent: 0, answered: 0, total: 0 };
@@ -356,8 +385,9 @@
       ensureUmfrageElements();
     } catch (err) {
       configError = err?.message ?? 'config konnte nicht geladen werden';
+      authReady = true;
+      return;
     }
-    authReady = true;
     if (typeof localStorage !== 'undefined') {
       let shouldUseStoredLearner = true;
       if (typeof window !== 'undefined') {
@@ -406,6 +436,7 @@
         }
       }
     }
+    authReady = true;
   });
 
   $: classroomId = learner?.classroom ?? classroomHint ?? null;
@@ -417,6 +448,7 @@
     if (
       nextKey &&
       apiBaseUrl &&
+      authReady &&
       (nextKey !== lastLoadedKey || nextClassroom !== lastLoadedClassroom)
     ) {
       lastLoadedKey = nextKey;
@@ -445,7 +477,7 @@
       anonymousSessionCode = '';
     }
 
-    const signature = `${runtimeUser}::${runtimeClassroom ?? ''}::${assignmentForm}`;
+    const signature = `${sheetKey}::${runtimeUser}::${runtimeClassroom ?? ''}::${assignmentForm}`;
     if (
       lueckeRuntime &&
       textdokumentRuntime &&
@@ -505,11 +537,26 @@
     await umfrageRuntime.refresh();
   };
 
+  $: runtimeReady =
+    Boolean(contentEl) &&
+    Boolean(apiBaseUrl) &&
+    Boolean(sheetKey) &&
+    Boolean(sheet) &&
+    authReady &&
+    !loading &&
+    !loadError &&
+    (normalizeAssignmentForm(assignmentForm) === 'anonym'
+      ? Boolean(classroomId)
+      : Boolean(learner?.code));
+
+  $: {
+    if (runtimeReady) {
+      void setupRuntime();
+    }
+  }
+
   onDestroy(() => {
-    lueckeRuntime?.destroy();
-    textdokumentRuntime?.destroy();
-    freitextRuntime?.destroy();
-    umfrageRuntime?.destroy();
+    destroyRuntimes();
   });
 </script>
 
@@ -557,6 +604,16 @@
           {saveStatusLabel()}
         </span>
       {/if}
+      <div class="sheet-actions">
+        {#if learner}
+          <a class="sheet-action" href="/lernende/">Startseite</a>
+          <button class="sheet-action sheet-action--danger" type="button" on:click={logoutLearner}>
+            Ausloggen
+          </button>
+        {:else}
+          <a class="sheet-action" href="/">Startseite</a>
+        {/if}
+      </div>
     </div>
   </header>
 
@@ -692,6 +749,39 @@
     min-width: 187px;
     display: grid;
     gap: 7px;
+  }
+
+  .sheet-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 3px;
+  }
+
+  .sheet-action {
+    min-height: 32px;
+    padding: 7px 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background: #fff;
+    color: #1c232f;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.1;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .sheet-action:hover,
+  .sheet-action:focus-visible {
+    border-color: #2f8f83;
+    color: #25636a;
+    text-decoration: none;
+  }
+
+  .sheet-action--danger {
+    color: #8b3d3d;
   }
 
   .login-card {
@@ -1111,6 +1201,11 @@
     margin-left: 0;
   }
 
+  .sheet :global(.freitext__feedback) {
+    display: block;
+    min-width: 0;
+  }
+
   .sheet :global(.freitext__action-hint) {
     display: none;
     font-size: 11px;
@@ -1395,6 +1490,34 @@
     padding: 0.55rem;
     white-space: normal;
     line-height: 1.35;
+  }
+
+  .sheet :global(.freitext .feedback) {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    display: none;
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .sheet :global(.freitext .feedback--visible) {
+    display: block;
+    transform: none;
+  }
+
+  .sheet :global(.freitext .feedback::before),
+  .sheet :global(.freitext .feedback::after) {
+    display: none;
+  }
+
+  .sheet :global(.freitext .feedback.feedback--structured) {
+    max-width: none;
+    min-width: 0;
   }
 
   :global(.feedback .freitext-feedback) {
